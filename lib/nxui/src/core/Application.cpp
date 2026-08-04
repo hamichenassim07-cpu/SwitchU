@@ -98,35 +98,105 @@ void Application::dispatchInput() {
         }
     }
 
-    // Debounced D-pad and stick navigation.
-    // For each direction: if the focused widget has an action for that
-    // D-pad/stick button, fire it (consumed). Otherwise navigate spatially.
+    // Debounced D-pad and stick navigation with horizontal hold-repeat.
+    // A short press still moves once. Holding left/right starts repeating
+    // after about 0.33 s, then repeats about every 0.08 s.
+    static int s_horizontalHoldFrames = 0;
+    static int s_horizontalHeldDir = 0;
+
+    const bool leftDown =
+        m_input.isDown(Button::DLeft) ||
+        m_input.isDown(Button::LStickL) ||
+        m_input.isDown(Button::RStickL);
+
+    const bool rightDown =
+        m_input.isDown(Button::DRight) ||
+        m_input.isDown(Button::LStickR) ||
+        m_input.isDown(Button::RStickR);
+
+    const bool leftHeld =
+        m_input.isHeld(Button::DLeft) ||
+        m_input.isHeld(Button::LStickL) ||
+        m_input.isHeld(Button::RStickL);
+
+    const bool rightHeld =
+        m_input.isHeld(Button::DRight) ||
+        m_input.isHeld(Button::LStickR) ||
+        m_input.isHeld(Button::RStickR);
+
+    bool repeatLeft = false;
+    bool repeatRight = false;
+
+    const int heldDir =
+        (leftHeld && !rightHeld) ? -1 :
+        (rightHeld && !leftHeld) ? 1 : 0;
+
+    if (leftDown) {
+        s_horizontalHeldDir = -1;
+        s_horizontalHoldFrames = 20;
+    } else if (rightDown) {
+        s_horizontalHeldDir = 1;
+        s_horizontalHoldFrames = 20;
+    } else if (heldDir == 0) {
+        s_horizontalHeldDir = 0;
+        s_horizontalHoldFrames = 0;
+    } else if (heldDir != s_horizontalHeldDir) {
+        s_horizontalHeldDir = heldDir;
+        s_horizontalHoldFrames = 20;
+    } else if (s_horizontalHoldFrames > 0) {
+        --s_horizontalHoldFrames;
+    } else {
+        repeatLeft = (heldDir < 0);
+        repeatRight = (heldDir > 0);
+        s_horizontalHoldFrames = 5;
+    }
+
     bool anyDpad =
         m_input.isDown(Button::DLeft)   || m_input.isDown(Button::DRight)  ||
         m_input.isDown(Button::DUp)     || m_input.isDown(Button::DDown)   ||
         m_input.isDown(Button::LStickL) || m_input.isDown(Button::LStickR) ||
         m_input.isDown(Button::LStickU) || m_input.isDown(Button::LStickD) ||
         m_input.isDown(Button::RStickL) || m_input.isDown(Button::RStickR) ||
-        m_input.isDown(Button::RStickU) || m_input.isDown(Button::RStickD);
+        m_input.isDown(Button::RStickU) || m_input.isDown(Button::RStickD) ||
+        repeatLeft || repeatRight;
 
     if (m_navDebounce > 0) {
         --m_navDebounce;
     } else if (anyDpad) {
-        m_navDebounce = 6;  // ~100 ms at 60 fps
+        // Normal presses keep the original debounce. Repeated horizontal
+        // movement is timed by s_horizontalHoldFrames instead.
+        m_navDebounce = (repeatLeft || repeatRight) ? 0 : 6;
 
         Widget* cur = fm.current();
         auto tryDir = [&](Button dpad, Button leftStick, Button rightStick, FocusDirection dir) {
-            bool dpadDown  = m_input.isDown(dpad);
-            bool leftStickDown = m_input.isDown(leftStick);
-            bool rightStickDown = m_input.isDown(rightStick);
-            if (!dpadDown && !leftStickDown && !rightStickDown) return;
+            bool dpadDown =
+                m_input.isDown(dpad) ||
+                (dpad == Button::DLeft && repeatLeft) ||
+                (dpad == Button::DRight && repeatRight);
 
-            // Focused widget's action takes priority (no bubbling for D-pad)
+            bool leftStickDown =
+                m_input.isDown(leftStick) ||
+                (leftStick == Button::LStickL && repeatLeft) ||
+                (leftStick == Button::LStickR && repeatRight);
+
+            bool rightStickDown =
+                m_input.isDown(rightStick) ||
+                (rightStick == Button::RStickL && repeatLeft) ||
+                (rightStick == Button::RStickR && repeatRight);
+
+            if (!dpadDown && !leftStickDown && !rightStickDown)
+                return;
+
+            // Focused widget's action takes priority (no bubbling for D-pad).
             if (cur) {
-                if (dpadDown && cur->fireAction(static_cast<uint64_t>(dpad))) return;
-                if (leftStickDown && cur->fireAction(static_cast<uint64_t>(leftStick))) return;
-                if (rightStickDown && cur->fireAction(static_cast<uint64_t>(rightStick))) return;
+                if (dpadDown && cur->fireAction(static_cast<uint64_t>(dpad)))
+                    return;
+                if (leftStickDown && cur->fireAction(static_cast<uint64_t>(leftStick)))
+                    return;
+                if (rightStickDown && cur->fireAction(static_cast<uint64_t>(rightStick)))
+                    return;
             }
+
             fm.navigate(dir, root);
         };
 
@@ -135,6 +205,7 @@ void Application::dispatchInput() {
         tryDir(Button::DUp,    Button::LStickU, Button::RStickU, FocusDirection::UP);
         tryDir(Button::DDown,  Button::LStickD, Button::RStickD, FocusDirection::DOWN);
     }
+
 
     // Dispatch non-D-pad actions with parent bubbling.
     // Exclude D-pad buttons so they aren't fired a second time.
