@@ -352,7 +352,7 @@ void WiiUMenuApp::buildUserAvatarBar() {
     m_userAvatarBar->setMarginTop(0.f);
     m_userAvatarBar->setGap(10.f);
     m_userAvatarBar->setShrink(0.f);
-    m_userAvatarBar->setSize(0.f, 56.f);
+    m_userAvatarBar->setSize(0.f, 64.f);
     m_userAvatarBar->setTag("userAvatarBar");
     m_userAvatarBar->setWireframeEnabled(false);
 
@@ -370,11 +370,11 @@ void WiiUMenuApp::buildUserAvatarBar() {
             continue;
 
         auto avatar = std::make_shared<UserAvatarButton>();
-        avatar->setSize(56.f, 56.f);
-        avatar->setMinWidth(56.f);
-        avatar->setMinHeight(56.f);
+        avatar->setSize(64.f, 64.f);
+        avatar->setMinWidth(64.f);
+        avatar->setMinHeight(64.f);
         avatar->setShrink(0.f);
-        avatar->setCornerRadius(28.f);
+        avatar->setCornerRadius(32.f);
         avatar->setUid(uids[i]);
         avatar->setFocusable(true);
 
@@ -408,7 +408,7 @@ void WiiUMenuApp::buildUserAvatarBar() {
 
     if (!m_userAvatarButtons.empty()) {
         const float countF = static_cast<float>(m_userAvatarButtons.size());
-        m_userAvatarBar->setSize(countF * 56.f + (countF - 1.f) * 10.f, 56.f);
+        m_userAvatarBar->setSize(countF * 64.f + (countF - 1.f) * 10.f, 64.f);
         m_userAvatarButtons.front()->setCustomNavigation(nxui::FocusDirection::LEFT,
                                                          m_userAvatarButtons.front().get());
         m_userAvatarButtons.back()->setCustomNavigation(nxui::FocusDirection::RIGHT,
@@ -889,15 +889,17 @@ void WiiUMenuApp::buildGrid() {
     m_clock->setUse12HourClock(m_config.clockUse12Hour);
     m_clock->setCornerRadius(m_theme.cellCornerRadius);
     m_clock->setForceLiquidGlass(true);
+    m_clock->setBorderWidth(3.0f);
     m_clock->setBlurEnabled(false);
 
     m_battery = std::make_shared<BatteryWidget>();
     m_battery->setMarginTop(12.f);
     m_battery->setMarginRight(24.f);
-    m_battery->setSize(210.f, 92.f);
+    m_battery->setSize(248.f, 92.f);
     m_battery->setFont(&m_fontNormal);
     m_battery->setCornerRadius(m_theme.cellCornerRadius);
     m_battery->setForceLiquidGlass(true);
+    m_battery->setBorderWidth(3.0f);
     m_battery->setBlurEnabled(false);
 
     buildUserAvatarBar();
@@ -1106,7 +1108,7 @@ void WiiUMenuApp::buildGrid() {
     m_contentLayer->setWireframeEnabled(false);
 
    m_topHud = std::make_shared<nxui::Box>(nxui::Axis::ROW);
-    m_topHud->setRect({0.f, 0.f, 1280.f, 116.f});
+    m_topHud->setRect({0.f, 0.f, 1280.f, 122.f});
     m_topHud->setTag("topHud");
     m_topHud->setWireframeEnabled(false);
     m_topHud->setJustifyContent(nxui::JustifyContent::SPACE_BETWEEN);
@@ -1121,7 +1123,7 @@ void WiiUMenuApp::buildGrid() {
     topLeftHud->setAlignItems(nxui::AlignItems::CENTER);
     topLeftHud->setShrink(0.f);
 
-    float topLeftWidth = 224.f;
+    float topLeftWidth = 236.f;
     if (m_userAvatarBar)
         topLeftWidth += 12.f + m_userAvatarBar->rect().width;
 
