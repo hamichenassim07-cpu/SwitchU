@@ -2222,7 +2222,7 @@ void WiiUMenuApp::renderLockScreen(nxui::Renderer& ren) {
     );
 
     // Quiet star field with a tiny amount of parallax.
-    static constexpr std::array<nxui::Vec2, 24> kStars = {{
+    static const std::array<nxui::Vec2, 24> kStars = {{
         {72.f, 110.f}, {154.f, 238.f}, {232.f, 82.f}, {318.f, 168.f},
         {406.f, 58.f}, {492.f, 128.f}, {572.f, 72.f}, {660.f, 112.f},
         {742.f, 48.f}, {826.f, 145.f}, {906.f, 86.f}, {1004.f, 174.f},
