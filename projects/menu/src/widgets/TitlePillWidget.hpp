@@ -5,7 +5,6 @@
 #include <nxui/core/Types.hpp>
 #include <string>
 
-
 class TitlePillWidget : public nxui::GlassWidget {
 public:
     TitlePillWidget();
@@ -13,6 +12,7 @@ public:
     void setFont(nxui::Font* f)              { m_font = f; }
     void setTextColor(const nxui::Color& c)  { m_textColor = c; }
 
+    void setAnchor(float centerX, float topY, float screenWidth = 1280.f);
     void setText(const std::string& text, float screenWidth = 1280.f);
     void hideAnimated(float screenWidth = 1280.f);
 
@@ -22,12 +22,15 @@ protected:
     nxui::Vec2 computeContentSize() const override;
 
 private:
+    float anchoredX(float width, float screenWidth) const;
+
     nxui::Font*       m_font = nullptr;
-    std::string m_text;
+    std::string       m_text;
     nxui::Color       m_textColor {1.f, 1.f, 1.f, 1.f};
     nxui::AnimatedFloat m_animX{0.f};
     nxui::AnimatedFloat m_animW{0.f};
     nxui::AnimatedFloat m_textReveal{1.f};
+    float m_anchorCenterX = 640.f;
     bool m_layoutInitialized = false;
     bool m_hideOnCollapse = false;
 };
