@@ -151,6 +151,8 @@ private:
 
     nxui::Font  m_fontNormal;
     nxui::Font  m_fontSmall;
+    nxui::Font  m_fontLockLarge;
+    nxui::Font  m_fontLockMedium;
     nxui::Font  m_fontIcons;
 
     GridModel    m_model;
