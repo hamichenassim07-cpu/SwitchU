@@ -2,7 +2,6 @@
 #include <nxui/core/Renderer.hpp>
 #include <cmath>
 
-
 SelectionCursor::SelectionCursor() {
     m_x.setImmediate(0); m_y.setImmediate(0);
     m_w.setImmediate(0); m_h.setImmediate(0);
@@ -17,7 +16,6 @@ float SelectionCursor::computeAdaptiveDuration(const nxui::Rect& target,
     float sw = std::max(1.f, m_w.value());
     float sh = std::max(1.f, m_h.value());
     float sr = m_cornerRadius.value();
-
     float sourceCx = sx + sw * 0.5f;
     float sourceCy = sy + sh * 0.5f;
     float targetCx = target.x + target.width * 0.5f;
@@ -26,18 +24,15 @@ float SelectionCursor::computeAdaptiveDuration(const nxui::Rect& target,
     float dx = targetCx - sourceCx;
     float dy = targetCy - sourceCy;
     float distance = std::sqrt(dx * dx + dy * dy);
-
     float sourceDiag = std::sqrt(sw * sw + sh * sh);
     float targetW = std::max(1.f, target.width);
     float targetH = std::max(1.f, target.height);
     float targetDiag = std::sqrt(targetW * targetW + targetH * targetH);
 
     float sizeDelta = std::abs(targetDiag - sourceDiag) / std::max(1.f, sourceDiag);
-
     float sourceAspect = sw / sh;
     float targetAspect = targetW / targetH;
     float aspectDelta = std::abs(targetAspect - sourceAspect) / std::max(0.35f, sourceAspect);
-
     float radiusNorm = std::max(4.f, std::max(std::abs(sr), std::abs(targetCornerRadius)));
     float radiusDelta = std::abs(targetCornerRadius - sr) / radiusNorm;
 
@@ -59,12 +54,14 @@ void SelectionCursor::moveTo(const nxui::Rect& target, float duration) {
         m_initialized = true;
         return;
     }
+
     constexpr float eps = 0.5f;
     if (std::abs(m_x.target() - target.x) < eps &&
         std::abs(m_y.target() - target.y) < eps &&
         std::abs(m_w.target() - target.width) < eps &&
         std::abs(m_h.target() - target.height) < eps)
         return;
+
     float adaptiveDuration = computeAdaptiveDuration(target, m_cornerRadius.value(), duration);
     m_x.set(target.x, adaptiveDuration, nxui::Easing::outCubic);
     m_y.set(target.y, adaptiveDuration, nxui::Easing::outCubic);
@@ -82,6 +79,7 @@ void SelectionCursor::moveTo(const nxui::Rect& target, float cornerRadius, float
         m_initialized = true;
         return;
     }
+
     constexpr float eps = 0.5f;
     if (std::abs(m_x.target() - target.x) < eps &&
         std::abs(m_y.target() - target.y) < eps &&
@@ -89,6 +87,7 @@ void SelectionCursor::moveTo(const nxui::Rect& target, float cornerRadius, float
         std::abs(m_h.target() - target.height) < eps &&
         std::abs(m_cornerRadius.target() - cornerRadius) < eps)
         return;
+
     float adaptiveDuration = computeAdaptiveDuration(target, cornerRadius, duration);
     m_x.set(target.x, adaptiveDuration, nxui::Easing::outCubic);
     m_y.set(target.y, adaptiveDuration, nxui::Easing::outCubic);
@@ -111,33 +110,57 @@ void SelectionCursor::onUpdate(float dt) {
 }
 
 void SelectionCursor::onRender(nxui::Renderer& ren) {
-    if (!m_initialized || m_opacity <= 0.01f) return;
+    if (!m_initialized || m_opacity <= 0.01f)
+        return;
 
-    float x = m_x.value(), y = m_y.value();
-    float w = m_w.value(), h = m_h.value();
-    if (w < 1.f || h < 1.f) return;
+    const float x = m_x.value();
+    const float y = m_y.value();
+    const float w = m_w.value();
+    const float h = m_h.value();
 
-    nxui::Rect r = {x, y, w, h};
-    float cr = m_cornerRadius.value();
+    if (w < 1.f || h < 1.f)
+        return;
 
-    float wave = std::sin(m_time * m_waveSpeed) * 0.5f + 0.5f;
+    const nxui::Rect r = {x, y, w, h};
+    const float cr = m_cornerRadius.value();
+    const float wave = std::sin(m_time * m_waveSpeed) * 0.5f + 0.5f;
 
-    constexpr int BLOOM_LAYERS = 5;
-    constexpr float bloomExpand[] = {12.f, 9.f, 6.f, 4.f, 2.f};
-    constexpr float bloomAlpha[]  = {0.03f, 0.05f, 0.08f, 0.12f, 0.16f};
+    // Layered purple/blue bloom. It behaves like a soft gradient while
+    // preserving the real colours of the game artwork.
+    const nxui::Color deepPurple(0.42f, 0.10f, 0.95f, 1.f);
+    const nxui::Color violet(0.64f, 0.24f, 1.00f, 1.f);
+    const nxui::Color electricBlue(0.12f, 0.68f, 1.00f, 1.f);
+
+    constexpr int BLOOM_LAYERS = 6;
+    constexpr float bloomExpand[] = {15.f, 12.f, 9.f, 6.f, 4.f, 2.f};
+    constexpr float bloomAlpha[]  = {0.025f, 0.038f, 0.055f, 0.080f, 0.115f, 0.145f};
+
     for (int i = 0; i < BLOOM_LAYERS; ++i) {
-        float expand = bloomExpand[i] * (1.f + 0.15f * wave);
-        nxui::Rect glowRect = r.expanded(expand);
-        float a = bloomAlpha[i] * m_opacity * (0.8f + 0.2f * wave);
-        nxui::Color gc = m_color.withAlpha(a);
-        ren.drawRoundedRect(glowRect, gc, cr + expand + 2.f);
+        const float expand = bloomExpand[i] * (1.f + 0.12f * wave);
+        const float a = bloomAlpha[i] * m_opacity * (0.82f + 0.18f * wave);
+
+        nxui::Color layer =
+            (i < 2) ? deepPurple :
+            (i < 4) ? violet :
+                      electricBlue;
+
+        ren.drawRoundedRect(r.expanded(expand),
+                            layer.withAlpha(a),
+                            cr + expand + 2.f);
     }
 
-    nxui::Color mainC = m_color.withAlpha(m_opacity);
-    ren.drawRoundedRectOutline(r, mainC, cr, m_borderWidth);
+    ren.drawRoundedRectOutline(r.expanded(1.5f),
+                               violet.withAlpha(0.94f * m_opacity),
+                               cr + 1.5f,
+                               3.2f);
 
-    nxui::Rect inner = r.shrunk(m_borderWidth * 0.5f);
-    nxui::Color innerC = nxui::Color(0.3f, 0.85f, 1.f, 0.25f * m_opacity * (0.7f + 0.3f * wave));
-    ren.drawRoundedRectOutline(inner, innerC, cr - 2.f, 1.5f);
+    ren.drawRoundedRectOutline(r.shrunk(0.8f),
+                               electricBlue.withAlpha((0.82f + 0.12f * wave) * m_opacity),
+                               std::max(1.f, cr - 1.f),
+                               2.0f);
+
+    ren.drawRoundedRectOutline(r.shrunk(3.2f),
+                               nxui::Color(0.55f, 0.35f, 1.f, 0.26f * m_opacity),
+                               std::max(1.f, cr - 4.f),
+                               1.2f);
 }
-
