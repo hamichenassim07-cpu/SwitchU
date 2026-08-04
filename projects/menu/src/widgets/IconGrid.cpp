@@ -6,8 +6,8 @@
 
 namespace {
 constexpr int kVisibleIcons = 4;
-constexpr float kLargeIconSize = 255.f;
-constexpr float kCompactIconGap = 12.f;
+constexpr float kLargeIconSize = 286.f;
+constexpr float kCompactIconGap = 10.f;
 
 // Plus le geste est rapide, plus la vitesse initiale est forte.
 // La friction reste douce pour permettre aux gestes puissants
