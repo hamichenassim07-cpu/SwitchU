@@ -881,9 +881,9 @@ void WiiUMenuApp::buildGrid() {
     m_pointerCursor->setVisible(false);
 
     m_clock = std::make_shared<DateTimeWidget>();
-    m_clock->setSize(150, 62);
-    m_clock->setMarginTop(14.f);
-    m_clock->setMarginLeft(24.f);
+    m_clock->setSize(184.f, 72.f);
+    m_clock->setMarginTop(0.f);
+    m_clock->setMarginLeft(0.f);
     m_clock->setFont(&m_fontNormal);
     m_clock->setSmallFont(&m_fontSmall);
     m_clock->setUse12HourClock(m_config.clockUse12Hour);
@@ -892,9 +892,9 @@ void WiiUMenuApp::buildGrid() {
     m_clock->setBlurEnabled(false);
 
     m_battery = std::make_shared<BatteryWidget>();
-    m_battery->setMarginTop(14.f);
+    m_battery->setMarginTop(12.f);
     m_battery->setMarginRight(24.f);
-    m_battery->setSize(150, 62);
+    m_battery->setSize(184.f, 72.f);
     m_battery->setFont(&m_fontSmall);
     m_battery->setCornerRadius(m_theme.cellCornerRadius);
     m_battery->setForceLiquidGlass(true);
@@ -903,18 +903,20 @@ void WiiUMenuApp::buildGrid() {
     buildUserAvatarBar();
 
     m_titlePill = std::make_shared<TitlePillWidget>();
-    m_titlePill->setPosition(0, 630.f);
+    m_titlePill->setPosition(0.f, 160.f);
     m_titlePill->setFont(&m_fontNormal);
     m_titlePill->setPadding(9.f, 22.f, 9.f, 22.f);
     m_titlePill->setForceLiquidGlass(true);
     m_titlePill->setBlurEnabled(false);
 
+    // Conservé pour compatibilité interne, mais masqué :
+    // il n'y a plus de pages dans la ligne horizontale.
     m_pageIndicator = std::make_shared<PageIndicator>();
-    m_pageIndicator->setRect({0, 685.f, 1280.f, 28.f});
+    m_pageIndicator->setRect({0.f, 685.f, 1280.f, 28.f});
     m_pageIndicator->setTheme(&m_theme);
     m_pageIndicator->setForceLiquidGlass(true);
     m_pageIndicator->setBlurEnabled(false);
-
+    m_pageIndicator->setVisible(false);
     m_launchAnim = std::make_shared<LaunchAnimation>();
 
     m_userSelect = std::make_shared<OverlayDialog>();
