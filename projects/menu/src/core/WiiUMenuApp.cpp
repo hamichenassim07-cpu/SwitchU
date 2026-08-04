@@ -2492,7 +2492,7 @@ void WiiUMenuApp::renderLockScreen(nxui::Renderer& ren) {
     buildLockClockStrings(m_config.clockUse12Hour, timeText, dateText);
 
     const float timeScale = 1.0f;
-    const nxui::Font* timeFont = &m_fontLockLarge;
+    nxui::Font* timeFont = &m_fontLockLarge;
     const nxui::Vec2 timeSize = timeFont->measure(timeText);
     const float timeX = 640.f - timeSize.x * timeScale * 0.5f;
     const float timeY = 176.f + lift + (1.f - reveal) * 18.f;
