@@ -1975,7 +1975,6 @@ void WiiUMenuApp::onRender(nxui::Renderer& ren) {
     if (m_editMode && m_editGhostIcon)
         m_editGhostIcon->render(ren);
 
-    renderActionHintBar(ren);
 
 #ifdef SWITCHU_DEBUG_UI
     if (m_debugOverlay) {
