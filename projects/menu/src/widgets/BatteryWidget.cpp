@@ -91,30 +91,55 @@ void BatteryWidget::onContentUpdate(float dt) {
 
 void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     nxui::Rect cr = contentRect();
+    const float op = m_opacity;
+
+    float level = std::clamp(m_level, 0.f, 1.f);
+
+    char buf[16];
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "%d%%",
+        static_cast<int>(level * 100)
+    );
+
+    nxui::Vec2 textBase =
+        m_font
+            ? m_font->measure(buf)
+            : nxui::Vec2{42.f, 18.f};
+
+    const float textW =
+        textBase.x * kPercentageScale;
+
+    const float textH =
+        textBase.y * kPercentageScale;
 
     const float bw = kBatteryWidth;
     const float bh = kBatteryHeight;
-    const float boltSlotW = m_charging ? 26.f : 0.f;
-    const float gap = m_charging ? 9.f : 0.f;
-    const float groupW = bw + gap + boltSlotW;
 
-    const float textH =
-        m_font
-            ? m_font->measure("100%").y * kPercentageScale
-            : 24.f;
+    const float boltSlotW =
+        m_charging ? 26.f : 0.f;
 
-    const float contentH =
-        bh + 7.f + textH;
+    const float chargeGap =
+        m_charging ? 9.f : 0.f;
+
+    constexpr float kTextGap = 14.f;
+
+    const float batteryGroupW =
+        bw + chargeGap + boltSlotW;
+
+    const float groupW =
+        batteryGroupW + kTextGap + textW;
+
+    const float groupH =
+        std::max(bh, textH);
 
     const float bx =
         cr.x + (cr.width - groupW) * 0.5f;
 
     const float by =
-        cr.y + (cr.height - contentH) * 0.5f;
-
-    const float op = m_opacity;
-
-    float level = std::clamp(m_level, 0.f, 1.f);
+        cr.y + (cr.height - groupH) * 0.5f +
+        (groupH - bh) * 0.5f;
 
     nxui::Rect body = {bx, by, bw, bh};
     const float radius = bh * 0.44f;
@@ -252,7 +277,7 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
 
         const float boltX =
             body.right() +
-            gap +
+            chargeGap +
             (boltSlotW - boltW) * 0.5f;
 
         const float boltY =
@@ -310,26 +335,11 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     }
 
     if (m_font) {
-        char buf[16];
-
-        std::snprintf(
-            buf,
-            sizeof(buf),
-            "%d%%",
-            static_cast<int>(level * 100)
-        );
-
-        nxui::Vec2 base = m_font->measure(buf);
-
-        const float scaledW =
-            base.x * kPercentageScale;
-
         const float tx =
-            cr.x +
-            (cr.width - scaledW) * 0.5f;
+            bx + batteryGroupW + kTextGap;
 
         const float ty =
-            by + bh + 7.f;
+            cr.y + (cr.height - textH) * 0.5f;
 
         const nxui::Color shadow =
             nxui::Color(
@@ -369,16 +379,25 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
 }
 
 nxui::Vec2 BatteryWidget::computeContentSize() const {
-    const float iconExtra = 9.f + 26.f;
+    nxui::Vec2 textBase =
+        m_font
+            ? m_font->measure("100%")
+            : nxui::Vec2{42.f, 18.f};
+
+    const float textW =
+        textBase.x * kPercentageScale;
 
     const float textH =
-        m_font
-            ? m_font->measure("100%").y *
-                kPercentageScale
-            : 24.f;
+        textBase.y * kPercentageScale;
+
+    constexpr float kTextGap = 14.f;
+    constexpr float kMaximumBoltSpace = 35.f;
 
     return {
-        kBatteryWidth + 6.f + iconExtra,
-        kBatteryHeight + 7.f + textH
+        kBatteryWidth +
+            kMaximumBoltSpace +
+            kTextGap +
+            textW,
+        std::max(kBatteryHeight, textH)
     };
 }
