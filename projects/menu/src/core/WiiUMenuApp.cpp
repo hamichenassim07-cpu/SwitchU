@@ -1691,7 +1691,7 @@ void WiiUMenuApp::onUpdate(float dt) {
                         visualRect.width * 0.5f,
                     std::max(
                         104.f,
-                        visualRect.y - 58.f
+                        visualRect.y - 64.f
                     )
                 );
             }
