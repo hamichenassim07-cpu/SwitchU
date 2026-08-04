@@ -633,73 +633,56 @@ void WiiUMenuApp::saveMenuLayout() {
 }
 
 void WiiUMenuApp::applyMenuLayoutToPending(std::vector<PendingApp>& apps) {
-    const int cols = std::clamp(m_config.gridColumns, 3, 8);
-    const int rows = std::clamp(m_config.gridRows, 2, 5);
-    const int perPage = std::max(1, cols * rows);
-
     std::unordered_map<uint64_t, PendingApp> byId;
+    std::vector<uint64_t> detectedOrder;
+
     byId.reserve(apps.size());
+    detectedOrder.reserve(apps.size());
+
     for (auto& app : apps) {
-        if (app.titleId != 0)
-            byId.emplace(app.titleId, std::move(app));
+        if (app.titleId == 0)
+            continue;
+
+        detectedOrder.push_back(app.titleId);
+        byId.emplace(app.titleId, std::move(app));
     }
 
-    std::vector<uint64_t> slots = m_layoutSlots;
-    if (slots.empty()) {
-        slots.reserve(apps.size());
-        for (const auto& app : apps)
-            if (app.titleId != 0)
-                slots.push_back(app.titleId);
-    }
+    std::vector<uint64_t> orderedIds;
+    orderedIds.reserve(byId.size());
 
     std::unordered_set<uint64_t> placed;
     placed.reserve(byId.size());
-    for (auto& slotTid : slots) {
-        if (slotTid == 0)
+
+    // Conserver l'ordre déjà enregistré, mais retirer les cases vides,
+    // les applications désinstallées et les doublons.
+    for (uint64_t tid : m_layoutSlots) {
+        if (tid == 0 || !byId.count(tid) || placed.count(tid))
             continue;
-        auto it = byId.find(slotTid);
-        if (it == byId.end() || placed.count(slotTid)) {
-            slotTid = 0;
-            continue;
-        }
-        placed.insert(slotTid);
+
+        orderedIds.push_back(tid);
+        placed.insert(tid);
     }
 
-    for (const auto& app : apps) {
-        if (app.titleId == 0 || placed.count(app.titleId))
+    // Ajouter automatiquement chaque nouveau jeu à la fin de la ligne.
+    for (uint64_t tid : detectedOrder) {
+        if (tid == 0 || placed.count(tid))
             continue;
 
-        auto emptyIt = std::find(slots.begin(), slots.end(), 0);
-        if (emptyIt != slots.end())
-            *emptyIt = app.titleId;
-        else
-            slots.push_back(app.titleId);
-
-        placed.insert(app.titleId);
+        orderedIds.push_back(tid);
+        placed.insert(tid);
     }
-
-    int minSlots = std::max(perPage * kMinHomePages, (int)slots.size());
-    int roundedSlots = ((minSlots + perPage - 1) / perPage) * perPage;
-    if ((int)slots.size() < roundedSlots)
-        slots.resize(roundedSlots, 0);
 
     std::vector<PendingApp> ordered;
-    ordered.reserve(slots.size());
-    for (uint64_t tid : slots) {
-        if (tid == 0) {
-            ordered.emplace_back();
-            continue;
-        }
+    ordered.reserve(orderedIds.size());
+
+    for (uint64_t tid : orderedIds) {
         auto it = byId.find(tid);
-        if (it != byId.end()) {
+        if (it != byId.end())
             ordered.push_back(std::move(it->second));
-        } else {
-            ordered.emplace_back();
-        }
     }
 
-    if (slots != m_layoutSlots) {
-        m_layoutSlots = std::move(slots);
+    if (orderedIds != m_layoutSlots) {
+        m_layoutSlots = orderedIds;
         m_layoutDirty = true;
     }
 
