@@ -352,7 +352,7 @@ void WiiUMenuApp::buildUserAvatarBar() {
     m_userAvatarBar->setMarginTop(0.f);
     m_userAvatarBar->setGap(10.f);
     m_userAvatarBar->setShrink(0.f);
-    m_userAvatarBar->setSize(0.f, 56.f);
+    m_userAvatarBar->setSize(0.f, 64.f);
     m_userAvatarBar->setTag("userAvatarBar");
     m_userAvatarBar->setWireframeEnabled(false);
 
@@ -370,11 +370,11 @@ void WiiUMenuApp::buildUserAvatarBar() {
             continue;
 
         auto avatar = std::make_shared<UserAvatarButton>();
-        avatar->setSize(56.f, 56.f);
-        avatar->setMinWidth(56.f);
-        avatar->setMinHeight(56.f);
+        avatar->setSize(64.f, 64.f);
+        avatar->setMinWidth(64.f);
+        avatar->setMinHeight(64.f);
         avatar->setShrink(0.f);
-        avatar->setCornerRadius(28.f);
+        avatar->setCornerRadius(32.f);
         avatar->setUid(uids[i]);
         avatar->setFocusable(true);
 
@@ -408,7 +408,7 @@ void WiiUMenuApp::buildUserAvatarBar() {
 
     if (!m_userAvatarButtons.empty()) {
         const float countF = static_cast<float>(m_userAvatarButtons.size());
-        m_userAvatarBar->setSize(countF * 56.f + (countF - 1.f) * 10.f, 56.f);
+        m_userAvatarBar->setSize(countF * 64.f + (countF - 1.f) * 10.f, 64.f);
         m_userAvatarButtons.front()->setCustomNavigation(nxui::FocusDirection::LEFT,
                                                          m_userAvatarButtons.front().get());
         m_userAvatarButtons.back()->setCustomNavigation(nxui::FocusDirection::RIGHT,
@@ -894,7 +894,7 @@ void WiiUMenuApp::buildGrid() {
     m_battery = std::make_shared<BatteryWidget>();
     m_battery->setMarginTop(12.f);
     m_battery->setMarginRight(24.f);
-    m_battery->setSize(210.f, 92.f);
+    m_battery->setSize(238.f, 92.f);
     m_battery->setFont(&m_fontNormal);
     m_battery->setCornerRadius(m_theme.cellCornerRadius);
     m_battery->setForceLiquidGlass(true);
@@ -1121,7 +1121,7 @@ void WiiUMenuApp::buildGrid() {
     topLeftHud->setAlignItems(nxui::AlignItems::CENTER);
     topLeftHud->setShrink(0.f);
 
-    float topLeftWidth = 224.f;
+    float topLeftWidth = 232.f;
     if (m_userAvatarBar)
         topLeftWidth += 12.f + m_userAvatarBar->rect().width;
 
@@ -1636,6 +1636,68 @@ void WiiUMenuApp::onUpdate(float dt) {
         handleTouch();
     }
 
+    // Quand l'inertie se termine, synchroniser le focus sur l'icône
+    // qui a pris la place correspondante. Le mode déplacement reste séparé.
+    if (m_grid) {
+        const int settledIndex =
+            m_grid->consumeSettledFocusIndex();
+
+        if (settledIndex >= 0) {
+            auto* target =
+                m_grid->focusManager().current();
+
+            if (target) {
+                m_suppressNextNavigateSfx =
+                    true;
+
+                focusManager().setFocus(
+                    target
+                );
+
+                updateCursor();
+            }
+        }
+
+        // Pendant le déplacement et l'inertie, le contour et le titre
+        // suivent l'icône sélectionnée.
+        if (m_grid->isScrollMoving()) {
+            updateCursor();
+
+            auto* current =
+                focusManager().current();
+
+            if (current &&
+                current->tag() ==
+                    "glossy_icon" &&
+                m_titlePill) {
+                constexpr float
+                    kSelectedScale = 1.12f;
+
+                nxui::Rect baseRect =
+                    current->focusRect();
+
+                const float visualExpand =
+                    baseRect.width *
+                    (kSelectedScale - 1.f) *
+                    0.5f;
+
+                nxui::Rect visualRect =
+                    baseRect.expanded(
+                        visualExpand
+                    );
+
+                m_titlePill->setAnchor(
+                    visualRect.x +
+                        visualRect.width * 0.5f,
+                    std::max(
+                        104.f,
+                        visualRect.y - 58.f
+                    )
+                );
+            }
+        }
+    }
+
     bool dialogActiveNow = (m_dialog && m_dialog->isActive());
     if (!debugTouchBlocked && dialogActiveNow)
         m_dialog->handleTouch(app().input());
@@ -1929,7 +1991,10 @@ void WiiUMenuApp::onRender(nxui::Renderer& ren) {
         ren.drawRect({0, 0, 1280, 720}, nxui::Color(1.f, 1.f, 1.f, alpha));
     }
 
-    if (m_touchHitIndex >= 0 && !m_touchOnFocused && app().input().isTouching()) {
+    if (!m_touchScrollActive &&
+        m_touchHitIndex >= 0 &&
+        !m_touchOnFocused &&
+        app().input().isTouching()) {
         auto icons = m_grid->pageIcons();
         if (m_touchHitIndex < (int)icons.size()) {
             nxui::Rect r = icons[m_touchHitIndex]->focusRect();
