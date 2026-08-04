@@ -810,6 +810,7 @@ void WiiUMenuApp::closeActiveOverlays() {
 }
 
 nxui::Widget* WiiUMenuApp::focusRoot() {
+    if (m_lockScreenActive) return nullptr;
     if (m_launchAnim && m_launchAnim->isPlaying()) return nullptr;
     if (m_dialog && m_dialog->isActive()) return m_dialog.get();
     if (m_themeShop && m_themeShop->isActive()) return m_themeShop.get();
@@ -1290,6 +1291,10 @@ void WiiUMenuApp::handleSystemAction(SysAction a) {
             markSuspendedIcon(m_launcher.suspendedTitleId());
             closeActiveOverlays();
             focusTitle(m_launcher.suspendedTitleId());
+            break;
+        case SysAction::WakeUp:
+            DebugLog::log("[pump] WakeUp -> lockscreen");
+            showLockScreen();
             break;
         default:
             break;
