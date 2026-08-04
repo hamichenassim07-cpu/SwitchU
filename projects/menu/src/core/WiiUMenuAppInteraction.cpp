@@ -423,77 +423,198 @@ void WiiUMenuApp::wireFocusCallback() {
         if (!suppressSfx)
             m_audio.playSfx(Sfx::Navigate);
 
-        auto placeTitleAbove = [this](nxui::Widget* widget, float extraTop = 0.f) {
-            if (!widget || !m_titlePill)
-                return;
+        auto placeTitleAbove =
+            [this](nxui::Widget* widget, float extraTop = 0.f) {
+                if (!widget || !m_titlePill)
+                    return;
 
-            nxui::Rect r = widget->focusRect();
-            float centerX = r.x + r.width * 0.5f;
-            float titleY = std::max(104.f, r.y - 58.f - extraTop);
+                nxui::Rect r = widget->focusRect();
+                float centerX =
+                    r.x + r.width * 0.5f;
 
-            m_titlePill->setAnchor(centerX, titleY);
-        };
+                float titleY =
+                    std::max(
+                        104.f,
+                        r.y - 58.f - extraTop
+                    );
+
+                m_titlePill->setAnchor(
+                    centerX,
+                    titleY
+                );
+            };
 
         if (cur && cur->tag() == "glossy_icon") {
             m_grid->focusManager().setFocus(cur);
 
-            auto* icon = static_cast<GlossyIcon*>(cur);
+            // V5 CORRIGÉE :
+            // gauche/droite reste toujours dans la rangée des jeux.
+            // À la première ou à la dernière jaquette, la sélection reste
+            // simplement sur place au lieu de tomber sur les boutons du bas.
+            const auto& gameIcons = m_grid->allIcons();
 
-            // La jaquette sélectionnée est agrandie à 1,12.
+            for (size_t i = 0; i < gameIcons.size(); ++i) {
+                auto* currentIcon = gameIcons[i].get();
+
+                if (!currentIcon)
+                    continue;
+
+                nxui::Widget* leftTarget = currentIcon;
+                nxui::Widget* rightTarget = currentIcon;
+
+                if (i > 0 && gameIcons[i - 1])
+                    leftTarget = gameIcons[i - 1].get();
+
+                if (i + 1 < gameIcons.size() && gameIcons[i + 1])
+                    rightTarget = gameIcons[i + 1].get();
+
+                currentIcon->setCustomNavigation(
+                    nxui::FocusDirection::LEFT,
+                    leftTarget
+                );
+
+                currentIcon->setCustomNavigation(
+                    nxui::FocusDirection::RIGHT,
+                    rightTarget
+                );
+            }
+
+            auto* icon =
+                static_cast<GlossyIcon*>(cur);
+
             constexpr float kSelectedScale = 1.12f;
-            nxui::Rect baseRect = icon->focusRect();
-            float visualExpand =
-                baseRect.width * (kSelectedScale - 1.f) * 0.5f;
 
-            nxui::Rect visualRect = baseRect.expanded(visualExpand);
+            nxui::Rect baseRect =
+                icon->focusRect();
+
+            float visualExpand =
+                baseRect.width *
+                (kSelectedScale - 1.f) *
+                0.5f;
+
+            nxui::Rect visualRect =
+                baseRect.expanded(visualExpand);
 
             m_titlePill->setAnchor(
-                visualRect.x + visualRect.width * 0.5f,
-                std::max(104.f, visualRect.y - 58.f)
+                visualRect.x +
+                    visualRect.width * 0.5f,
+                std::max(
+                    104.f,
+                    visualRect.y - 58.f
+                )
             );
 
-            // Haut : groupe Album / Mii / Paramètres.
-            // Bas : groupe Manettes / Thèmes / Power.
-            if (!m_sidebar.leftButtons().empty()) {
-                auto* leftTarget =
-                    m_sidebar.leftButtons()[m_sidebar.leftButtons().size() / 2].get();
+            // V5 NAVIGATION
+            // Haut : profil du joueur.
+            // Bas  : rangée centrée des six boutons système.
+            nxui::Widget* profileTarget = nullptr;
 
-                cur->setCustomNavigation(nxui::FocusDirection::UP, leftTarget);
+            if (!m_userAvatarButtons.empty())
+                profileTarget =
+                    m_userAvatarButtons.front().get();
 
-                for (auto& btn : m_sidebar.leftButtons())
-                    btn->setCustomNavigation(nxui::FocusDirection::UP, cur);
+            if (profileTarget) {
+                cur->setCustomNavigation(
+                    nxui::FocusDirection::UP,
+                    profileTarget
+                );
+
+                for (auto& avatar :
+                     m_userAvatarButtons) {
+                    avatar->setCustomNavigation(
+                        nxui::FocusDirection::DOWN,
+                        cur
+                    );
+                }
             }
 
-            if (!m_sidebar.rightButtons().empty()) {
-                auto* rightTarget =
-                    m_sidebar.rightButtons()[m_sidebar.rightButtons().size() / 2].get();
+            nxui::Widget* bottomTarget = nullptr;
+            float bestDistance = 1000000.f;
 
-                cur->setCustomNavigation(nxui::FocusDirection::DOWN, rightTarget);
+            const float iconCenterX =
+                visualRect.x +
+                visualRect.width * 0.5f;
 
-                for (auto& btn : m_sidebar.rightButtons())
-                    btn->setCustomNavigation(nxui::FocusDirection::UP, cur);
+            for (auto& btn :
+                 m_sidebar.leftButtons()) {
+                nxui::Rect r = btn->focusRect();
+
+                float centerX =
+                    r.x + r.width * 0.5f;
+
+                float distance =
+                    std::abs(centerX - iconCenterX);
+
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bottomTarget = btn.get();
+                }
+
+                btn->setCustomNavigation(
+                    nxui::FocusDirection::UP,
+                    cur
+                );
             }
 
-            // Recalcul après le déplacement du carrousel.
+            for (auto& btn :
+                 m_sidebar.rightButtons()) {
+                nxui::Rect r = btn->focusRect();
+
+                float centerX =
+                    r.x + r.width * 0.5f;
+
+                float distance =
+                    std::abs(centerX - iconCenterX);
+
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bottomTarget = btn.get();
+                }
+
+                btn->setCustomNavigation(
+                    nxui::FocusDirection::UP,
+                    cur
+                );
+            }
+
+            if (bottomTarget) {
+                cur->setCustomNavigation(
+                    nxui::FocusDirection::DOWN,
+                    bottomTarget
+                );
+            }
+
             updateCursor();
 
             auto& i18n = nxui::I18n::instance();
 
             if (m_editMode) {
                 bindEditActions(icon);
-                m_editGhostTargetRect = icon->focusRect();
+                m_editGhostTargetRect =
+                    icon->focusRect();
 
                 if (!m_editHeldTitle.empty()) {
                     m_titlePill->setText(
-                        i18n.tr("game.move_prefix", "Move: ") + m_editHeldTitle
+                        i18n.tr(
+                            "game.move_prefix",
+                            "Move: "
+                        ) +
+                        m_editHeldTitle
                     );
                 } else if (icon->titleId() != 0) {
                     m_titlePill->setText(
-                        i18n.tr("game.move_prefix", "Move: ") + icon->title()
+                        i18n.tr(
+                            "game.move_prefix",
+                            "Move: "
+                        ) +
+                        icon->title()
                     );
                 } else {
                     m_titlePill->setText(
-                        i18n.tr("game.move", "Move")
+                        i18n.tr(
+                            "game.move",
+                            "Move"
+                        )
                     );
                 }
 
@@ -512,33 +633,49 @@ void WiiUMenuApp::wireFocusCallback() {
             if (m_editMode)
                 exitEditMode();
 
-            for (auto& btn : m_sidebar.leftButtons()) {
+            for (auto& btn :
+                 m_sidebar.leftButtons()) {
                 if (btn.get() == cur) {
                     placeTitleAbove(cur);
-                    m_titlePill->setText(btn->label());
+                    m_titlePill->setText(
+                        btn->label()
+                    );
                     m_titlePill->setVisible(true);
                     return;
                 }
             }
 
-            for (auto& btn : m_sidebar.rightButtons()) {
+            for (auto& btn :
+                 m_sidebar.rightButtons()) {
                 if (btn.get() == cur) {
                     placeTitleAbove(cur);
-                    m_titlePill->setText(btn->label());
+                    m_titlePill->setText(
+                        btn->label()
+                    );
                     m_titlePill->setVisible(true);
                     return;
                 }
             }
 
-            for (auto& avatar : m_userAvatarButtons) {
+            for (auto& avatar :
+                 m_userAvatarButtons) {
                 if (avatar.get() == cur) {
-                    nxui::Rect r = avatar->focusRect();
+                    nxui::Rect r =
+                        avatar->focusRect();
+
                     m_titlePill->setAnchor(
                         r.x + r.width * 0.5f,
                         r.y + r.height + 10.f
                     );
-                    m_titlePill->setText(avatar->nickname());
-                    m_titlePill->setVisible(!avatar->nickname().empty());
+
+                    m_titlePill->setText(
+                        avatar->nickname()
+                    );
+
+                    m_titlePill->setVisible(
+                        !avatar->nickname().empty()
+                    );
+
                     return;
                 }
             }
@@ -553,22 +690,38 @@ void WiiUMenuApp::wireFocusCallback() {
 
     if (auto* cur = focusManager().current()) {
         if (cur->tag() == "glossy_icon") {
-            auto* icon = static_cast<GlossyIcon*>(cur);
+            auto* icon =
+                static_cast<GlossyIcon*>(cur);
 
             if (icon->titleId() != 0) {
-                constexpr float kSelectedScale = 1.12f;
-                nxui::Rect baseRect = icon->focusRect();
-                float visualExpand =
-                    baseRect.width * (kSelectedScale - 1.f) * 0.5f;
+                constexpr float kSelectedScale =
+                    1.12f;
 
-                nxui::Rect visualRect = baseRect.expanded(visualExpand);
+                nxui::Rect baseRect =
+                    icon->focusRect();
+
+                float visualExpand =
+                    baseRect.width *
+                    (kSelectedScale - 1.f) *
+                    0.5f;
+
+                nxui::Rect visualRect =
+                    baseRect.expanded(
+                        visualExpand
+                    );
 
                 m_titlePill->setAnchor(
-                    visualRect.x + visualRect.width * 0.5f,
-                    std::max(104.f, visualRect.y - 58.f)
+                    visualRect.x +
+                        visualRect.width * 0.5f,
+                    std::max(
+                        104.f,
+                        visualRect.y - 58.f
+                    )
                 );
 
-                m_titlePill->setText(icon->title());
+                m_titlePill->setText(
+                    icon->title()
+                );
             }
         }
     }
@@ -982,24 +1135,34 @@ void WiiUMenuApp::updateCursor() {
     nxui::Rect fr = cur->focusRect();
 
     if (cur->tag() == "glossy_icon") {
-        auto* icon = static_cast<GlossyIcon*>(cur);
+        m_cursor->setGradientEnabled(true);
+
+        auto* icon =
+            static_cast<GlossyIcon*>(cur);
 
         constexpr float kSelectedScale = 1.12f;
+
         float visualExpand =
-            fr.width * (kSelectedScale - 1.f) * 0.5f;
+            fr.width *
+            (kSelectedScale - 1.f) *
+            0.5f;
 
         nxui::Rect visualRect =
-            fr.expanded(visualExpand + 4.f);
+            fr.expanded(
+                visualExpand + 4.f
+            );
 
         m_cursor->moveTo(
             visualRect,
-            icon->cornerRadius() * kSelectedScale + 4.f,
+            icon->cornerRadius() *
+                kSelectedScale +
+                4.f,
             0.16f
         );
     } else {
+        m_cursor->setGradientEnabled(false);
         m_cursor->moveTo(fr.expanded(4.f));
     }
 
     m_cursor->setVisible(true);
 }
-
