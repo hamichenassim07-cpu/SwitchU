@@ -78,6 +78,81 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         return;
 
     nxui::Rect cr = contentRect();
+    nxui::Rect glassRect = m_rect.shrunk(1.8f);
+    const float glassRadius = cornerRadius();
+
+    // V6.1: reinforce only the visible glass frame.
+    // Text size, position and contrast remain exactly unchanged.
+    ren.drawRoundedRectOutline(
+        glassRect.expanded(1.2f),
+        nxui::Color(
+            0.76f,
+            0.88f,
+            1.00f,
+            0.20f * m_opacity
+        ),
+        glassRadius + 1.2f,
+        4.2f
+    );
+
+    ren.drawRoundedRectOutline(
+        glassRect,
+        nxui::Color(
+            0.94f,
+            0.98f,
+            1.00f,
+            0.58f * m_opacity
+        ),
+        glassRadius,
+        2.5f
+    );
+
+    ren.drawRoundedRectOutline(
+        glassRect.shrunk(2.8f),
+        nxui::Color(
+            1.00f,
+            1.00f,
+            1.00f,
+            0.24f * m_opacity
+        ),
+        std::max(2.f, glassRadius - 2.8f),
+        1.15f
+    );
+
+    // Bright upper rim and a colder lower reflection enhance the glass
+    // material without covering or softening the text.
+    ren.drawRoundedRect(
+        {
+            glassRect.x + 8.f,
+            glassRect.y + 5.f,
+            glassRect.width - 16.f,
+            4.0f
+        },
+        nxui::Color(
+            1.00f,
+            1.00f,
+            1.00f,
+            0.34f * m_opacity
+        ),
+        2.f
+    );
+
+    ren.drawRoundedRect(
+        {
+            glassRect.x + 12.f,
+            glassRect.bottom() - 7.f,
+            glassRect.width - 24.f,
+            2.8f
+        },
+        nxui::Color(
+            0.50f,
+            0.72f,
+            1.00f,
+            0.16f * m_opacity
+        ),
+        1.4f
+    );
+
     nxui::Font* dateFont =
         m_smallFont ? m_smallFont : m_font;
 
@@ -109,6 +184,25 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float dateY =
         timeY + timeSize.y + kLineGap;
 
+    // Stronger premium glass reflections while keeping the text readable.
+    ren.drawRoundedRect(
+        {cr.x + 6.f, cr.y + 4.f, cr.width - 12.f, cr.height * 0.32f},
+        nxui::Color(1.f, 1.f, 1.f, 0.115f * m_opacity),
+        18.f
+    );
+
+    ren.drawRoundedRect(
+        {cr.x + 10.f, cr.y + 10.f, cr.width * 0.58f, cr.height * 0.16f},
+        nxui::Color(1.f, 1.f, 1.f, 0.095f * m_opacity),
+        14.f
+    );
+
+    ren.drawRoundedRect(
+        {cr.x + 8.f, cr.bottom() - cr.height * 0.20f, cr.width - 16.f, cr.height * 0.12f},
+        nxui::Color(0.68f, 0.82f, 1.f, 0.040f * m_opacity),
+        14.f
+    );
+
     const nxui::Color shadow =
         nxui::Color(0.f, 0.f, 0.f, 0.34f * m_opacity);
 
@@ -118,7 +212,6 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Color secondary =
         m_secondaryColor.withAlpha(0.98f * m_opacity);
 
-    // Shadow + a tiny second pass make the existing font easier to read.
     ren.drawText(
         m_timeStr,
         {timeX + 1.1f, timeY + 1.2f},
