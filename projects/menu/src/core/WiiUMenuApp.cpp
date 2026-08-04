@@ -1105,15 +1105,33 @@ void WiiUMenuApp::buildGrid() {
     m_contentLayer->setTag("contentLayer");
     m_contentLayer->setWireframeEnabled(false);
 
-    m_topHud = std::make_shared<nxui::Box>(nxui::Axis::ROW);
-    m_topHud->setRect({0, 0, 1280, 90});
+   m_topHud = std::make_shared<nxui::Box>(nxui::Axis::ROW);
+    m_topHud->setRect({0.f, 0.f, 1280.f, 96.f});
     m_topHud->setTag("topHud");
     m_topHud->setWireframeEnabled(false);
     m_topHud->setJustifyContent(nxui::JustifyContent::SPACE_BETWEEN);
     m_topHud->setAlignItems(nxui::AlignItems::FLEX_START);
-    m_topHud->addChild(m_clock);
+
+    auto topLeftHud = std::make_shared<nxui::Box>(nxui::Axis::ROW);
+    topLeftHud->setTag("topLeftHud");
+    topLeftHud->setWireframeEnabled(false);
+    topLeftHud->setGap(12.f);
+    topLeftHud->setMarginTop(12.f);
+    topLeftHud->setMarginLeft(24.f);
+    topLeftHud->setAlignItems(nxui::AlignItems::CENTER);
+    topLeftHud->setShrink(0.f);
+
+    float topLeftWidth = 184.f;
     if (m_userAvatarBar)
-        m_topHud->addChild(m_userAvatarBar);
+        topLeftWidth += 12.f + m_userAvatarBar->rect().width;
+
+    topLeftHud->setSize(topLeftWidth, 72.f);
+    topLeftHud->addChild(m_clock);
+
+    if (m_userAvatarBar)
+        topLeftHud->addChild(m_userAvatarBar);
+
+    m_topHud->addChild(topLeftHud);
     m_topHud->addChild(m_battery);
     m_topHud->layout();
 
@@ -1134,7 +1152,6 @@ void WiiUMenuApp::buildGrid() {
     m_contentLayer->addChild(m_rightSidebar);
     m_contentLayer->addChild(m_topHud);
     m_contentLayer->addChild(m_titlePill);
-    m_contentLayer->addChild(m_pageIndicator);
 
     m_overlayLayer = std::make_shared<nxui::Box>();
     m_overlayLayer->setRect({0, 0, 1280, 720});
