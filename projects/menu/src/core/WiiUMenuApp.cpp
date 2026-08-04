@@ -881,7 +881,7 @@ void WiiUMenuApp::buildGrid() {
     m_pointerCursor->setVisible(false);
 
     m_clock = std::make_shared<DateTimeWidget>();
-    m_clock->setSize(184.f, 72.f);
+    m_clock->setSize(224.f, 92.f);
     m_clock->setMarginTop(0.f);
     m_clock->setMarginLeft(0.f);
     m_clock->setFont(&m_fontNormal);
@@ -894,8 +894,8 @@ void WiiUMenuApp::buildGrid() {
     m_battery = std::make_shared<BatteryWidget>();
     m_battery->setMarginTop(12.f);
     m_battery->setMarginRight(24.f);
-    m_battery->setSize(184.f, 72.f);
-    m_battery->setFont(&m_fontSmall);
+    m_battery->setSize(210.f, 92.f);
+    m_battery->setFont(&m_fontNormal);
     m_battery->setCornerRadius(m_theme.cellCornerRadius);
     m_battery->setForceLiquidGlass(true);
     m_battery->setBlurEnabled(false);
