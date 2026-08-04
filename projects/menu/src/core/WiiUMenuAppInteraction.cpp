@@ -978,126 +978,305 @@ void WiiUMenuApp::wireGlobalActions() {
 }
 
 void WiiUMenuApp::handleTouch() {
-    constexpr float kSwipeThreshold = 80.f;
+    // Le seuil dépasse celui du tap générique de nxui (20 px),
+    // afin qu'un scroll ne lance jamais accidentellement un jeu.
+    constexpr float kScrollStartThreshold = 22.f;
+    constexpr float kHorizontalIntentRatio = 1.15f;
     constexpr float kLongPressThreshold = 0.55f;
     constexpr float kLongPressMoveThreshold = 18.f;
 
     auto& input = app().input();
 
-    auto hitAvatar = [this](float x, float y) -> UserAvatarButton* {
-        for (auto& avatar : m_userAvatarButtons) {
-            if (avatar && avatar->isVisible() && avatar->hitTest(x, y))
-                return avatar.get();
-        }
-        return nullptr;
+    auto resetScrollState = [this]() {
+        m_touchStartedInGrid = false;
+        m_touchScrollActive = false;
+        m_touchLastX = 0.f;
+        m_touchLastDuration = 0.f;
+        m_touchScrollVelocity = 0.f;
     };
 
-    auto focusTouchedIcon = [this](int localHit) -> GlossyIcon* {
-        if (!m_grid || localHit < 0)
-            return nullptr;
+    auto hitAvatar =
+        [this](float x, float y)
+        -> UserAvatarButton* {
+            for (auto& avatar :
+                 m_userAvatarButtons) {
+                if (avatar &&
+                    avatar->isVisible() &&
+                    avatar->hitTest(x, y))
+                    return avatar.get();
+            }
 
-        int global = m_grid->currentPage() * m_grid->iconsPerPage() + localHit;
-        if (!m_grid->focusGlobalIndex(global))
             return nullptr;
+        };
 
-        auto* cur = m_grid->focusManager().current();
-        if (!cur)
-            return nullptr;
+    auto focusTouchedIcon =
+        [this](int globalHit)
+        -> GlossyIcon* {
+            if (!m_grid ||
+                globalHit < 0)
+                return nullptr;
 
-        focusManager().setFocus(cur);
-        updateCursor();
+            if (!m_grid->focusGlobalIndex(
+                    globalHit))
+                return nullptr;
 
-        if (!isEditableIcon(cur))
-            return nullptr;
-        return static_cast<GlossyIcon*>(cur);
-    };
+            auto* cur =
+                m_grid->focusManager().current();
+
+            if (!cur)
+                return nullptr;
+
+            focusManager().setFocus(cur);
+            updateCursor();
+
+            if (!isEditableIcon(cur))
+                return nullptr;
+
+            return static_cast<GlossyIcon*>(
+                cur
+            );
+        };
 
     if (input.touchDown()) {
-        float tx = input.touchX();
-        float ty = input.touchY();
-        m_touchAvatarTarget = hitAvatar(tx, ty);
-        m_touchAvatarWasFocused = m_touchAvatarTarget && (focusManager().current() == m_touchAvatarTarget);
+        const float tx = input.touchX();
+        const float ty = input.touchY();
+
+        m_touchStartedInGrid =
+            m_grid &&
+            m_grid->rect().contains(tx, ty);
+
+        m_touchScrollActive = false;
+        m_touchLastX = tx;
+        m_touchLastDuration = 0.f;
+        m_touchScrollVelocity = 0.f;
+
+        m_touchAvatarTarget =
+            hitAvatar(tx, ty);
+
+        m_touchAvatarWasFocused =
+            m_touchAvatarTarget &&
+            focusManager().current() ==
+                m_touchAvatarTarget;
+
         if (m_touchAvatarTarget) {
+            m_touchStartedInGrid = false;
             m_touchHitIndex = -1;
             m_touchOnFocused = false;
             m_touchEditDragActive = false;
             return;
         }
 
-        int hit = m_grid->hitTest(tx, ty);
-        m_touchHitIndex = hit;
+        m_touchHitIndex =
+            m_grid
+                ? m_grid->hitTest(tx, ty)
+                : -1;
+
         m_touchOnFocused = false;
         m_touchEditDragActive = false;
-        if (hit >= 0) {
-            auto icons = m_grid->pageIcons();
-            if (hit < (int)icons.size())
-                m_touchOnFocused = (icons[hit] == focusManager().current());
+
+        if (m_touchHitIndex >= 0 &&
+            m_grid) {
+            const auto icons =
+                m_grid->pageIcons();
+
+            if (m_touchHitIndex <
+                static_cast<int>(
+                    icons.size()
+                )) {
+                m_touchOnFocused =
+                    icons[m_touchHitIndex] ==
+                    focusManager().current();
+            }
         }
     }
 
-    if (input.isTouching() && m_touchHitIndex >= 0) {
-        float dx = input.touchDeltaX();
-        float dy = input.touchDeltaY();
+    if (input.isTouching()) {
+        const float totalDx =
+            input.touchDeltaX();
 
-        if (!m_editMode
-            && std::abs(dx) <= kLongPressMoveThreshold
-            && std::abs(dy) <= kLongPressMoveThreshold
-            && input.touchDuration() >= kLongPressThreshold)
-        {
-            if (auto* icon = focusTouchedIcon(m_touchHitIndex)) {
-                enterEditMode();
-                if (m_editMode) {
-                    m_touchEditDragActive = true;
-                    m_audio.playSfx(Sfx::Activate);
-                    m_editGhostTargetRect = icon->focusRect().expanded(4.f);
-                }
-            }
+        const float totalDy =
+            input.touchDeltaY();
+
+        const bool horizontalGesture =
+            std::abs(totalDx) >=
+                kScrollStartThreshold &&
+            std::abs(totalDx) >
+                std::abs(totalDy) *
+                kHorizontalIntentRatio;
+
+        // En mode normal, le geste horizontal fait défiler.
+        // En mode déplacement, ce bloc est ignoré :
+        // la réorganisation reste donc prioritaire et intacte.
+        if (!m_editMode &&
+            !m_touchScrollActive &&
+            m_touchStartedInGrid &&
+            horizontalGesture &&
+            m_grid &&
+            m_grid->canTouchScroll()) {
+            m_touchScrollActive = true;
+            m_touchOnFocused = false;
+            m_grid->beginTouchScroll();
         }
 
-        if (m_editMode && m_touchEditDragActive) {
-            int dragHit = m_grid->hitTest(input.touchX(), input.touchY());
-            if (dragHit >= 0)
-                focusTouchedIcon(dragHit);
+        if (m_touchScrollActive &&
+            m_grid) {
+            const float currentX =
+                input.touchX();
+
+            const float currentDuration =
+                input.touchDuration();
+
+            const float frameDx =
+                currentX - m_touchLastX;
+
+            const float frameDt =
+                currentDuration -
+                m_touchLastDuration;
+
+            m_touchLastX = currentX;
+            m_touchLastDuration =
+                currentDuration;
+
+            if (frameDt > 0.001f &&
+                frameDt < 0.10f) {
+                const float instantVelocity =
+                    frameDx / frameDt;
+
+                // Lissage léger : la force réelle du geste est conservée,
+                // sans devenir irrégulière à cause d'une seule image.
+                m_touchScrollVelocity =
+                    m_touchScrollVelocity *
+                        0.62f +
+                    instantVelocity *
+                        0.38f;
+            }
+
+            m_grid->dragTouchScroll(
+                frameDx
+            );
+
+            updateCursor();
+            return;
+        }
+
+        if (m_touchHitIndex >= 0) {
+            if (!m_editMode &&
+                std::abs(totalDx) <=
+                    kLongPressMoveThreshold &&
+                std::abs(totalDy) <=
+                    kLongPressMoveThreshold &&
+                input.touchDuration() >=
+                    kLongPressThreshold) {
+                if (auto* icon =
+                        focusTouchedIcon(
+                            m_touchHitIndex
+                        )) {
+                    enterEditMode();
+
+                    if (m_editMode) {
+                        m_touchEditDragActive =
+                            true;
+
+                        m_audio.playSfx(
+                            Sfx::Activate
+                        );
+
+                        m_editGhostTargetRect =
+                            icon->focusRect()
+                                .expanded(4.f);
+                    }
+                }
+            }
+
+            if (m_editMode &&
+                m_touchEditDragActive &&
+                m_grid) {
+                const int dragHit =
+                    m_grid->hitTest(
+                        input.touchX(),
+                        input.touchY()
+                    );
+
+                if (dragHit >= 0)
+                    focusTouchedIcon(dragHit);
+            }
         }
     }
 
     if (input.touchUp()) {
         if (m_touchAvatarTarget) {
-            float dx = input.touchDeltaX();
-            float dy = input.touchDeltaY();
-            UserAvatarButton* avatar = m_touchAvatarTarget;
+            const float dx =
+                input.touchDeltaX();
+
+            const float dy =
+                input.touchDeltaY();
+
+            UserAvatarButton* avatar =
+                m_touchAvatarTarget;
+
             m_touchAvatarTarget = nullptr;
-            if (std::abs(dx) < 20.f && std::abs(dy) < 20.f &&
-                hitAvatar(input.touchX(), input.touchY()) == avatar)
-            {
-                focusManager().setFocus(avatar);
+
+            if (std::abs(dx) < 20.f &&
+                std::abs(dy) < 20.f &&
+                hitAvatar(
+                    input.touchX(),
+                    input.touchY()
+                ) == avatar) {
+                focusManager().setFocus(
+                    avatar
+                );
+
                 if (!m_touchAvatarWasFocused)
                     avatar->activate();
             }
-            m_touchAvatarWasFocused = false;
+
+            m_touchAvatarWasFocused =
+                false;
+
+            resetScrollState();
             return;
         }
 
-        if (m_editMode && m_touchEditDragActive) {
-            bool changed = commitEditModePlacement();
+        if (m_touchScrollActive &&
+            m_grid) {
+            m_grid->endTouchScroll(
+                m_touchScrollVelocity
+            );
+
+            m_touchHitIndex = -1;
+            m_touchOnFocused = false;
+            m_touchEditDragActive = false;
+
+            resetScrollState();
+            return;
+        }
+
+        // Le déplacement des icônes est conservé tel quel.
+        if (m_editMode &&
+            m_touchEditDragActive) {
+            const bool changed =
+                commitEditModePlacement();
+
             exitEditMode();
-            m_audio.playSfx(changed ? Sfx::ConfirmPositive : Sfx::ModalHide);
+
+            m_audio.playSfx(
+                changed
+                    ? Sfx::ConfirmPositive
+                    : Sfx::ModalHide
+            );
+
             m_touchHitIndex = -1;
             m_touchEditDragActive = false;
+
+            resetScrollState();
             return;
         }
 
-        float dx = input.touchDeltaX();
-        float dy = input.touchDeltaY();
-        if (std::abs(dx) > kSwipeThreshold && std::abs(dx) > std::abs(dy) * 1.5f) {
-            int p = m_grid->currentPage() + (dx < 0 ? 1 : -1);
-            if (p >= 0 && p < m_grid->totalPages() && !m_grid->isTransitioning()) {
-                m_grid->startWaveTransition(p);
-                m_audio.playSfx(Sfx::PageChange);
-            }
-        }
         m_touchHitIndex = -1;
+        m_touchOnFocused = false;
         m_touchEditDragActive = false;
+
+        resetScrollState();
     }
 }
 
