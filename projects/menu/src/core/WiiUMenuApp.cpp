@@ -889,17 +889,15 @@ void WiiUMenuApp::buildGrid() {
     m_clock->setUse12HourClock(m_config.clockUse12Hour);
     m_clock->setCornerRadius(m_theme.cellCornerRadius);
     m_clock->setForceLiquidGlass(true);
-    m_clock->setBorderWidth(3.0f);
     m_clock->setBlurEnabled(false);
 
     m_battery = std::make_shared<BatteryWidget>();
     m_battery->setMarginTop(12.f);
     m_battery->setMarginRight(24.f);
-    m_battery->setSize(248.f, 92.f);
+    m_battery->setSize(238.f, 92.f);
     m_battery->setFont(&m_fontNormal);
     m_battery->setCornerRadius(m_theme.cellCornerRadius);
     m_battery->setForceLiquidGlass(true);
-    m_battery->setBorderWidth(3.0f);
     m_battery->setBlurEnabled(false);
 
     buildUserAvatarBar();
@@ -1108,7 +1106,7 @@ void WiiUMenuApp::buildGrid() {
     m_contentLayer->setWireframeEnabled(false);
 
    m_topHud = std::make_shared<nxui::Box>(nxui::Axis::ROW);
-    m_topHud->setRect({0.f, 0.f, 1280.f, 122.f});
+    m_topHud->setRect({0.f, 0.f, 1280.f, 116.f});
     m_topHud->setTag("topHud");
     m_topHud->setWireframeEnabled(false);
     m_topHud->setJustifyContent(nxui::JustifyContent::SPACE_BETWEEN);
@@ -1123,7 +1121,7 @@ void WiiUMenuApp::buildGrid() {
     topLeftHud->setAlignItems(nxui::AlignItems::CENTER);
     topLeftHud->setShrink(0.f);
 
-    float topLeftWidth = 236.f;
+    float topLeftWidth = 224.f;
     if (m_userAvatarBar)
         topLeftWidth += 12.f + m_userAvatarBar->rect().width;
 
@@ -1638,6 +1636,60 @@ void WiiUMenuApp::onUpdate(float dt) {
         handleTouch();
     }
 
+    // Synchronise la sélection quand l’inertie et le recalage tactile
+    // sont terminés. Le mode de déplacement des icônes n’est pas touché.
+    if (m_grid) {
+        const int settledIndex =
+            m_grid->consumeSettledFocusIndex();
+
+        if (settledIndex >= 0) {
+            auto* target =
+                m_grid->focusManager().current();
+
+            if (target) {
+                m_suppressNextNavigateSfx = true;
+                focusManager().setFocus(target);
+                updateCursor();
+            }
+        }
+
+        if (m_grid->isScrollMoving()) {
+            updateCursor();
+
+            auto* current =
+                focusManager().current();
+
+            if (current &&
+                current->tag() == "glossy_icon" &&
+                m_titlePill) {
+                constexpr float kSelectedScale =
+                    1.12f;
+
+                nxui::Rect baseRect =
+                    current->focusRect();
+
+                const float visualExpand =
+                    baseRect.width *
+                    (kSelectedScale - 1.f) *
+                    0.5f;
+
+                nxui::Rect visualRect =
+                    baseRect.expanded(
+                        visualExpand
+                    );
+
+                m_titlePill->setAnchor(
+                    visualRect.x +
+                        visualRect.width * 0.5f,
+                    std::max(
+                        104.f,
+                        visualRect.y - 58.f
+                    )
+                );
+            }
+        }
+    }
+
     bool dialogActiveNow = (m_dialog && m_dialog->isActive());
     if (!debugTouchBlocked && dialogActiveNow)
         m_dialog->handleTouch(app().input());
@@ -1931,7 +1983,10 @@ void WiiUMenuApp::onRender(nxui::Renderer& ren) {
         ren.drawRect({0, 0, 1280, 720}, nxui::Color(1.f, 1.f, 1.f, alpha));
     }
 
-    if (m_touchHitIndex >= 0 && !m_touchOnFocused && app().input().isTouching()) {
+    if (!m_touchScrollActive &&
+        m_touchHitIndex >= 0 &&
+        !m_touchOnFocused &&
+        app().input().isTouching()) {
         auto icons = m_grid->pageIcons();
         if (m_touchHitIndex < (int)icons.size()) {
             nxui::Rect r = icons[m_touchHitIndex]->focusRect();
