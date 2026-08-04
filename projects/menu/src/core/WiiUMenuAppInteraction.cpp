@@ -435,7 +435,7 @@ void WiiUMenuApp::wireFocusCallback() {
                 float titleY =
                     std::max(
                         104.f,
-                        r.y - 58.f - extraTop
+                        r.y - 64.f - extraTop
                     );
 
                 m_titlePill->setAnchor(
@@ -500,7 +500,7 @@ void WiiUMenuApp::wireFocusCallback() {
                     visualRect.width * 0.5f,
                 std::max(
                     104.f,
-                    visualRect.y - 58.f
+                    visualRect.y - 64.f
                 )
             );
 
@@ -715,7 +715,7 @@ void WiiUMenuApp::wireFocusCallback() {
                         visualRect.width * 0.5f,
                     std::max(
                         104.f,
-                        visualRect.y - 58.f
+                        visualRect.y - 64.f
                     )
                 );
 
