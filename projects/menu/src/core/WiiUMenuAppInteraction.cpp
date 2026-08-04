@@ -422,9 +422,37 @@ void WiiUMenuApp::wireFocusCallback() {
         if (!suppressSfx)
             m_audio.playSfx(Sfx::Navigate);
 
-        if (cur && cur->tag() == "glossy_icon") {
+     if (cur && cur->tag() == "glossy_icon") {
             m_grid->focusManager().setFocus(cur);
+
+            // Le carrousel vient de déplacer les icônes : recaler le halo
+            // sur la nouvelle position de l'application sélectionnée.
+            updateCursor();
+
+            // Gauche/droite restent réservés au défilement des jeux.
+            // Haut ouvre la barre gauche, bas ouvre la barre droite.
+            if (!m_sidebar.leftButtons().empty()) {
+                auto* leftTarget =
+                    m_sidebar.leftButtons()[m_sidebar.leftButtons().size() / 2].get();
+
+                cur->setCustomNavigation(nxui::FocusDirection::UP, leftTarget);
+
+                for (auto& btn : m_sidebar.leftButtons())
+                    btn->setCustomNavigation(nxui::FocusDirection::RIGHT, cur);
+            }
+
+            if (!m_sidebar.rightButtons().empty()) {
+                auto* rightTarget =
+                    m_sidebar.rightButtons()[m_sidebar.rightButtons().size() / 2].get();
+
+                cur->setCustomNavigation(nxui::FocusDirection::DOWN, rightTarget);
+
+                for (auto& btn : m_sidebar.rightButtons())
+                    btn->setCustomNavigation(nxui::FocusDirection::LEFT, cur);
+            }
+
             auto* icon = static_cast<GlossyIcon*>(cur);
+
             auto& i18n = nxui::I18n::instance();
             if (m_editMode) {
                 bindEditActions(icon);
