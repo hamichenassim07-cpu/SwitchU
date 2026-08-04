@@ -103,6 +103,10 @@ private:
     void markSuspendedIcon(uint64_t titleId);
     void closeActiveOverlays();
     void handleTouch();
+
+    void showLockScreen();
+    void handleLockScreen(float dt);
+    void renderLockScreen(nxui::Renderer& ren);
     std::shared_ptr<GlossyIcon> makeIcon(const AppEntry& entry);
     void wireFocusCallback();
     void wireGlobalActions();
@@ -238,6 +242,15 @@ private:
 
     UserAvatarButton* m_touchAvatarTarget = nullptr;
     bool m_touchAvatarWasFocused = false;
+
+    bool  m_lockScreenActive = true;
+    bool  m_lockScreenUnlocking = false;
+    bool  m_skipStartupLock = false;
+    int   m_lockPressCount = 0;
+    float m_lockPressResetTimer = 0.f;
+    float m_lockScreenPulse = 0.f;
+    float m_lockScreenOpacity = 1.f;
+
     int  m_deferredRefreshFrames = 0;
     bool m_refreshQueued         = false;
     int  m_refreshCooldownFrames = 0;
