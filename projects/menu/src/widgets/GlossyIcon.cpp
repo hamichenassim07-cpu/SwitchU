@@ -147,31 +147,103 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
     }
 
     if (m_suspended && s > 0.5f) {
-        float pulse = 0.5f + 0.5f * std::sin(m_suspendPulse);
-        float glowAlpha = 0.35f + 0.25f * pulse;
+        // Application toujours ouverte en arrière-plan :
+        // plus de contour vert ni de bouton Play.
+        // Un voile bleu/cyan très léger respire directement
+        // à l'intérieur de la jaquette, dans l'esprit de la 3DS.
+        const float breathe =
+            0.5f +
+            0.5f *
+            std::sin(m_suspendPulse * 0.62f);
 
-        nxui::Color glow(0.18f, 0.85f, 0.45f, glowAlpha * a);
-        ren.drawRoundedRectOutline(r.expanded(2.f), glow, rad + 2.f, 2.5f);
+        const float suspendedInset =
+            8.f * s;
 
-        float badgeSize = 26.f * s;
-        float badgeX = r.x + r.width - badgeSize - 4.f * s;
-        float badgeY = r.y + r.height - badgeSize - 4.f * s;
-        nxui::Vec2 badgeCenter = {
-            badgeX + badgeSize * 0.5f,
-            badgeY + badgeSize * 0.5f
+        nxui::Rect activeRect =
+            r.shrunk(suspendedInset);
+
+        const float activeRadius =
+            std::max(
+                2.f,
+                rad - 3.f
+            );
+
+        // Teinte principale, toujours discrète pour laisser
+        // la jaquette parfaitement reconnaissable.
+        ren.drawRoundedRect(
+            activeRect,
+            nxui::Color(
+                0.06f,
+                0.28f,
+                0.66f,
+                (0.075f +
+                 0.050f * breathe) * a
+            ),
+            activeRadius
+        );
+
+        // Lumière cyan interne qui augmente et diminue lentement.
+        ren.drawRoundedRect(
+            activeRect.shrunk(4.f * s),
+            nxui::Color(
+                0.16f,
+                0.58f,
+                0.96f,
+                (0.030f +
+                 0.035f * breathe) * a
+            ),
+            std::max(
+                2.f,
+                activeRadius - 3.f * s
+            )
+        );
+
+        // Reflet doux dans la partie haute de la jaquette.
+        nxui::Rect upperLight = {
+            activeRect.x + 5.f * s,
+            activeRect.y + 4.f * s,
+            activeRect.width - 10.f * s,
+            activeRect.height * 0.38f
         };
 
-        ren.drawCircle(badgeCenter, badgeSize * 0.5f,
-                       nxui::Color(0.1f, 0.1f, 0.1f, 0.85f * a), 16);
+        ren.drawRoundedRect(
+            upperLight,
+            nxui::Color(
+                0.54f,
+                0.84f,
+                1.00f,
+                (0.018f +
+                 0.026f * breathe) * a
+            ),
+            std::max(
+                2.f,
+                activeRadius - 4.f * s
+            )
+        );
 
-        float triH = badgeSize * 0.45f;
-        float triW = triH * 0.85f;
-        nxui::Vec2 p1 = {badgeCenter.x - triW * 0.35f, badgeCenter.y - triH * 0.5f};
-        nxui::Vec2 p2 = {badgeCenter.x - triW * 0.35f, badgeCenter.y + triH * 0.5f};
-        nxui::Vec2 p3 = {badgeCenter.x + triW * 0.65f, badgeCenter.y};
+        // Très légère profondeur sombre en bas.
+        nxui::Rect lowerShade = {
+            activeRect.x + 5.f * s,
+            activeRect.y +
+                activeRect.height * 0.62f,
+            activeRect.width - 10.f * s,
+            activeRect.height * 0.34f
+        };
 
-        ren.drawTriangle(p1, p2, p3,
-                         nxui::Color(0.18f, 0.85f, 0.45f, 0.95f * a));
+        ren.drawRoundedRect(
+            lowerShade,
+            nxui::Color(
+                0.02f,
+                0.10f,
+                0.30f,
+                (0.016f +
+                 0.012f * (1.f - breathe)) * a
+            ),
+            std::max(
+                2.f,
+                activeRadius - 4.f * s
+            )
+        );
     }
 }
 
