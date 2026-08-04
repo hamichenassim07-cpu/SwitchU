@@ -6,7 +6,6 @@
 #include <memory>
 #include <functional>
 
-
 class GlossyIcon;
 
 class IconGrid : public nxui::Widget {
@@ -17,6 +16,7 @@ public:
                int cols, int rows,
                float cellW, float cellH,
                float padX, float padY);
+
     void reconfigureLayout(int cols, int rows,
                            float cellW, float cellH,
                            float padX, float padY);
@@ -26,13 +26,12 @@ public:
     int  totalPages()   const { return m_totalPages; }
     int  columns()      const { return m_cols; }
     int  rowsPerPage()  const { return m_rows; }
-    int  iconsPerPage() const { return m_cols * m_rows; }
+    int  iconsPerPage() const { return std::max(1, m_cols * m_rows); }
 
     nxui::FocusManager& focusManager() { return m_focus; }
     const std::vector<std::shared_ptr<GlossyIcon>>& allIcons() const { return m_allIcons; }
 
     std::vector<GlossyIcon*> pageIcons() const;
-
     int hitTest(float screenX, float screenY) const;
 
     int focusedGlobalIndex() const;
@@ -54,22 +53,34 @@ protected:
 
 private:
     void layoutPage();
+    void layoutCarousel();
 
     std::vector<std::shared_ptr<GlossyIcon>> m_allIcons;
     nxui::FocusManager m_focus;
 
-    int m_cols = 5, m_rows = 3;
-    int m_page = 0, m_totalPages = 1;
-    float m_cellW = 200, m_cellH = 200;
-    float m_padX  = 20,  m_padY  = 20;
-    float m_originX = 0, m_originY = 0;
+    // m_cols represents the full horizontal row for compatibility with the
+    // existing focus/edit/streaming code. m_visibleCols is the number of icons
+    // shown inside the viewport at once.
+    int m_cols = 1;
+    int m_rows = 1;
+    int m_visibleCols = 5;
+
+    int m_page = 0;
+    int m_totalPages = 1;
+
+    float m_cellW = 200.f;
+    float m_cellH = 200.f;
+    float m_padX  = 20.f;
+    float m_padY  = 20.f;
+    float m_originX = 0.f;
+    float m_originY = 0.f;
 
     enum class WavePhase { Idle, Capture, Animating };
-    WavePhase m_wavePhase    = WavePhase::Idle;
-    bool  m_waveActive       = false;
-    int   m_waveTargetPage   = 0;
-    float m_waveTime         = 0.f;
-    float m_waveDuration     = 0.35f;
+    WavePhase m_wavePhase  = WavePhase::Idle;
+    bool  m_waveActive     = false;
+    int   m_waveTargetPage = 0;
+    float m_waveTime       = 0.f;
+    float m_waveDuration   = 0.35f;
 
     std::function<void()> m_onPageSwitched;
 };
