@@ -82,5 +82,5 @@ private:
     int m_pinnedIndex = -1;
 
     static constexpr int kPageCacheRadius = 2;
-    static constexpr int kIconSize        = 160;
+    static constexpr int kIconSize        = 256;
 };
