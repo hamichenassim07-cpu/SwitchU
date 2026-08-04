@@ -2,6 +2,7 @@
 #include <nxui/core/Renderer.hpp>
 #include <nxui/core/Font.hpp>
 #include <cmath>
+#include <algorithm>
 
 GlossyIcon::GlossyIcon() {
     m_animScale.setImmediate(0.f);
@@ -94,22 +95,32 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
     float rad = cornerRadius();
     float focusGlow = m_focusGlow.value();
 
+    // V6: stronger glass reflections on every icon.
+    ren.drawRoundedRect(
+        {r.x + 6.f, r.y + 4.f, r.width - 12.f, r.height * 0.20f},
+        nxui::Color(1.f, 1.f, 1.f, (0.12f + 0.04f * focusGlow) * a),
+        rad
+    );
+
+    ren.drawRoundedRect(
+        {r.x + 10.f, r.y + 10.f, r.width * 0.55f, r.height * 0.10f},
+        nxui::Color(1.f, 1.f, 1.f, (0.11f + 0.05f * focusGlow) * a),
+        std::max(6.f, rad - 4.f)
+    );
+
     if (focusGlow > 0.01f && s > 0.5f) {
-        // V5: the large coloured halo is now drawn by SelectionCursor.
-        // Keep only a very faint ambient bloom behind the selected cover.
+        // Keep only a very soft outside bloom; the main coloured effect now
+        // happens inside the icon border itself.
         const float breathe =
-            0.5f + 0.5f * std::sin(m_suspendPulse * 0.85f);
+            0.5f + 0.5f * std::sin(m_suspendPulse * 0.80f);
 
         ren.drawRoundedRect(
-            r.expanded(5.f + breathe),
+            r.expanded(3.5f + breathe * 0.8f),
             nxui::Color(
-                0.40f,
-                0.10f,
-                0.78f,
-                (0.012f + 0.010f * breathe) *
-                    focusGlow * a
+                1.f, 1.f, 1.f,
+                (0.028f + 0.010f * breathe) * focusGlow * a
             ),
-            rad + 6.f
+            rad + 4.f
         );
     }
 
@@ -193,73 +204,32 @@ void GlossyIcon::onContentRender(nxui::Renderer& ren) {
     nxui::Rect texRect = r.shrunk(inset);
     float texRadius = std::max(2.f, rad - 3.f);
 
-    // V5: stronger frosted placeholder while an icon is empty or loading.
-    // It avoids a flat transparent square without using an aggressive blur.
+    // Cleaner dark placeholder: no central round hotspot.
     if (!m_tex || !m_tex->valid()) {
-        const float breathe =
-            0.5f + 0.5f * std::sin(m_suspendPulse * 0.70f);
-
         ren.drawRoundedRect(
             texRect,
-            nxui::Color(
-                0.025f,
-                0.020f,
-                0.070f,
-                0.78f * m_opacity
-            ),
+            nxui::Color(0.05f, 0.04f, 0.11f, 0.76f * m_opacity),
             texRadius
         );
 
         ren.drawRoundedRect(
-            texRect.shrunk(5.f),
-            nxui::Color(
-                0.20f,
-                0.12f,
-                0.42f,
-                (0.070f + 0.025f * breathe) * m_opacity
-            ),
-            std::max(2.f, texRadius - 4.f)
-        );
-
-        ren.drawRoundedRect(
-            texRect.shrunk(14.f),
-            nxui::Color(
-                0.12f,
-                0.32f,
-                0.58f,
-                (0.040f + 0.018f * breathe) * m_opacity
-            ),
-            std::max(2.f, texRadius - 9.f)
+            {texRect.x + 2.f, texRect.y + 2.f, texRect.width - 4.f, texRect.height * 0.28f},
+            nxui::Color(1.f, 1.f, 1.f, 0.065f * m_opacity),
+            std::max(2.f, texRadius - 2.f)
         );
 
         ren.drawRoundedRectOutline(
             texRect.shrunk(1.f),
-            nxui::Color(
-                0.70f,
-                0.62f,
-                1.00f,
-                0.16f * m_opacity
-            ),
+            nxui::Color(0.78f, 0.84f, 1.f, 0.12f * m_opacity),
             std::max(2.f, texRadius - 1.f),
-            1.4f
+            1.2f
         );
 
-        // Soft central light gives the impression of deeper frosted glass.
-        const nxui::Vec2 center = {
-            texRect.x + texRect.width * 0.5f,
-            texRect.y + texRect.height * 0.5f
-        };
-
-        ren.drawCircle(
-            center,
-            texRect.width * (0.13f + 0.01f * breathe),
-            nxui::Color(
-                0.46f,
-                0.30f,
-                0.82f,
-                (0.055f + 0.020f * breathe) * m_opacity
-            ),
-            32
+        ren.drawRoundedRectOutline(
+            texRect.shrunk(6.f),
+            nxui::Color(0.28f, 0.30f, 0.48f, 0.18f * m_opacity),
+            std::max(2.f, texRadius - 6.f),
+            1.0f
         );
 
         return;
@@ -281,36 +251,94 @@ void GlossyIcon::onContentRender(nxui::Renderer& ren) {
         iconTint
     );
 
-    // V5: extremely light breathing colour filter on the selected cover.
-    // The original artwork remains dominant.
+    // Global glass reflections, visible on all icons.
+    ren.drawRoundedRect(
+        {texRect.x + 2.f, texRect.y + 2.f, texRect.width - 4.f, texRect.height * 0.20f},
+        nxui::Color(1.f, 1.f, 1.f, 0.10f * m_opacity),
+        texRadius
+    );
+
+    ren.drawRoundedRect(
+        {texRect.x + 10.f, texRect.y + 12.f, texRect.width * 0.46f, texRect.height * 0.08f},
+        nxui::Color(1.f, 1.f, 1.f, 0.12f * m_opacity),
+        std::max(2.f, texRadius - 6.f)
+    );
+
+    // V6: selected icon gets the gradient integrated into its own border
+    // and surface, instead of relying on a large coloured cursor outside.
     const float focus = m_focusGlow.value();
 
     if (focus > 0.01f && m_focused) {
         const float breathe =
             0.5f + 0.5f * std::sin(m_suspendPulse * 0.72f);
 
-        const float colourShift =
+        const float phase =
             0.5f + 0.5f * std::sin(m_suspendPulse * 0.24f);
 
-        const nxui::Color purple(0.42f, 0.12f, 0.78f, 1.f);
-        const nxui::Color blue(0.08f, 0.48f, 0.92f, 1.f);
+        const nxui::Color purple(0.40f, 0.10f, 0.84f, 1.f);
+        const nxui::Color fuchsia(0.72f, 0.10f, 0.54f, 1.f);
+        const nxui::Color blue(0.08f, 0.56f, 1.00f, 1.f);
 
-        nxui::Color filter(
-            purple.r + (blue.r - purple.r) * colourShift,
-            purple.g + (blue.g - purple.g) * colourShift,
-            purple.b + (blue.b - purple.b) * colourShift,
+        nxui::Color mixA(
+            purple.r + (fuchsia.r - purple.r) * phase,
+            purple.g + (fuchsia.g - purple.g) * phase,
+            purple.b + (fuchsia.b - purple.b) * phase,
             1.f
         );
 
-        const float filterAlpha =
-            (0.018f + 0.012f * breathe) *
-            focus *
-            m_opacity;
+        nxui::Color mixB(
+            fuchsia.r + (blue.r - fuchsia.r) * (1.f - phase),
+            fuchsia.g + (blue.g - fuchsia.g) * (1.f - phase),
+            fuchsia.b + (blue.b - fuchsia.b) * (1.f - phase),
+            1.f
+        );
 
+        // Integrated coloured border.
+        ren.drawRoundedRectOutline(
+            texRect.shrunk(1.0f),
+            mixA.withAlpha((0.70f + 0.12f * breathe) * focus * m_opacity),
+            std::max(2.f, texRadius - 1.f),
+            3.2f
+        );
+
+        ren.drawRoundedRectOutline(
+            texRect.shrunk(4.0f),
+            mixB.withAlpha((0.54f + 0.10f * breathe) * focus * m_opacity),
+            std::max(2.f, texRadius - 4.f),
+            2.4f
+        );
+
+        // Soft colour in the glass itself, but very light in the centre.
         ren.drawRoundedRect(
             texRect,
-            filter.withAlpha(filterAlpha),
+            mixA.withAlpha((0.018f + 0.010f * breathe) * focus * m_opacity),
             texRadius
+        );
+
+        ren.drawRoundedRect(
+            {texRect.x, texRect.y, texRect.width * 0.30f, texRect.height},
+            purple.withAlpha((0.038f + 0.010f * breathe) * focus * m_opacity),
+            texRadius
+        );
+
+        ren.drawRoundedRect(
+            {texRect.right() - texRect.width * 0.30f, texRect.y,
+             texRect.width * 0.30f, texRect.height},
+            blue.withAlpha((0.038f + 0.010f * breathe) * focus * m_opacity),
+            texRadius
+        );
+
+        // Stronger glossy reflection on the selected cover.
+        ren.drawRoundedRect(
+            {texRect.x + 4.f, texRect.y + 4.f, texRect.width - 8.f, texRect.height * 0.17f},
+            nxui::Color(1.f, 1.f, 1.f, (0.17f + 0.03f * breathe) * focus * m_opacity),
+            texRadius
+        );
+
+        ren.drawRoundedRect(
+            {texRect.x + 14.f, texRect.y + 12.f, texRect.width * 0.38f, texRect.height * 0.08f},
+            nxui::Color(1.f, 1.f, 1.f, (0.22f + 0.04f * breathe) * focus * m_opacity),
+            std::max(2.f, texRadius - 6.f)
         );
     }
 }
