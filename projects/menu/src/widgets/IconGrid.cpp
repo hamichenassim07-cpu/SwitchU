@@ -2,11 +2,16 @@
 #include "GlossyIcon.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <algorithm>
-#include <cmath>
+
+namespace {
+constexpr int kVisibleIcons = 4;
+constexpr int kTrailingEmptySlots = 4;
+constexpr float kLargeIconSize = 240.f;
+constexpr float kLargeIconGap = 24.f;
+}
 
 IconGrid::IconGrid() {
-    // The application owns the global focus manager. Each time it mirrors the
-    // selected game into this local manager, recenter the horizontal row.
+    // Reposition the row immediately when the selected game changes.
     m_focus.onFocusChanged([this](nxui::Widget*, nxui::Widget*) {
         layoutCarousel();
     });
@@ -21,94 +26,129 @@ void IconGrid::setup(std::vector<std::shared_ptr<GlossyIcon>> icons,
     reconfigureLayout(cols, rows, cellW, cellH, padX, padY);
 }
 
+void IconGrid::updateDisplayCount() {
+    int lastRealIcon = -1;
+
+    for (int i = 0; i < static_cast<int>(m_allIcons.size()); ++i) {
+        const auto& icon = m_allIcons[i];
+        if (icon && icon->titleId() != 0)
+            lastRealIcon = i;
+    }
+
+    // Keep a few visible empty slots after the last real application, instead
+    // of displaying the many pages of empty slots created by the stock grid.
+    const int wanted = std::max(
+        m_visibleCols,
+        lastRealIcon >= 0 ? lastRealIcon + 1 + kTrailingEmptySlots
+                          : m_visibleCols
+    );
+
+    m_displayCount = std::clamp(
+        wanted,
+        1,
+        std::max(1, static_cast<int>(m_allIcons.size()))
+    );
+}
+
 void IconGrid::reconfigureLayout(int cols, int rows,
                                  float cellW, float cellH,
                                  float padX, float padY)
 {
+    (void)cols;
     (void)rows;
+    (void)cellW;
+    (void)cellH;
+    (void)padX;
     (void)padY;
 
-    // Preserve the user's column preference as the number of visible items,
-    // but turn the whole model into one continuous horizontal row.
-    m_visibleCols = std::clamp(cols, 3, 8);
-    m_cols = std::max(1, static_cast<int>(m_allIcons.size()));
-    m_rows = 1;
+    m_visibleCols = kVisibleIcons;
+    m_cellW = kLargeIconSize;
+    m_cellH = kLargeIconSize;
+    m_padX = kLargeIconGap;
 
-    m_cellW = cellW;
-    m_cellH = cellH;
-    m_padX  = padX;
-    m_padY  = 0.f;
-
-    // One continuous row: no grid pages.
-    m_page = 0;
-    m_totalPages = 1;
+    updateDisplayCount();
 
     const float visibleW =
         m_visibleCols * m_cellW + (m_visibleCols - 1) * m_padX;
 
-    m_originX = (m_rect.width - visibleW) * 0.5f + m_rect.x;
-    m_originY = (m_rect.height - m_cellH) * 0.5f + m_rect.y;
+    m_originX = m_rect.x + (m_rect.width - visibleW) * 0.5f;
+    m_originY = m_rect.y + (m_rect.height - m_cellH) * 0.5f;
 
-    layoutPage();
+    rebuildFocusRow();
 }
 
 void IconGrid::setPage(int page) {
     (void)page;
-    m_page = 0;
     layoutCarousel();
 }
 
-void IconGrid::layoutPage() {
+void IconGrid::rebuildFocusRow() {
     nxui::Widget* previousFocus = m_focus.current();
 
     clearChildren();
 
     std::vector<nxui::Widget*> focusItems;
-    focusItems.reserve(m_allIcons.size());
+    focusItems.reserve(m_displayCount);
 
-    for (auto& icon : m_allIcons) {
+    for (int i = 0; i < m_displayCount; ++i) {
+        auto& icon = m_allIcons[i];
         if (!icon)
             continue;
 
+        // Empty slots and icons that were initially off-screen must still be
+        // visible when the carousel reaches them.
+        icon->forceVisible();
         addChild(icon);
+
         if (icon->isFocusable())
             focusItems.push_back(icon.get());
     }
 
-    // All items are one row. This keeps left/right movement continuous.
+    // One continuous row: left/right always moves by one application.
     m_focus.setGrid(focusItems, std::max(1, static_cast<int>(focusItems.size())));
 
-    if (previousFocus)
-        m_focus.setFocus(previousFocus);
+    if (previousFocus) {
+        auto it = std::find(focusItems.begin(), focusItems.end(), previousFocus);
+        if (it != focusItems.end())
+            m_focus.setFocus(previousFocus);
+    }
 
     layoutCarousel();
 }
 
 void IconGrid::layoutCarousel() {
-    if (m_allIcons.empty())
+    if (m_displayCount <= 0)
         return;
 
     int focused = focusedGlobalIndex();
-    if (focused < 0)
+    if (focused < 0 || focused >= m_displayCount)
         focused = 0;
 
-    const int visibleCount = std::max(1, m_visibleCols);
-    const int maxStart =
-        std::max(0, static_cast<int>(m_allIcons.size()) - visibleCount);
+    const int maxStart = std::max(0, m_displayCount - m_visibleCols);
 
-    // Keep the selected game near the middle, except at both ends.
-    const int desiredStart = focused - visibleCount / 2;
-    const int windowStart = std::clamp(desiredStart, 0, maxStart);
+    // Keep the selected icon near the middle, except at the beginning/end.
+    m_windowStart = std::clamp(
+        focused - (m_visibleCols / 2),
+        0,
+        maxStart
+    );
 
     const float step = m_cellW + m_padX;
 
-    for (int i = 0; i < static_cast<int>(m_allIcons.size()); ++i) {
+    for (int i = 0; i < m_displayCount; ++i) {
         auto& icon = m_allIcons[i];
         if (!icon)
             continue;
 
-        const float x = m_originX + (i - windowStart) * step;
+        const float x = m_originX + (i - m_windowStart) * step;
         icon->setRect({x, m_originY, m_cellW, m_cellH});
+
+        const bool visible =
+            i >= m_windowStart &&
+            i < m_windowStart + m_visibleCols;
+
+        if (visible)
+            icon->forceVisible();
     }
 }
 
@@ -117,16 +157,18 @@ int IconGrid::focusedGlobalIndex() const {
     if (!current)
         return -1;
 
-    for (int i = 0; i < static_cast<int>(m_allIcons.size()); ++i) {
+    for (int i = 0; i < m_displayCount; ++i) {
         if (m_allIcons[i].get() == current)
             return i;
     }
+
     return -1;
 }
 
 bool IconGrid::focusGlobalIndex(int idx) {
-    if (idx < 0 || idx >= static_cast<int>(m_allIcons.size()))
+    if (idx < 0 || idx >= m_displayCount)
         return false;
+
     if (!m_allIcons[idx] || !m_allIcons[idx]->isFocusable())
         return false;
 
@@ -137,8 +179,7 @@ bool IconGrid::focusGlobalIndex(int idx) {
 
 bool IconGrid::swapSlots(int a, int b) {
     if (a < 0 || b < 0 ||
-        a >= static_cast<int>(m_allIcons.size()) ||
-        b >= static_cast<int>(m_allIcons.size()))
+        a >= m_displayCount || b >= m_displayCount)
         return false;
 
     if (a == b)
@@ -147,7 +188,7 @@ bool IconGrid::swapSlots(int a, int b) {
     nxui::Widget* focused = m_focus.current();
     std::swap(m_allIcons[a], m_allIcons[b]);
 
-    layoutPage();
+    rebuildFocusRow();
 
     if (focused)
         m_focus.setFocus(focused);
@@ -158,75 +199,61 @@ bool IconGrid::swapSlots(int a, int b) {
 
 std::vector<GlossyIcon*> IconGrid::pageIcons() const {
     std::vector<GlossyIcon*> out;
-    out.reserve(m_allIcons.size());
+    out.reserve(m_displayCount);
 
-    for (const auto& icon : m_allIcons) {
-        if (icon)
-            out.push_back(icon.get());
+    for (int i = 0; i < m_displayCount; ++i) {
+        if (m_allIcons[i])
+            out.push_back(m_allIcons[i].get());
     }
+
     return out;
 }
 
 int IconGrid::hitTest(float screenX, float screenY) const {
-    for (int i = 0; i < static_cast<int>(m_allIcons.size()); ++i) {
+    const int end = std::min(m_windowStart + m_visibleCols, m_displayCount);
+
+    for (int i = m_windowStart; i < end; ++i) {
         if (!m_allIcons[i])
             continue;
 
-        const nxui::Rect rect = m_allIcons[i]->focusRect();
-        if (rect.contains(screenX, screenY))
+        if (m_allIcons[i]->focusRect().contains(screenX, screenY))
             return i;
     }
+
     return -1;
 }
 
 void IconGrid::startAppearAnimation() {
-    const float left = m_rect.x;
-    const float right = m_rect.x + m_rect.width;
+    const int end = std::min(m_windowStart + m_visibleCols, m_displayCount);
 
-    int visibleOrder = 0;
-    for (auto& icon : m_allIcons) {
-        if (!icon)
+    int order = 0;
+    for (int i = m_windowStart; i < end; ++i) {
+        if (!m_allIcons[i])
             continue;
 
-        const nxui::Rect rect = icon->rect();
-        if (rect.x + rect.width < left || rect.x > right)
-            continue;
-
-        const float delay = visibleOrder * 0.055f;
-        icon->startAppear(delay);
-        ++visibleOrder;
+        m_allIcons[i]->forceVisible();
+        m_allIcons[i]->startAppear(order * 0.06f);
+        ++order;
     }
 }
 
 void IconGrid::startWaveTransition(int targetPage) {
     (void)targetPage;
 
-    // The carousel has no pages. Keep this method for compatibility with the
-    // existing ZL/ZR and touch code.
-    m_page = 0;
-    m_totalPages = 1;
-    m_waveActive = false;
-    m_wavePhase = WavePhase::Idle;
-
+    // The horizontal carousel has no pages.
     if (m_onPageSwitched)
         m_onPageSwitched();
 }
 
 void IconGrid::onUpdate(float dt) {
-    if (m_waveActive && m_wavePhase == WavePhase::Animating) {
-        m_waveTime += dt;
-        if (m_waveTime >= m_waveDuration) {
-            m_waveActive = false;
-            m_wavePhase = WavePhase::Idle;
-        }
-    }
+    (void)dt;
 }
 
 void IconGrid::render(nxui::Renderer& renderer) {
     if (!m_visible || m_opacity <= 0.f)
         return;
 
-    // Prevent off-screen games from drawing over the sidebars and HUD.
+    // Hide off-screen icons so they do not cover the HUD or side buttons.
     renderer.pushClipRect(m_rect);
     for (auto& child : m_children)
         child->render(renderer);
