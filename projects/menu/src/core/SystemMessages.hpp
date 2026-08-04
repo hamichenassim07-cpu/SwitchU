@@ -9,6 +9,7 @@
 enum class SysAction {
     HomeButton,
     Sleep,
+    WakeUp,
     Shutdown,
     Reboot,
     OperationModeChanged,
