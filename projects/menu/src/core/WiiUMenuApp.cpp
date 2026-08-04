@@ -1106,7 +1106,7 @@ void WiiUMenuApp::buildGrid() {
     m_contentLayer->setWireframeEnabled(false);
 
    m_topHud = std::make_shared<nxui::Box>(nxui::Axis::ROW);
-    m_topHud->setRect({0.f, 0.f, 1280.f, 96.f});
+    m_topHud->setRect({0.f, 0.f, 1280.f, 116.f});
     m_topHud->setTag("topHud");
     m_topHud->setWireframeEnabled(false);
     m_topHud->setJustifyContent(nxui::JustifyContent::SPACE_BETWEEN);
@@ -1121,11 +1121,11 @@ void WiiUMenuApp::buildGrid() {
     topLeftHud->setAlignItems(nxui::AlignItems::CENTER);
     topLeftHud->setShrink(0.f);
 
-    float topLeftWidth = 184.f;
+    float topLeftWidth = 224.f;
     if (m_userAvatarBar)
         topLeftWidth += 12.f + m_userAvatarBar->rect().width;
 
-    topLeftHud->setSize(topLeftWidth, 72.f);
+    topLeftHud->setSize(topLeftWidth, 92.f);
     topLeftHud->addChild(m_clock);
 
     if (m_userAvatarBar)
