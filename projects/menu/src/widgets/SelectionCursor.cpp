@@ -363,7 +363,7 @@ void SelectionCursor::onRender(nxui::Renderer& ren) {
         ren,
         r.expanded(1.3f),
         cr + 1.3f,
-        4.3f,
+        4.8f,
         0.96f * m_opacity,
         phase
     );
@@ -371,10 +371,10 @@ void SelectionCursor::onRender(nxui::Renderer& ren) {
     // Fine inner reflection, deliberately more discreet.
     drawAnimatedGradientOutline(
         ren,
-        r.shrunk(2.2f),
-        std::max(1.f, cr - 2.2f),
-        1.35f,
-        (0.32f + 0.08f * breathe) * m_opacity,
+        r.shrunk(2.4f),
+        std::max(1.f, cr - 2.4f),
+        2.4f,
+        (0.40f + 0.08f * breathe) * m_opacity,
         phase + 0.17f
     );
 }
