@@ -978,11 +978,33 @@ void WiiUMenuApp::updateCursor() {
         return;
 
     auto* cur = focusManager().current();
-    if (cur) {
-        nxui::Rect fr = cur->focusRect();
-        m_cursor->moveTo(fr.expanded(4.f));
-        m_cursor->setVisible(true);
-    } else {
+
+    if (!cur) {
         m_cursor->setVisible(false);
+        return;
     }
+
+    nxui::Rect fr = cur->focusRect();
+
+    if (cur->tag() == "glossy_icon") {
+        auto* icon = static_cast<GlossyIcon*>(cur);
+
+        constexpr float kSelectedScale = 1.12f;
+        float visualExpand =
+            fr.width * (kSelectedScale - 1.f) * 0.5f;
+
+        nxui::Rect visualRect =
+            fr.expanded(visualExpand + 4.f);
+
+        m_cursor->moveTo(
+            visualRect,
+            icon->cornerRadius() * kSelectedScale + 4.f,
+            0.16f
+        );
+    } else {
+        m_cursor->moveTo(fr.expanded(4.f));
+    }
+
+    m_cursor->setVisible(true);
 }
+
