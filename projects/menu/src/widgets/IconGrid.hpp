@@ -31,7 +31,9 @@ public:
     int iconsPerPage() const { return std::max(1, m_displayCount); }
 
     nxui::FocusManager& focusManager() { return m_focus; }
-    const std::vector<std::shared_ptr<GlossyIcon>>& allIcons() const { return m_allIcons; }
+    const std::vector<std::shared_ptr<GlossyIcon>>& allIcons() const {
+        return m_allIcons;
+    }
 
     std::vector<GlossyIcon*> pageIcons() const;
     int hitTest(float screenX, float screenY) const;
@@ -45,7 +47,23 @@ public:
     void startWaveTransition(int targetPage);
     bool isTransitioning() const { return false; }
 
-    void onPageSwitched(std::function<void()> cb) { m_onPageSwitched = std::move(cb); }
+    void onPageSwitched(std::function<void()> cb) {
+        m_onPageSwitched = std::move(cb);
+    }
+
+    // Défilement tactile horizontal.
+    bool canTouchScroll() const;
+    void beginTouchScroll();
+    void dragTouchScroll(float deltaPixelsX);
+    void endTouchScroll(float fingerVelocityPixelsPerSecond);
+    bool isTouchScrolling() const { return m_touchScrolling; }
+    bool isScrollMoving() const {
+        return m_touchScrolling || m_inertiaActive || m_snapActive;
+    }
+
+    // Retourne l’index à synchroniser avec le FocusManager principal.
+    // -1 signifie qu’aucune synchronisation n’est nécessaire.
+    int consumeSettledFocusIndex();
 
     void render(nxui::Renderer& ren) override;
 
@@ -56,7 +74,14 @@ protected:
 private:
     void rebuildFocusRow();
     void layoutCarousel();
+    void layoutAtScrollPosition();
     void updateDisplayCount();
+    void startSnapToNearest();
+    void finishSnap();
+
+    float maxScrollPosition() const;
+    float desiredScrollPositionForFocus(int focusedIndex) const;
+    int visibleSlotCount() const;
 
     std::vector<std::shared_ptr<GlossyIcon>> m_allIcons;
     nxui::FocusManager m_focus;
@@ -70,6 +95,20 @@ private:
     float m_padX = 12.f;
     float m_originX = 0.f;
     float m_originY = 0.f;
+
+    // Position continue exprimée en nombre d’icônes.
+    // 0 = début de la rangée, 1 = une icône plus loin, etc.
+    float m_scrollPosition = 0.f;
+    float m_scrollVelocity = 0.f;
+    float m_snapTarget = 0.f;
+    float m_touchFocusOffset = 0.f;
+
+    bool m_touchScrolling = false;
+    bool m_inertiaActive = false;
+    bool m_snapActive = false;
+    bool m_preserveScrollOnNextFocus = false;
+
+    int m_pendingSettledFocusIndex = -1;
 
     std::function<void()> m_onPageSwitched;
 };
