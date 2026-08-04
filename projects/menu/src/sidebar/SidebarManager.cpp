@@ -25,16 +25,14 @@ std::string joinPath(const std::string& base, const std::string& name) {
 void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
                            const std::string& assetsBase,
                            const Actions& actions) {
-    constexpr float btnSize = 70.f;
-    constexpr float gap = 14.f;
-    constexpr float marginX = 28.f;
-    constexpr float bottomMargin = 24.f;
+    // V5: all six system buttons form one centred row.
+    // They sit between the game carousel and the bottom of the screen.
+    constexpr float btnSize = 72.f;
+    constexpr float gap = 16.f;
+    constexpr float startY = 554.f;
 
-    const float startY = 720.f - bottomMargin - btnSize;
-
-    const float leftStartX = marginX;
-    const float groupW = 3.f * btnSize + 2.f * gap;
-    const float rightStartX = 1280.f - marginX - groupW;
+    const float groupW = 6.f * btnSize + 5.f * gap;
+    const float startX = (1280.f - groupW) * 0.5f;
 
     m_leftButtons.clear();
     m_rightButtons.clear();
@@ -65,32 +63,32 @@ void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
         return btn;
     };
 
+    auto place = [&](const std::shared_ptr<AppletButton>& btn, int index) {
+        btn->setRect({
+            startX + static_cast<float>(index) * (btnSize + gap),
+            startY,
+            btnSize,
+            btnSize
+        });
+    };
+
     {
         auto album = makeBtn(&m_icons[0], "sidebar.album", "Album", actions.onAlbum);
         m_albumButton = album.get();
-        album->setRect({
-            leftStartX + 0.f * (btnSize + gap),
-            startY, btnSize, btnSize
-        });
+        place(album, 0);
         m_leftButtons.push_back(std::move(album));
 
         auto miiEditor = makeBtn(
             &m_icons[1], "sidebar.mii_editor", "Mii Editor", actions.onMiiEditor
         );
-        miiEditor->setRect({
-            leftStartX + 1.f * (btnSize + gap),
-            startY, btnSize, btnSize
-        });
+        place(miiEditor, 1);
         m_leftButtons.push_back(std::move(miiEditor));
 
         auto settings = makeBtn(
             &m_icons[5], "sidebar.settings", "Settings", actions.onSettings
         );
         m_settingsButton = settings.get();
-        settings->setRect({
-            leftStartX + 2.f * (btnSize + gap),
-            startY, btnSize, btnSize
-        });
+        place(settings, 2);
         m_leftButtons.push_back(std::move(settings));
     }
 
@@ -98,48 +96,43 @@ void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
         auto ctrl = makeBtn(
             &m_icons[2], "sidebar.controllers", "Controllers", actions.onControllers
         );
-        ctrl->setRect({
-            rightStartX + 0.f * (btnSize + gap),
-            startY, btnSize, btnSize
-        });
+        place(ctrl, 3);
         m_rightButtons.push_back(std::move(ctrl));
 
         auto themeShop = makeBtn(
             &m_icons[4], "sidebar.theme_shop", "Theme Shop", actions.onMiiverse
         );
         m_themeShopButton = themeShop.get();
-        themeShop->setRect({
-            rightStartX + 1.f * (btnSize + gap),
-            startY, btnSize, btnSize
-        });
+        place(themeShop, 4);
         m_rightButtons.push_back(std::move(themeShop));
 
         auto sleep = makeBtn(
             &m_icons[3], "sidebar.sleep", "Power", actions.onSleep
         );
-        sleep->setRect({
-            rightStartX + 2.f * (btnSize + gap),
-            startY, btnSize, btnSize
-        });
+        place(sleep, 5);
         m_rightButtons.push_back(std::move(sleep));
     }
 
-    if (!m_leftButtons.empty()) {
-        m_leftButtons.front()->setCustomNavigation(
-            nxui::FocusDirection::LEFT, m_leftButtons.front().get()
-        );
-        m_leftButtons.back()->setCustomNavigation(
-            nxui::FocusDirection::RIGHT, m_leftButtons.back().get()
-        );
-    }
+    // Explicit left/right links across the two legacy vectors.
+    // This makes the six buttons behave as one continuous row.
+    std::vector<AppletButton*> ordered;
+    ordered.reserve(6);
 
-    if (!m_rightButtons.empty()) {
-        m_rightButtons.front()->setCustomNavigation(
-            nxui::FocusDirection::LEFT, m_rightButtons.front().get()
-        );
-        m_rightButtons.back()->setCustomNavigation(
-            nxui::FocusDirection::RIGHT, m_rightButtons.back().get()
-        );
+    for (auto& btn : m_leftButtons)
+        ordered.push_back(btn.get());
+
+    for (auto& btn : m_rightButtons)
+        ordered.push_back(btn.get());
+
+    for (size_t i = 0; i < ordered.size(); ++i) {
+        AppletButton* left =
+            (i > 0) ? ordered[i - 1] : ordered.front();
+
+        AppletButton* right =
+            (i + 1 < ordered.size()) ? ordered[i + 1] : ordered.back();
+
+        ordered[i]->setCustomNavigation(nxui::FocusDirection::LEFT, left);
+        ordered[i]->setCustomNavigation(nxui::FocusDirection::RIGHT, right);
     }
 
     (void)gpu;
