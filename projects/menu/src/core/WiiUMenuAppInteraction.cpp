@@ -429,28 +429,15 @@ void WiiUMenuApp::wireFocusCallback() {
                     return;
 
                 nxui::Rect r = widget->focusRect();
-                float centerX =
-                    r.x + r.width * 0.5f;
-
-                float titleY =
-                    std::max(
-                        104.f,
-                        r.y - 58.f - extraTop
-                    );
-
-                m_titlePill->setAnchor(
-                    centerX,
-                    titleY
-                );
+                float centerX = r.x + r.width * 0.5f;
+                float titleY = std::max(104.f, r.y - 58.f - extraTop);
+                m_titlePill->setAnchor(centerX, titleY);
             };
 
         if (cur && cur->tag() == "glossy_icon") {
             m_grid->focusManager().setFocus(cur);
 
-            // V5 CORRIGÉE :
-            // gauche/droite reste toujours dans la rangée des jeux.
-            // À la première ou à la dernière jaquette, la sélection reste
-            // simplement sur place au lieu de tomber sur les boutons du bas.
+            // Gauche / droite reste verrouillé dans la rangée des jeux.
             const auto& gameIcons = m_grid->allIcons();
 
             for (size_t i = 0; i < gameIcons.size(); ++i) {
@@ -479,39 +466,26 @@ void WiiUMenuApp::wireFocusCallback() {
                 );
             }
 
-            auto* icon =
-                static_cast<GlossyIcon*>(cur);
+            auto* icon = static_cast<GlossyIcon*>(cur);
 
             constexpr float kSelectedScale = 1.12f;
 
-            nxui::Rect baseRect =
-                icon->focusRect();
-
+            nxui::Rect baseRect = icon->focusRect();
             float visualExpand =
-                baseRect.width *
-                (kSelectedScale - 1.f) *
-                0.5f;
+                baseRect.width * (kSelectedScale - 1.f) * 0.5f;
 
-            nxui::Rect visualRect =
-                baseRect.expanded(visualExpand);
+            nxui::Rect visualRect = baseRect.expanded(visualExpand);
 
             m_titlePill->setAnchor(
-                visualRect.x +
-                    visualRect.width * 0.5f,
-                std::max(
-                    104.f,
-                    visualRect.y - 58.f
-                )
+                visualRect.x + visualRect.width * 0.5f,
+                std::max(104.f, visualRect.y - 58.f)
             );
 
-            // V5 NAVIGATION
-            // Haut : profil du joueur.
-            // Bas  : rangée centrée des six boutons système.
+            // Haut -> profil du joueur.
             nxui::Widget* profileTarget = nullptr;
 
             if (!m_userAvatarButtons.empty())
-                profileTarget =
-                    m_userAvatarButtons.front().get();
+                profileTarget = m_userAvatarButtons.front().get();
 
             if (profileTarget) {
                 cur->setCustomNavigation(
@@ -519,8 +493,7 @@ void WiiUMenuApp::wireFocusCallback() {
                     profileTarget
                 );
 
-                for (auto& avatar :
-                     m_userAvatarButtons) {
+                for (auto& avatar : m_userAvatarButtons) {
                     avatar->setCustomNavigation(
                         nxui::FocusDirection::DOWN,
                         cur
@@ -528,22 +501,17 @@ void WiiUMenuApp::wireFocusCallback() {
                 }
             }
 
+            // Bas -> bouton système le plus proche horizontalement.
             nxui::Widget* bottomTarget = nullptr;
             float bestDistance = 1000000.f;
 
             const float iconCenterX =
-                visualRect.x +
-                visualRect.width * 0.5f;
+                visualRect.x + visualRect.width * 0.5f;
 
-            for (auto& btn :
-                 m_sidebar.leftButtons()) {
+            for (auto& btn : m_sidebar.leftButtons()) {
                 nxui::Rect r = btn->focusRect();
-
-                float centerX =
-                    r.x + r.width * 0.5f;
-
-                float distance =
-                    std::abs(centerX - iconCenterX);
+                float centerX = r.x + r.width * 0.5f;
+                float distance = std::abs(centerX - iconCenterX);
 
                 if (distance < bestDistance) {
                     bestDistance = distance;
@@ -556,15 +524,10 @@ void WiiUMenuApp::wireFocusCallback() {
                 );
             }
 
-            for (auto& btn :
-                 m_sidebar.rightButtons()) {
+            for (auto& btn : m_sidebar.rightButtons()) {
                 nxui::Rect r = btn->focusRect();
-
-                float centerX =
-                    r.x + r.width * 0.5f;
-
-                float distance =
-                    std::abs(centerX - iconCenterX);
+                float centerX = r.x + r.width * 0.5f;
+                float distance = std::abs(centerX - iconCenterX);
 
                 if (distance < bestDistance) {
                     bestDistance = distance;
@@ -590,31 +553,19 @@ void WiiUMenuApp::wireFocusCallback() {
 
             if (m_editMode) {
                 bindEditActions(icon);
-                m_editGhostTargetRect =
-                    icon->focusRect();
+                m_editGhostTargetRect = icon->focusRect();
 
                 if (!m_editHeldTitle.empty()) {
                     m_titlePill->setText(
-                        i18n.tr(
-                            "game.move_prefix",
-                            "Move: "
-                        ) +
-                        m_editHeldTitle
+                        i18n.tr("game.move_prefix", "Move: ") + m_editHeldTitle
                     );
                 } else if (icon->titleId() != 0) {
                     m_titlePill->setText(
-                        i18n.tr(
-                            "game.move_prefix",
-                            "Move: "
-                        ) +
-                        icon->title()
+                        i18n.tr("game.move_prefix", "Move: ") + icon->title()
                     );
                 } else {
                     m_titlePill->setText(
-                        i18n.tr(
-                            "game.move",
-                            "Move"
-                        )
+                        i18n.tr("game.move", "Move")
                     );
                 }
 
@@ -633,49 +584,35 @@ void WiiUMenuApp::wireFocusCallback() {
             if (m_editMode)
                 exitEditMode();
 
-            for (auto& btn :
-                 m_sidebar.leftButtons()) {
+            for (auto& btn : m_sidebar.leftButtons()) {
                 if (btn.get() == cur) {
                     placeTitleAbove(cur);
-                    m_titlePill->setText(
-                        btn->label()
-                    );
+                    m_titlePill->setText(btn->label());
                     m_titlePill->setVisible(true);
                     return;
                 }
             }
 
-            for (auto& btn :
-                 m_sidebar.rightButtons()) {
+            for (auto& btn : m_sidebar.rightButtons()) {
                 if (btn.get() == cur) {
                     placeTitleAbove(cur);
-                    m_titlePill->setText(
-                        btn->label()
-                    );
+                    m_titlePill->setText(btn->label());
                     m_titlePill->setVisible(true);
                     return;
                 }
             }
 
-            for (auto& avatar :
-                 m_userAvatarButtons) {
+            for (auto& avatar : m_userAvatarButtons) {
                 if (avatar.get() == cur) {
-                    nxui::Rect r =
-                        avatar->focusRect();
+                    nxui::Rect r = avatar->focusRect();
 
                     m_titlePill->setAnchor(
                         r.x + r.width * 0.5f,
                         r.y + r.height + 10.f
                     );
 
-                    m_titlePill->setText(
-                        avatar->nickname()
-                    );
-
-                    m_titlePill->setVisible(
-                        !avatar->nickname().empty()
-                    );
-
+                    m_titlePill->setText(avatar->nickname());
+                    m_titlePill->setVisible(!avatar->nickname().empty());
                     return;
                 }
             }
@@ -690,38 +627,22 @@ void WiiUMenuApp::wireFocusCallback() {
 
     if (auto* cur = focusManager().current()) {
         if (cur->tag() == "glossy_icon") {
-            auto* icon =
-                static_cast<GlossyIcon*>(cur);
+            auto* icon = static_cast<GlossyIcon*>(cur);
 
             if (icon->titleId() != 0) {
-                constexpr float kSelectedScale =
-                    1.12f;
-
-                nxui::Rect baseRect =
-                    icon->focusRect();
-
+                constexpr float kSelectedScale = 1.12f;
+                nxui::Rect baseRect = icon->focusRect();
                 float visualExpand =
-                    baseRect.width *
-                    (kSelectedScale - 1.f) *
-                    0.5f;
+                    baseRect.width * (kSelectedScale - 1.f) * 0.5f;
 
-                nxui::Rect visualRect =
-                    baseRect.expanded(
-                        visualExpand
-                    );
+                nxui::Rect visualRect = baseRect.expanded(visualExpand);
 
                 m_titlePill->setAnchor(
-                    visualRect.x +
-                        visualRect.width * 0.5f,
-                    std::max(
-                        104.f,
-                        visualRect.y - 58.f
-                    )
+                    visualRect.x + visualRect.width * 0.5f,
+                    std::max(104.f, visualRect.y - 58.f)
                 );
 
-                m_titlePill->setText(
-                    icon->title()
-                );
+                m_titlePill->setText(icon->title());
             }
         }
     }
@@ -1135,28 +1056,20 @@ void WiiUMenuApp::updateCursor() {
     nxui::Rect fr = cur->focusRect();
 
     if (cur->tag() == "glossy_icon") {
-        m_cursor->setGradientEnabled(true);
+        m_cursor->setGradientEnabled(false);
 
-        auto* icon =
-            static_cast<GlossyIcon*>(cur);
+        auto* icon = static_cast<GlossyIcon*>(cur);
 
         constexpr float kSelectedScale = 1.12f;
-
         float visualExpand =
-            fr.width *
-            (kSelectedScale - 1.f) *
-            0.5f;
+            fr.width * (kSelectedScale - 1.f) * 0.5f;
 
         nxui::Rect visualRect =
-            fr.expanded(
-                visualExpand + 4.f
-            );
+            fr.expanded(visualExpand + 3.f);
 
         m_cursor->moveTo(
             visualRect,
-            icon->cornerRadius() *
-                kSelectedScale +
-                4.f,
+            icon->cornerRadius() * kSelectedScale + 3.f,
             0.16f
         );
     } else {
