@@ -459,41 +459,27 @@ void WiiUMenuApp::reflowHomeGrid() {
         byId.emplace(entry.titleId, entry);
     }
 
-    std::vector<uint64_t> slots = m_layoutSlots;
-    if (slots.empty())
-        slots = appOrder;
+    std::vector<uint64_t> slots;
+    slots.reserve(appOrder.size());
 
     std::unordered_set<uint64_t> placed;
     placed.reserve(byId.size());
-    for (auto& slotTid : slots) {
-        if (slotTid == 0)
-            continue;
-        if (!byId.count(slotTid) || placed.count(slotTid)) {
-            slotTid = 0;
-            continue;
-        }
-        placed.insert(slotTid);
-    }
 
-    for (uint64_t tid : appOrder) {
-        if (placed.count(tid))
+    for (uint64_t tid : m_layoutSlots) {
+        if (tid == 0 || !byId.count(tid) || placed.count(tid))
             continue;
 
-        auto emptyIt = std::find(slots.begin(), slots.end(), 0);
-        if (emptyIt != slots.end())
-            *emptyIt = tid;
-        else
-            slots.push_back(tid);
+        slots.push_back(tid);
         placed.insert(tid);
     }
 
-    const int cols = std::clamp(m_config.gridColumns, 3, 8);
-    const int rows = std::clamp(m_config.gridRows, 2, 5);
-    const int perPage = std::max(1, cols * rows);
-    int minSlots = std::max(perPage * kMinHomePages, (int)slots.size());
-    int roundedSlots = ((minSlots + perPage - 1) / perPage) * perPage;
-    if ((int)slots.size() < roundedSlots)
-        slots.resize(roundedSlots, 0);
+    for (uint64_t tid : appOrder) {
+        if (tid == 0 || placed.count(tid))
+            continue;
+
+        slots.push_back(tid);
+        placed.insert(tid);
+    }
 
     if (slots != m_layoutSlots) {
         m_layoutSlots = slots;
@@ -501,18 +487,15 @@ void WiiUMenuApp::reflowHomeGrid() {
     }
 
     GridModel rebuiltModel;
-    for (uint64_t tid : slots) {
-        if (tid == 0) {
-            rebuiltModel.addEntry(AppEntry{});
-            continue;
-        }
 
+    for (uint64_t tid : slots) {
         auto it = byId.find(tid);
         if (it != byId.end())
             rebuiltModel.addEntry(it->second);
-        else
-            rebuiltModel.addEntry(AppEntry{});
     }
+
+    const int cols = std::clamp(m_config.gridColumns, 3, 8);
+    const int rows = std::clamp(m_config.gridRows, 2, 5);
 
     std::vector<std::shared_ptr<GlossyIcon>> icons;
     icons.reserve((size_t)std::max(0, rebuiltModel.count()));
