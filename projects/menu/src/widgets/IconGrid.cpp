@@ -2,11 +2,17 @@
 #include "GlossyIcon.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <algorithm>
+#include <cmath>
 
 namespace {
 constexpr int kVisibleIcons = 4;
 constexpr float kLargeIconSize = 255.f;
 constexpr float kCompactIconGap = 12.f;
+
+constexpr float kInertiaFriction = 7.0f;
+constexpr float kMinimumInertiaSpeed = 0.18f;
+constexpr float kMaximumInertiaSpeed = 6.5f;
+constexpr float kSnapSpeed = 14.f;
 }
 
 IconGrid::IconGrid() {
@@ -24,14 +30,47 @@ void IconGrid::setup(std::vector<std::shared_ptr<GlossyIcon>> icons,
     reconfigureLayout(cols, rows, cellW, cellH, padX, padY);
 }
 
+int IconGrid::visibleSlotCount() const {
+    return std::max(
+        1,
+        std::min(m_visibleCols, m_displayCount)
+    );
+}
+
+float IconGrid::maxScrollPosition() const {
+    return static_cast<float>(
+        std::max(0, m_displayCount - visibleSlotCount())
+    );
+}
+
+float IconGrid::desiredScrollPositionForFocus(int focusedIndex) const {
+    if (m_displayCount <= 0)
+        return 0.f;
+
+    const int visibleSlots = visibleSlotCount();
+    const int desiredStart =
+        focusedIndex - (visibleSlots / 2);
+
+    return std::clamp(
+        static_cast<float>(desiredStart),
+        0.f,
+        maxScrollPosition()
+    );
+}
+
 void IconGrid::updateDisplayCount() {
-    // V4 expects WiiUMenuApp to compact the model, so every displayed entry
-    // is a real installed application. No artificial empty slots are added.
     m_displayCount = 0;
+
     for (const auto& icon : m_allIcons) {
         if (icon && icon->titleId() != 0)
             ++m_displayCount;
     }
+
+    m_scrollPosition = std::clamp(
+        m_scrollPosition,
+        0.f,
+        maxScrollPosition()
+    );
 }
 
 void IconGrid::reconfigureLayout(int cols, int rows,
@@ -52,12 +91,18 @@ void IconGrid::reconfigureLayout(int cols, int rows,
 
     updateDisplayCount();
 
-    const int visibleSlots = std::max(1, std::min(m_visibleCols, m_displayCount));
+    const int visibleSlots = visibleSlotCount();
     const float visibleW =
-        visibleSlots * m_cellW + (visibleSlots - 1) * m_padX;
+        visibleSlots * m_cellW +
+        (visibleSlots - 1) * m_padX;
 
-    m_originX = m_rect.x + (m_rect.width - visibleW) * 0.5f;
-    m_originY = m_rect.y + (m_rect.height - m_cellH) * 0.5f;
+    m_originX =
+        m_rect.x +
+        (m_rect.width - visibleW) * 0.5f;
+
+    m_originY =
+        m_rect.y +
+        (m_rect.height - m_cellH) * 0.5f;
 
     rebuildFocusRow();
 }
@@ -77,6 +122,7 @@ void IconGrid::rebuildFocusRow() {
 
     for (int i = 0; i < m_displayCount; ++i) {
         auto& icon = m_allIcons[i];
+
         if (!icon)
             continue;
 
@@ -87,10 +133,21 @@ void IconGrid::rebuildFocusRow() {
             focusItems.push_back(icon.get());
     }
 
-    m_focus.setGrid(focusItems, std::max(1, static_cast<int>(focusItems.size())));
+    m_focus.setGrid(
+        focusItems,
+        std::max(
+            1,
+            static_cast<int>(focusItems.size())
+        )
+    );
 
     if (previousFocus) {
-        auto it = std::find(focusItems.begin(), focusItems.end(), previousFocus);
+        auto it = std::find(
+            focusItems.begin(),
+            focusItems.end(),
+            previousFocus
+        );
+
         if (it != focusItems.end())
             m_focus.setFocus(previousFocus);
     }
@@ -102,40 +159,221 @@ void IconGrid::layoutCarousel() {
     if (m_displayCount <= 0)
         return;
 
+    if (m_preserveScrollOnNextFocus) {
+        m_preserveScrollOnNextFocus = false;
+        layoutAtScrollPosition();
+        return;
+    }
+
+    // Une navigation à la manette interrompt proprement le mouvement tactile.
+    m_touchScrolling = false;
+    m_inertiaActive = false;
+    m_snapActive = false;
+    m_scrollVelocity = 0.f;
+
     int focused = focusedGlobalIndex();
+
     if (focused < 0 || focused >= m_displayCount)
         focused = 0;
 
-    const int visibleSlots = std::max(1, std::min(m_visibleCols, m_displayCount));
-    const int maxStart = std::max(0, m_displayCount - visibleSlots);
+    m_scrollPosition =
+        desiredScrollPositionForFocus(focused);
 
-    m_windowStart = std::clamp(
-        focused - (visibleSlots / 2),
-        0,
-        maxStart
+    layoutAtScrollPosition();
+}
+
+void IconGrid::layoutAtScrollPosition() {
+    if (m_displayCount <= 0)
+        return;
+
+    m_scrollPosition = std::clamp(
+        m_scrollPosition,
+        0.f,
+        maxScrollPosition()
     );
 
+    const int visibleSlots = visibleSlotCount();
+
     const float visibleW =
-        visibleSlots * m_cellW + (visibleSlots - 1) * m_padX;
-    m_originX = m_rect.x + (m_rect.width - visibleW) * 0.5f;
+        visibleSlots * m_cellW +
+        (visibleSlots - 1) * m_padX;
+
+    m_originX =
+        m_rect.x +
+        (m_rect.width - visibleW) * 0.5f;
+
+    m_originY =
+        m_rect.y +
+        (m_rect.height - m_cellH) * 0.5f;
 
     const float step = m_cellW + m_padX;
 
+    m_windowStart = std::clamp(
+        static_cast<int>(std::floor(m_scrollPosition + 0.001f)),
+        0,
+        static_cast<int>(maxScrollPosition())
+    );
+
     for (int i = 0; i < m_displayCount; ++i) {
         auto& icon = m_allIcons[i];
+
         if (!icon)
             continue;
 
-        const float x = m_originX + (i - m_windowStart) * step;
-        icon->setRect({x, m_originY, m_cellW, m_cellH});
+        const float x =
+            m_originX +
+            (static_cast<float>(i) - m_scrollPosition) * step;
 
-        if (i >= m_windowStart && i < m_windowStart + visibleSlots)
-            icon->forceVisible();
+        icon->setRect({
+            x,
+            m_originY,
+            m_cellW,
+            m_cellH
+        });
+
+        icon->forceVisible();
     }
+}
+
+bool IconGrid::canTouchScroll() const {
+    return m_displayCount > visibleSlotCount();
+}
+
+void IconGrid::beginTouchScroll() {
+    if (!canTouchScroll())
+        return;
+
+    m_touchScrolling = true;
+    m_inertiaActive = false;
+    m_snapActive = false;
+    m_scrollVelocity = 0.f;
+    m_pendingSettledFocusIndex = -1;
+
+    int focused = focusedGlobalIndex();
+
+    if (focused < 0)
+        focused = 0;
+
+    // La sélection garde approximativement la même position à l’écran
+    // pendant et après le geste.
+    m_touchFocusOffset = std::clamp(
+        static_cast<float>(focused) - m_scrollPosition,
+        0.f,
+        static_cast<float>(visibleSlotCount() - 1)
+    );
+}
+
+void IconGrid::dragTouchScroll(float deltaPixelsX) {
+    if (!m_touchScrolling || !canTouchScroll())
+        return;
+
+    const float step = m_cellW + m_padX;
+
+    if (step <= 0.f)
+        return;
+
+    // Le contenu suit le doigt :
+    // doigt vers la gauche -> applications suivantes.
+    m_scrollPosition -= deltaPixelsX / step;
+
+    m_scrollPosition = std::clamp(
+        m_scrollPosition,
+        0.f,
+        maxScrollPosition()
+    );
+
+    layoutAtScrollPosition();
+}
+
+void IconGrid::endTouchScroll(
+    float fingerVelocityPixelsPerSecond
+) {
+    if (!m_touchScrolling)
+        return;
+
+    m_touchScrolling = false;
+
+    const float step = m_cellW + m_padX;
+
+    if (step <= 0.f) {
+        startSnapToNearest();
+        return;
+    }
+
+    // Le déplacement du contenu est opposé à celui du doigt.
+    m_scrollVelocity = std::clamp(
+        -fingerVelocityPixelsPerSecond / step,
+        -kMaximumInertiaSpeed,
+        kMaximumInertiaSpeed
+    );
+
+    if (std::abs(m_scrollVelocity) <
+        kMinimumInertiaSpeed) {
+        m_scrollVelocity = 0.f;
+        startSnapToNearest();
+    } else {
+        m_inertiaActive = true;
+        m_snapActive = false;
+    }
+}
+
+void IconGrid::startSnapToNearest() {
+    m_inertiaActive = false;
+    m_scrollVelocity = 0.f;
+
+    m_snapTarget = std::clamp(
+        std::round(m_scrollPosition),
+        0.f,
+        maxScrollPosition()
+    );
+
+    m_snapActive = true;
+}
+
+void IconGrid::finishSnap() {
+    m_scrollPosition = m_snapTarget;
+    m_snapActive = false;
+    m_inertiaActive = false;
+    m_scrollVelocity = 0.f;
+
+    layoutAtScrollPosition();
+
+    const int targetFocus = std::clamp(
+        static_cast<int>(
+            std::round(
+                m_scrollPosition +
+                m_touchFocusOffset
+            )
+        ),
+        0,
+        std::max(0, m_displayCount - 1)
+    );
+
+    m_pendingSettledFocusIndex = targetFocus;
+}
+
+int IconGrid::consumeSettledFocusIndex() {
+    const int index = m_pendingSettledFocusIndex;
+    m_pendingSettledFocusIndex = -1;
+
+    if (index < 0 || index >= m_displayCount)
+        return -1;
+
+    if (!m_allIcons[index] ||
+        !m_allIcons[index]->isFocusable())
+        return -1;
+
+    // Empêche le callback de focus de remettre brutalement la rangée
+    // dans son ancienne position juste après le scroll.
+    m_preserveScrollOnNextFocus = true;
+    m_focus.setFocus(m_allIcons[index].get());
+
+    return index;
 }
 
 int IconGrid::focusedGlobalIndex() const {
     auto* current = m_focus.current();
+
     if (!current)
         return -1;
 
@@ -151,7 +389,8 @@ bool IconGrid::focusGlobalIndex(int idx) {
     if (idx < 0 || idx >= m_displayCount)
         return false;
 
-    if (!m_allIcons[idx] || !m_allIcons[idx]->isFocusable())
+    if (!m_allIcons[idx] ||
+        !m_allIcons[idx]->isFocusable())
         return false;
 
     m_focus.setFocus(m_allIcons[idx].get());
@@ -161,13 +400,15 @@ bool IconGrid::focusGlobalIndex(int idx) {
 
 bool IconGrid::swapSlots(int a, int b) {
     if (a < 0 || b < 0 ||
-        a >= m_displayCount || b >= m_displayCount)
+        a >= m_displayCount ||
+        b >= m_displayCount)
         return false;
 
     if (a == b)
         return true;
 
     nxui::Widget* focused = m_focus.current();
+
     std::swap(m_allIcons[a], m_allIcons[b]);
 
     rebuildFocusRow();
@@ -192,14 +433,20 @@ std::vector<GlossyIcon*> IconGrid::pageIcons() const {
 }
 
 int IconGrid::hitTest(float screenX, float screenY) const {
-    const int visibleSlots = std::max(1, std::min(m_visibleCols, m_displayCount));
-    const int end = std::min(m_windowStart + visibleSlots, m_displayCount);
+    if (!m_rect.contains(screenX, screenY))
+        return -1;
 
-    for (int i = m_windowStart; i < end; ++i) {
+    // Parcours complet nécessaire car la position est continue
+    // pendant le glissement tactile.
+    for (int i = 0; i < m_displayCount; ++i) {
         if (!m_allIcons[i])
             continue;
 
-        if (m_allIcons[i]->focusRect().contains(screenX, screenY))
+        const nxui::Rect iconRect =
+            m_allIcons[i]->focusRect();
+
+        if (iconRect.intersects(m_rect) &&
+            iconRect.contains(screenX, screenY))
             return i;
     }
 
@@ -207,11 +454,24 @@ int IconGrid::hitTest(float screenX, float screenY) const {
 }
 
 void IconGrid::startAppearAnimation() {
-    const int visibleSlots = std::max(1, std::min(m_visibleCols, m_displayCount));
-    const int end = std::min(m_windowStart + visibleSlots, m_displayCount);
+    if (m_displayCount <= 0)
+        return;
+
+    const int first = std::max(
+        0,
+        static_cast<int>(
+            std::floor(m_scrollPosition)
+        ) - 1
+    );
+
+    const int last = std::min(
+        m_displayCount,
+        first + visibleSlotCount() + 2
+    );
 
     int order = 0;
-    for (int i = m_windowStart; i < end; ++i) {
+
+    for (int i = first; i < last; ++i) {
         if (!m_allIcons[i])
             continue;
 
@@ -229,7 +489,56 @@ void IconGrid::startWaveTransition(int targetPage) {
 }
 
 void IconGrid::onUpdate(float dt) {
-    (void)dt;
+    if (m_touchScrolling || m_displayCount <= 0)
+        return;
+
+    if (m_inertiaActive) {
+        m_scrollPosition +=
+            m_scrollVelocity * dt;
+
+        const float maximum =
+            maxScrollPosition();
+
+        if (m_scrollPosition <= 0.f) {
+            m_scrollPosition = 0.f;
+
+            if (m_scrollVelocity < 0.f)
+                m_scrollVelocity = 0.f;
+        } else if (m_scrollPosition >= maximum) {
+            m_scrollPosition = maximum;
+
+            if (m_scrollVelocity > 0.f)
+                m_scrollVelocity = 0.f;
+        }
+
+        m_scrollVelocity *=
+            std::exp(-kInertiaFriction * dt);
+
+        layoutAtScrollPosition();
+
+        if (std::abs(m_scrollVelocity) <
+            kMinimumInertiaSpeed) {
+            startSnapToNearest();
+        }
+
+        return;
+    }
+
+    if (m_snapActive) {
+        const float difference =
+            m_snapTarget - m_scrollPosition;
+
+        const float amount =
+            std::min(1.f, kSnapSpeed * dt);
+
+        m_scrollPosition +=
+            difference * amount;
+
+        layoutAtScrollPosition();
+
+        if (std::abs(difference) < 0.0025f)
+            finishSnap();
+    }
 }
 
 void IconGrid::render(nxui::Renderer& renderer) {
@@ -238,9 +547,8 @@ void IconGrid::render(nxui::Renderer& renderer) {
 
     renderer.pushClipRect(m_rect);
 
-    // Draw normal icons first, then the selected icon last. This allows the
-    // selected icon to grow slightly over its neighbours without being hidden.
-    nxui::Widget* focused = m_focus.current();
+    nxui::Widget* focused =
+        m_focus.current();
 
     for (auto& child : m_children) {
         if (child.get() != focused)
