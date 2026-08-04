@@ -94,6 +94,63 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
     float rad = cornerRadius();
     float focusGlow = m_focusGlow.value();
 
+    if (s > 0.5f) {
+        // Accent léger du cadre en verre :
+        // plus visible, mais sans rendre l’icône trop brillante.
+        const float glassBreathe =
+            0.5f + 0.5f * std::sin(m_suspendPulse * 0.52f);
+
+        const nxui::Rect glassFrameRect =
+            r.shrunk(1.6f * s);
+
+        const float glassFrameRadius =
+            std::max(2.f, rad - 1.6f * s);
+
+        ren.drawRoundedRectOutline(
+            glassFrameRect,
+            nxui::Color(
+                0.92f,
+                0.96f,
+                1.00f,
+                (0.105f + 0.020f * glassBreathe) * a
+            ),
+            glassFrameRadius,
+            1.45f * s
+        );
+
+        // Reflet supérieur discret pour mieux lire l’effet verre.
+        nxui::Rect glassTopLight = {
+            glassFrameRect.x + 5.f * s,
+            glassFrameRect.y + 4.f * s,
+            glassFrameRect.width - 10.f * s,
+            glassFrameRect.height * 0.27f
+        };
+
+        ren.drawRoundedRect(
+            glassTopLight,
+            nxui::Color(
+                1.00f,
+                1.00f,
+                1.00f,
+                (0.040f + 0.012f * glassBreathe) * a
+            ),
+            std::max(2.f, glassFrameRadius - 5.f * s)
+        );
+
+        // Liseré intérieur très doux pour donner plus de relief.
+        ren.drawRoundedRectOutline(
+            r.shrunk(8.f * s),
+            nxui::Color(
+                0.72f,
+                0.82f,
+                1.00f,
+                0.040f * a
+            ),
+            std::max(2.f, rad - 8.f * s),
+            1.0f * s
+        );
+    }
+
     if (focusGlow > 0.01f && s > 0.5f) {
         // V5: the large coloured halo is now drawn by SelectionCursor.
         // Keep only a very faint ambient bloom behind the selected cover.
@@ -147,10 +204,10 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
     }
 
     if (m_suspended && s > 0.5f) {
-        // Application toujours ouverte en arrière-plan :
-        // plus de contour vert ni de bouton Play.
-        // Un voile bleu/cyan très léger respire directement
-        // à l'intérieur de la jaquette, dans l'esprit de la 3DS.
+        // Application encore ouverte en arrière-plan :
+        // aucun contour vert et aucun bouton Play.
+        // Le voile bleu/cyan respire maintenant de manière
+        // plus visible, tout en laissant la jaquette lisible.
         const float breathe =
             0.5f +
             0.5f *
@@ -168,29 +225,28 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
                 rad - 3.f
             );
 
-        // Teinte principale, toujours discrète pour laisser
-        // la jaquette parfaitement reconnaissable.
+        // Teinte bleue principale.
         ren.drawRoundedRect(
             activeRect,
             nxui::Color(
-                0.06f,
-                0.28f,
-                0.66f,
-                (0.075f +
-                 0.050f * breathe) * a
+                0.04f,
+                0.26f,
+                0.72f,
+                (0.120f +
+                 0.095f * breathe) * a
             ),
             activeRadius
         );
 
-        // Lumière cyan interne qui augmente et diminue lentement.
+        // Lumière cyan intérieure.
         ren.drawRoundedRect(
             activeRect.shrunk(4.f * s),
             nxui::Color(
-                0.16f,
-                0.58f,
-                0.96f,
-                (0.030f +
-                 0.035f * breathe) * a
+                0.12f,
+                0.62f,
+                1.00f,
+                (0.050f +
+                 0.065f * breathe) * a
             ),
             std::max(
                 2.f,
@@ -198,22 +254,40 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
             )
         );
 
-        // Reflet doux dans la partie haute de la jaquette.
+        // Fin liseré intérieur cyan, visible surtout au sommet
+        // de la respiration.
+        ren.drawRoundedRectOutline(
+            activeRect.shrunk(1.5f * s),
+            nxui::Color(
+                0.44f,
+                0.82f,
+                1.00f,
+                (0.100f +
+                 0.120f * breathe) * a
+            ),
+            std::max(
+                2.f,
+                activeRadius - 1.5f * s
+            ),
+            1.5f * s
+        );
+
+        // Reflet supérieur plus présent.
         nxui::Rect upperLight = {
             activeRect.x + 5.f * s,
             activeRect.y + 4.f * s,
             activeRect.width - 10.f * s,
-            activeRect.height * 0.38f
+            activeRect.height * 0.40f
         };
 
         ren.drawRoundedRect(
             upperLight,
             nxui::Color(
-                0.54f,
-                0.84f,
+                0.58f,
+                0.88f,
                 1.00f,
-                (0.018f +
-                 0.026f * breathe) * a
+                (0.035f +
+                 0.050f * breathe) * a
             ),
             std::max(
                 2.f,
@@ -221,23 +295,24 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
             )
         );
 
-        // Très légère profondeur sombre en bas.
+        // Profondeur douce en bas de l’image.
         nxui::Rect lowerShade = {
             activeRect.x + 5.f * s,
             activeRect.y +
-                activeRect.height * 0.62f,
+                activeRect.height * 0.60f,
             activeRect.width - 10.f * s,
-            activeRect.height * 0.34f
+            activeRect.height * 0.36f
         };
 
         ren.drawRoundedRect(
             lowerShade,
             nxui::Color(
-                0.02f,
-                0.10f,
-                0.30f,
-                (0.016f +
-                 0.012f * (1.f - breathe)) * a
+                0.01f,
+                0.07f,
+                0.28f,
+                (0.026f +
+                 0.024f *
+                 (1.f - breathe)) * a
             ),
             std::max(
                 2.f,
