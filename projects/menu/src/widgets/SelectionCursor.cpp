@@ -333,36 +333,51 @@ void SelectionCursor::onRender(nxui::Renderer& ren) {
     // every 32 seconds.
     const float phase = std::fmod(m_time * 0.03125f, 1.f);
 
+    // Le rectangle logique englobe le panneau de l’icône.
+    // La jaquette réelle possède une marge interne.
+    // On rapproche donc uniquement le dessin du contour,
+    // sans changer la navigation ni le mode déplacement.
+    constexpr float kSelectionVisualInset = 10.f;
+
+    const nxui::Rect selectionRect =
+        r.shrunk(kSelectionVisualInset);
+
+    const float selectionRadius =
+        std::max(
+            1.f,
+            cr - kSelectionVisualInset
+        );
+
     // Small and discreet outer glow.
     ren.drawRoundedRectOutline(
-        r.expanded(7.f + breathe * 1.5f),
+        selectionRect.expanded(7.f + breathe * 1.5f),
         nxui::Color(
             0.42f,
             0.10f,
             0.82f,
             (0.035f + 0.015f * breathe) * m_opacity
         ),
-        cr + 8.f,
+        selectionRadius + 8.f,
         7.f
     );
 
     ren.drawRoundedRectOutline(
-        r.expanded(3.5f),
+        selectionRect.expanded(3.5f),
         nxui::Color(
             0.08f,
             0.50f,
             1.00f,
             (0.055f + 0.020f * breathe) * m_opacity
         ),
-        cr + 4.f,
+        selectionRadius + 4.f,
         4.f
     );
 
     // Actual animated purple -> dark fuchsia -> blue gradient.
     drawAnimatedGradientOutline(
         ren,
-        r.expanded(1.3f),
-        cr + 1.3f,
+        selectionRect.expanded(1.3f),
+        selectionRadius + 1.3f,
         4.8f,
         0.96f * m_opacity,
         phase
@@ -371,8 +386,8 @@ void SelectionCursor::onRender(nxui::Renderer& ren) {
     // Fine inner reflection, deliberately more discreet.
     drawAnimatedGradientOutline(
         ren,
-        r.shrunk(2.4f),
-        std::max(1.f, cr - 2.4f),
+        selectionRect.shrunk(2.4f),
+        std::max(1.f, selectionRadius - 2.4f),
         2.4f,
         (0.40f + 0.08f * breathe) * m_opacity,
         phase + 0.17f
