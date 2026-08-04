@@ -29,7 +29,7 @@ void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
     // They sit between the game carousel and the bottom of the screen.
     constexpr float btnSize = 72.f;
     constexpr float gap = 16.f;
-    constexpr float startY = 554.f;
+    constexpr float startY = 574.f;
 
     const float groupW = 6.f * btnSize + 5.f * gap;
     const float startX = (1280.f - groupW) * 0.5f;
