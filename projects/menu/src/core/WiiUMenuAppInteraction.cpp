@@ -429,15 +429,28 @@ void WiiUMenuApp::wireFocusCallback() {
                     return;
 
                 nxui::Rect r = widget->focusRect();
-                float centerX = r.x + r.width * 0.5f;
-                float titleY = std::max(104.f, r.y - 58.f - extraTop);
-                m_titlePill->setAnchor(centerX, titleY);
+                float centerX =
+                    r.x + r.width * 0.5f;
+
+                float titleY =
+                    std::max(
+                        104.f,
+                        r.y - 58.f - extraTop
+                    );
+
+                m_titlePill->setAnchor(
+                    centerX,
+                    titleY
+                );
             };
 
         if (cur && cur->tag() == "glossy_icon") {
             m_grid->focusManager().setFocus(cur);
 
-            // Gauche / droite reste verrouillé dans la rangée des jeux.
+            // V5 CORRIGÉE :
+            // gauche/droite reste toujours dans la rangée des jeux.
+            // À la première ou à la dernière jaquette, la sélection reste
+            // simplement sur place au lieu de tomber sur les boutons du bas.
             const auto& gameIcons = m_grid->allIcons();
 
             for (size_t i = 0; i < gameIcons.size(); ++i) {
@@ -466,26 +479,39 @@ void WiiUMenuApp::wireFocusCallback() {
                 );
             }
 
-            auto* icon = static_cast<GlossyIcon*>(cur);
+            auto* icon =
+                static_cast<GlossyIcon*>(cur);
 
             constexpr float kSelectedScale = 1.12f;
 
-            nxui::Rect baseRect = icon->focusRect();
-            float visualExpand =
-                baseRect.width * (kSelectedScale - 1.f) * 0.5f;
+            nxui::Rect baseRect =
+                icon->focusRect();
 
-            nxui::Rect visualRect = baseRect.expanded(visualExpand);
+            float visualExpand =
+                baseRect.width *
+                (kSelectedScale - 1.f) *
+                0.5f;
+
+            nxui::Rect visualRect =
+                baseRect.expanded(visualExpand);
 
             m_titlePill->setAnchor(
-                visualRect.x + visualRect.width * 0.5f,
-                std::max(104.f, visualRect.y - 58.f)
+                visualRect.x +
+                    visualRect.width * 0.5f,
+                std::max(
+                    104.f,
+                    visualRect.y - 58.f
+                )
             );
 
-            // Haut -> profil du joueur.
+            // V5 NAVIGATION
+            // Haut : profil du joueur.
+            // Bas  : rangée centrée des six boutons système.
             nxui::Widget* profileTarget = nullptr;
 
             if (!m_userAvatarButtons.empty())
-                profileTarget = m_userAvatarButtons.front().get();
+                profileTarget =
+                    m_userAvatarButtons.front().get();
 
             if (profileTarget) {
                 cur->setCustomNavigation(
@@ -493,7 +519,8 @@ void WiiUMenuApp::wireFocusCallback() {
                     profileTarget
                 );
 
-                for (auto& avatar : m_userAvatarButtons) {
+                for (auto& avatar :
+                     m_userAvatarButtons) {
                     avatar->setCustomNavigation(
                         nxui::FocusDirection::DOWN,
                         cur
@@ -501,17 +528,22 @@ void WiiUMenuApp::wireFocusCallback() {
                 }
             }
 
-            // Bas -> bouton système le plus proche horizontalement.
             nxui::Widget* bottomTarget = nullptr;
             float bestDistance = 1000000.f;
 
             const float iconCenterX =
-                visualRect.x + visualRect.width * 0.5f;
+                visualRect.x +
+                visualRect.width * 0.5f;
 
-            for (auto& btn : m_sidebar.leftButtons()) {
+            for (auto& btn :
+                 m_sidebar.leftButtons()) {
                 nxui::Rect r = btn->focusRect();
-                float centerX = r.x + r.width * 0.5f;
-                float distance = std::abs(centerX - iconCenterX);
+
+                float centerX =
+                    r.x + r.width * 0.5f;
+
+                float distance =
+                    std::abs(centerX - iconCenterX);
 
                 if (distance < bestDistance) {
                     bestDistance = distance;
@@ -524,10 +556,15 @@ void WiiUMenuApp::wireFocusCallback() {
                 );
             }
 
-            for (auto& btn : m_sidebar.rightButtons()) {
+            for (auto& btn :
+                 m_sidebar.rightButtons()) {
                 nxui::Rect r = btn->focusRect();
-                float centerX = r.x + r.width * 0.5f;
-                float distance = std::abs(centerX - iconCenterX);
+
+                float centerX =
+                    r.x + r.width * 0.5f;
+
+                float distance =
+                    std::abs(centerX - iconCenterX);
 
                 if (distance < bestDistance) {
                     bestDistance = distance;
@@ -553,19 +590,31 @@ void WiiUMenuApp::wireFocusCallback() {
 
             if (m_editMode) {
                 bindEditActions(icon);
-                m_editGhostTargetRect = icon->focusRect();
+                m_editGhostTargetRect =
+                    icon->focusRect();
 
                 if (!m_editHeldTitle.empty()) {
                     m_titlePill->setText(
-                        i18n.tr("game.move_prefix", "Move: ") + m_editHeldTitle
+                        i18n.tr(
+                            "game.move_prefix",
+                            "Move: "
+                        ) +
+                        m_editHeldTitle
                     );
                 } else if (icon->titleId() != 0) {
                     m_titlePill->setText(
-                        i18n.tr("game.move_prefix", "Move: ") + icon->title()
+                        i18n.tr(
+                            "game.move_prefix",
+                            "Move: "
+                        ) +
+                        icon->title()
                     );
                 } else {
                     m_titlePill->setText(
-                        i18n.tr("game.move", "Move")
+                        i18n.tr(
+                            "game.move",
+                            "Move"
+                        )
                     );
                 }
 
@@ -584,35 +633,49 @@ void WiiUMenuApp::wireFocusCallback() {
             if (m_editMode)
                 exitEditMode();
 
-            for (auto& btn : m_sidebar.leftButtons()) {
+            for (auto& btn :
+                 m_sidebar.leftButtons()) {
                 if (btn.get() == cur) {
                     placeTitleAbove(cur);
-                    m_titlePill->setText(btn->label());
+                    m_titlePill->setText(
+                        btn->label()
+                    );
                     m_titlePill->setVisible(true);
                     return;
                 }
             }
 
-            for (auto& btn : m_sidebar.rightButtons()) {
+            for (auto& btn :
+                 m_sidebar.rightButtons()) {
                 if (btn.get() == cur) {
                     placeTitleAbove(cur);
-                    m_titlePill->setText(btn->label());
+                    m_titlePill->setText(
+                        btn->label()
+                    );
                     m_titlePill->setVisible(true);
                     return;
                 }
             }
 
-            for (auto& avatar : m_userAvatarButtons) {
+            for (auto& avatar :
+                 m_userAvatarButtons) {
                 if (avatar.get() == cur) {
-                    nxui::Rect r = avatar->focusRect();
+                    nxui::Rect r =
+                        avatar->focusRect();
 
                     m_titlePill->setAnchor(
                         r.x + r.width * 0.5f,
                         r.y + r.height + 10.f
                     );
 
-                    m_titlePill->setText(avatar->nickname());
-                    m_titlePill->setVisible(!avatar->nickname().empty());
+                    m_titlePill->setText(
+                        avatar->nickname()
+                    );
+
+                    m_titlePill->setVisible(
+                        !avatar->nickname().empty()
+                    );
+
                     return;
                 }
             }
@@ -627,22 +690,38 @@ void WiiUMenuApp::wireFocusCallback() {
 
     if (auto* cur = focusManager().current()) {
         if (cur->tag() == "glossy_icon") {
-            auto* icon = static_cast<GlossyIcon*>(cur);
+            auto* icon =
+                static_cast<GlossyIcon*>(cur);
 
             if (icon->titleId() != 0) {
-                constexpr float kSelectedScale = 1.12f;
-                nxui::Rect baseRect = icon->focusRect();
-                float visualExpand =
-                    baseRect.width * (kSelectedScale - 1.f) * 0.5f;
+                constexpr float kSelectedScale =
+                    1.12f;
 
-                nxui::Rect visualRect = baseRect.expanded(visualExpand);
+                nxui::Rect baseRect =
+                    icon->focusRect();
+
+                float visualExpand =
+                    baseRect.width *
+                    (kSelectedScale - 1.f) *
+                    0.5f;
+
+                nxui::Rect visualRect =
+                    baseRect.expanded(
+                        visualExpand
+                    );
 
                 m_titlePill->setAnchor(
-                    visualRect.x + visualRect.width * 0.5f,
-                    std::max(104.f, visualRect.y - 58.f)
+                    visualRect.x +
+                        visualRect.width * 0.5f,
+                    std::max(
+                        104.f,
+                        visualRect.y - 58.f
+                    )
                 );
 
-                m_titlePill->setText(icon->title());
+                m_titlePill->setText(
+                    icon->title()
+                );
             }
         }
     }
@@ -899,126 +978,258 @@ void WiiUMenuApp::wireGlobalActions() {
 }
 
 void WiiUMenuApp::handleTouch() {
-    constexpr float kSwipeThreshold = 80.f;
+    constexpr float kScrollStartThreshold = 13.f;
+    constexpr float kHorizontalIntentRatio = 1.15f;
     constexpr float kLongPressThreshold = 0.55f;
     constexpr float kLongPressMoveThreshold = 18.f;
 
     auto& input = app().input();
 
-    auto hitAvatar = [this](float x, float y) -> UserAvatarButton* {
-        for (auto& avatar : m_userAvatarButtons) {
-            if (avatar && avatar->isVisible() && avatar->hitTest(x, y))
-                return avatar.get();
-        }
-        return nullptr;
+    auto resetTouchScrollState = [this]() {
+        m_touchStartedInGrid = false;
+        m_touchScrollActive = false;
+        m_touchLastX = 0.f;
+        m_touchScrollVelocity = 0.f;
     };
 
-    auto focusTouchedIcon = [this](int localHit) -> GlossyIcon* {
-        if (!m_grid || localHit < 0)
-            return nullptr;
+    auto hitAvatar =
+        [this](float x, float y) -> UserAvatarButton* {
+            for (auto& avatar : m_userAvatarButtons) {
+                if (avatar &&
+                    avatar->isVisible() &&
+                    avatar->hitTest(x, y))
+                    return avatar.get();
+            }
 
-        int global = m_grid->currentPage() * m_grid->iconsPerPage() + localHit;
-        if (!m_grid->focusGlobalIndex(global))
             return nullptr;
+        };
 
-        auto* cur = m_grid->focusManager().current();
-        if (!cur)
-            return nullptr;
+    auto focusTouchedIcon =
+        [this](int globalHit) -> GlossyIcon* {
+            if (!m_grid || globalHit < 0)
+                return nullptr;
 
-        focusManager().setFocus(cur);
-        updateCursor();
+            if (!m_grid->focusGlobalIndex(globalHit))
+                return nullptr;
 
-        if (!isEditableIcon(cur))
-            return nullptr;
-        return static_cast<GlossyIcon*>(cur);
-    };
+            auto* cur =
+                m_grid->focusManager().current();
+
+            if (!cur)
+                return nullptr;
+
+            focusManager().setFocus(cur);
+            updateCursor();
+
+            if (!isEditableIcon(cur))
+                return nullptr;
+
+            return static_cast<GlossyIcon*>(cur);
+        };
 
     if (input.touchDown()) {
-        float tx = input.touchX();
-        float ty = input.touchY();
-        m_touchAvatarTarget = hitAvatar(tx, ty);
-        m_touchAvatarWasFocused = m_touchAvatarTarget && (focusManager().current() == m_touchAvatarTarget);
+        const float tx = input.touchX();
+        const float ty = input.touchY();
+
+        m_touchStartedInGrid =
+            m_grid &&
+            m_grid->rect().contains(tx, ty);
+
+        m_touchScrollActive = false;
+        m_touchLastX = tx;
+        m_touchScrollVelocity = 0.f;
+
+        m_touchAvatarTarget =
+            hitAvatar(tx, ty);
+
+        m_touchAvatarWasFocused =
+            m_touchAvatarTarget &&
+            focusManager().current() ==
+                m_touchAvatarTarget;
+
         if (m_touchAvatarTarget) {
+            m_touchStartedInGrid = false;
             m_touchHitIndex = -1;
             m_touchOnFocused = false;
             m_touchEditDragActive = false;
             return;
         }
 
-        int hit = m_grid->hitTest(tx, ty);
+        const int hit =
+            m_grid ? m_grid->hitTest(tx, ty) : -1;
+
         m_touchHitIndex = hit;
         m_touchOnFocused = false;
         m_touchEditDragActive = false;
-        if (hit >= 0) {
-            auto icons = m_grid->pageIcons();
-            if (hit < (int)icons.size())
-                m_touchOnFocused = (icons[hit] == focusManager().current());
+
+        if (hit >= 0 && m_grid) {
+            const auto icons =
+                m_grid->pageIcons();
+
+            if (hit < static_cast<int>(icons.size())) {
+                m_touchOnFocused =
+                    icons[hit] ==
+                    focusManager().current();
+            }
         }
     }
 
-    if (input.isTouching() && m_touchHitIndex >= 0) {
-        float dx = input.touchDeltaX();
-        float dy = input.touchDeltaY();
+    if (input.isTouching()) {
+        const float totalDx =
+            input.touchDeltaX();
 
-        if (!m_editMode
-            && std::abs(dx) <= kLongPressMoveThreshold
-            && std::abs(dy) <= kLongPressMoveThreshold
-            && input.touchDuration() >= kLongPressThreshold)
-        {
-            if (auto* icon = focusTouchedIcon(m_touchHitIndex)) {
-                enterEditMode();
-                if (m_editMode) {
-                    m_touchEditDragActive = true;
-                    m_audio.playSfx(Sfx::Activate);
-                    m_editGhostTargetRect = icon->focusRect().expanded(4.f);
-                }
-            }
+        const float totalDy =
+            input.touchDeltaY();
+
+        const bool horizontalGesture =
+            std::abs(totalDx) >=
+                kScrollStartThreshold &&
+            std::abs(totalDx) >
+                std::abs(totalDy) *
+                kHorizontalIntentRatio;
+
+        // En mode normal, un glissement horizontal fait défiler la ligne.
+        // En mode déplacement, ce bloc est volontairement ignoré :
+        // la réorganisation des icônes reste donc entièrement disponible.
+        if (!m_editMode &&
+            !m_touchScrollActive &&
+            m_touchStartedInGrid &&
+            horizontalGesture &&
+            m_grid &&
+            m_grid->canTouchScroll()) {
+            m_touchScrollActive = true;
+            m_touchOnFocused = false;
+            m_grid->beginTouchScroll();
         }
 
-        if (m_editMode && m_touchEditDragActive) {
-            int dragHit = m_grid->hitTest(input.touchX(), input.touchY());
-            if (dragHit >= 0)
-                focusTouchedIcon(dragHit);
+        if (m_touchScrollActive && m_grid) {
+            const float currentX =
+                input.touchX();
+
+            const float frameDx =
+                currentX - m_touchLastX;
+
+            m_touchLastX = currentX;
+
+            // Estimation lissée de la vitesse du doigt à 60 images/s.
+            // Elle sert seulement à une petite inertie après le relâchement.
+            const float instantVelocity =
+                frameDx * 60.f;
+
+            m_touchScrollVelocity =
+                m_touchScrollVelocity * 0.72f +
+                instantVelocity * 0.28f;
+
+            m_grid->dragTouchScroll(frameDx);
+            updateCursor();
+            return;
+        }
+
+        if (m_touchHitIndex >= 0) {
+            if (!m_editMode &&
+                std::abs(totalDx) <=
+                    kLongPressMoveThreshold &&
+                std::abs(totalDy) <=
+                    kLongPressMoveThreshold &&
+                input.touchDuration() >=
+                    kLongPressThreshold) {
+                if (auto* icon =
+                        focusTouchedIcon(
+                            m_touchHitIndex
+                        )) {
+                    enterEditMode();
+
+                    if (m_editMode) {
+                        m_touchEditDragActive = true;
+                        m_audio.playSfx(Sfx::Activate);
+
+                        m_editGhostTargetRect =
+                            icon->focusRect().expanded(4.f);
+                    }
+                }
+            }
+
+            if (m_editMode &&
+                m_touchEditDragActive &&
+                m_grid) {
+                const int dragHit =
+                    m_grid->hitTest(
+                        input.touchX(),
+                        input.touchY()
+                    );
+
+                if (dragHit >= 0)
+                    focusTouchedIcon(dragHit);
+            }
         }
     }
 
     if (input.touchUp()) {
         if (m_touchAvatarTarget) {
-            float dx = input.touchDeltaX();
-            float dy = input.touchDeltaY();
-            UserAvatarButton* avatar = m_touchAvatarTarget;
+            const float dx =
+                input.touchDeltaX();
+
+            const float dy =
+                input.touchDeltaY();
+
+            UserAvatarButton* avatar =
+                m_touchAvatarTarget;
+
             m_touchAvatarTarget = nullptr;
-            if (std::abs(dx) < 20.f && std::abs(dy) < 20.f &&
-                hitAvatar(input.touchX(), input.touchY()) == avatar)
-            {
+
+            if (std::abs(dx) < 20.f &&
+                std::abs(dy) < 20.f &&
+                hitAvatar(
+                    input.touchX(),
+                    input.touchY()
+                ) == avatar) {
                 focusManager().setFocus(avatar);
+
                 if (!m_touchAvatarWasFocused)
                     avatar->activate();
             }
+
             m_touchAvatarWasFocused = false;
+            resetTouchScrollState();
             return;
         }
 
-        if (m_editMode && m_touchEditDragActive) {
-            bool changed = commitEditModePlacement();
+        if (m_touchScrollActive && m_grid) {
+            m_grid->endTouchScroll(
+                m_touchScrollVelocity
+            );
+
+            m_touchHitIndex = -1;
+            m_touchOnFocused = false;
+            m_touchEditDragActive = false;
+            resetTouchScrollState();
+            return;
+        }
+
+        // Le déplacement par appui long est conservé sans modification.
+        if (m_editMode &&
+            m_touchEditDragActive) {
+            const bool changed =
+                commitEditModePlacement();
+
             exitEditMode();
-            m_audio.playSfx(changed ? Sfx::ConfirmPositive : Sfx::ModalHide);
+
+            m_audio.playSfx(
+                changed
+                    ? Sfx::ConfirmPositive
+                    : Sfx::ModalHide
+            );
+
             m_touchHitIndex = -1;
             m_touchEditDragActive = false;
+            resetTouchScrollState();
             return;
         }
 
-        float dx = input.touchDeltaX();
-        float dy = input.touchDeltaY();
-        if (std::abs(dx) > kSwipeThreshold && std::abs(dx) > std::abs(dy) * 1.5f) {
-            int p = m_grid->currentPage() + (dx < 0 ? 1 : -1);
-            if (p >= 0 && p < m_grid->totalPages() && !m_grid->isTransitioning()) {
-                m_grid->startWaveTransition(p);
-                m_audio.playSfx(Sfx::PageChange);
-            }
-        }
         m_touchHitIndex = -1;
+        m_touchOnFocused = false;
         m_touchEditDragActive = false;
+        resetTouchScrollState();
     }
 }
 
@@ -1056,20 +1267,28 @@ void WiiUMenuApp::updateCursor() {
     nxui::Rect fr = cur->focusRect();
 
     if (cur->tag() == "glossy_icon") {
-        m_cursor->setGradientEnabled(false);
+        m_cursor->setGradientEnabled(true);
 
-        auto* icon = static_cast<GlossyIcon*>(cur);
+        auto* icon =
+            static_cast<GlossyIcon*>(cur);
 
         constexpr float kSelectedScale = 1.12f;
+
         float visualExpand =
-            fr.width * (kSelectedScale - 1.f) * 0.5f;
+            fr.width *
+            (kSelectedScale - 1.f) *
+            0.5f;
 
         nxui::Rect visualRect =
-            fr.expanded(visualExpand + 3.f);
+            fr.expanded(
+                visualExpand + 4.f
+            );
 
         m_cursor->moveTo(
             visualRect,
-            icon->cornerRadius() * kSelectedScale + 3.f,
+            icon->cornerRadius() *
+                kSelectedScale +
+                4.f,
             0.16f
         );
     } else {
