@@ -228,6 +228,14 @@ private:
     int  m_touchHitIndex     = -1;
     bool m_touchOnFocused    = false;
     bool m_touchEditDragActive = false;
+
+    // Scroll tactile de la rangée d'applications.
+    bool  m_touchStartedInGrid = false;
+    bool  m_touchScrollActive = false;
+    float m_touchLastX = 0.f;
+    float m_touchLastDuration = 0.f;
+    float m_touchScrollVelocity = 0.f;
+
     UserAvatarButton* m_touchAvatarTarget = nullptr;
     bool m_touchAvatarWasFocused = false;
     int  m_deferredRefreshFrames = 0;
