@@ -229,6 +229,7 @@ void WiiUMenuApp::setTutorialStartupFade(bool enabled) {
 #ifdef SWITCHU_MENU
 void WiiUMenuApp::setStartupStatus(uint64_t suspendedTitleId, bool appRunning) {
     m_launcher.setStartupStatus(suspendedTitleId, appRunning);
+    m_skipStartupLock = appRunning && suspendedTitleId != 0;
 }
 #endif
 
@@ -284,6 +285,16 @@ bool WiiUMenuApp::onCreate() {
     loadResources();
     DebugLog::log("[init] buildGrid...");
     buildGrid();
+
+    if (m_skipStartupLock) {
+        m_lockScreenActive = false;
+        m_lockScreenUnlocking = false;
+        m_lockScreenOpacity = 0.f;
+        DebugLog::log("[lockscreen] skipped: suspended application return");
+    } else {
+        showLockScreen();
+        DebugLog::log("[lockscreen] shown at startup");
+    }
 
 #ifdef SWITCHU_DEBUG_UI
     m_debugOverlay = std::make_unique<DebugImGuiOverlay>();
@@ -1571,6 +1582,9 @@ void WiiUMenuApp::onUpdate(float dt) {
                 }
                 break;
             }
+            case switchu::smi::MenuMessage::WakeUp:
+                m_sysMsg.pushAction(SysAction::WakeUp);
+                break;
             case switchu::smi::MenuMessage::BatteryStatusChanged:
                 if (m_battery) {
                     const uint32_t percent = switchu::smi::batteryPayloadPercentage(notif.payload);
@@ -1600,6 +1614,11 @@ void WiiUMenuApp::onUpdate(float dt) {
         finalizeRefresh();
     }
 #endif
+
+    if (m_lockScreenActive) {
+        handleLockScreen(dt);
+        return;
+    }
 
     bool debugTouchBlocked = false;
 #ifdef SWITCHU_DEBUG_UI
@@ -1980,6 +1999,215 @@ void WiiUMenuApp::renderActionHintBar(nxui::Renderer& ren) {
     ren.popClipRect();
 }
 
+void WiiUMenuApp::showLockScreen() {
+    closeActiveOverlays();
+
+    m_touchHitIndex = -1;
+    m_touchOnFocused = false;
+    m_touchEditDragActive = false;
+    m_touchStartedInGrid = false;
+    m_touchScrollActive = false;
+    m_touchScrollVelocity = 0.f;
+
+    m_lockScreenActive = true;
+    m_lockScreenUnlocking = false;
+    m_lockPressCount = 0;
+    m_lockPressResetTimer = 0.f;
+    m_lockScreenPulse = 0.f;
+    m_lockScreenOpacity = 1.f;
+}
+
+void WiiUMenuApp::handleLockScreen(float dt) {
+    m_lockScreenPulse += dt;
+
+    if (m_lockScreenUnlocking) {
+        constexpr float kUnlockFadeDuration = 0.28f;
+        m_lockScreenOpacity = std::max(
+            0.f,
+            m_lockScreenOpacity - dt / kUnlockFadeDuration
+        );
+
+        if (m_lockScreenOpacity <= 0.f) {
+            m_lockScreenActive = false;
+            m_lockScreenUnlocking = false;
+            m_lockPressCount = 0;
+            m_lockPressResetTimer = 0.f;
+            m_audio.playSfx(Sfx::ModalHide);
+            DebugLog::log("[lockscreen] unlocked");
+        }
+        return;
+    }
+
+    if (m_lockPressResetTimer > 0.f) {
+        m_lockPressResetTimer = std::max(0.f, m_lockPressResetTimer - dt);
+        if (m_lockPressResetTimer <= 0.f && m_lockPressCount > 0) {
+            m_lockPressCount = 0;
+            m_audio.playSfx(Sfx::ToggleOff);
+        }
+    }
+
+    if (!app().input().isDown(nxui::Button::A))
+        return;
+
+    ++m_lockPressCount;
+    m_lockPressResetTimer = 1.55f;
+
+    if (m_lockPressCount < 3) {
+        m_audio.playSfx(Sfx::Navigate);
+        return;
+    }
+
+    m_lockPressCount = 3;
+    m_lockPressResetTimer = 0.f;
+    m_lockScreenUnlocking = true;
+    m_audio.playSfx(Sfx::ConfirmPositive);
+}
+
+void WiiUMenuApp::renderLockScreen(nxui::Renderer& ren) {
+    if (!m_lockScreenActive || m_lockScreenOpacity <= 0.f)
+        return;
+
+    const float opacity = std::clamp(m_lockScreenOpacity, 0.f, 1.f);
+    const float breathe = 0.5f + 0.5f * std::sin(m_lockScreenPulse * 1.65f);
+
+    ren.drawRect(
+        {0.f, 0.f, 1280.f, 720.f},
+        nxui::Color(0.005f, 0.008f, 0.030f, 0.76f * opacity)
+    );
+
+    ren.drawRoundedRect(
+        {130.f, 72.f, 1020.f, 576.f},
+        nxui::Color(
+            0.08f, 0.12f, 0.32f,
+            (0.08f + 0.035f * breathe) * opacity
+        ),
+        42.f
+    );
+
+    const nxui::Rect panel = {376.f, 220.f, 528.f, 286.f};
+
+    ren.drawRoundedRect(
+        {panel.x, panel.y + 9.f, panel.width, panel.height},
+        nxui::Color(0.f, 0.f, 0.f, 0.28f * opacity),
+        34.f
+    );
+
+    nxui::LiquidGlassSettings savedGlass = ren.liquidGlassSettings();
+    auto& glass = ren.liquidGlassSettings();
+    glass.refractionIntensity = 0.022f;
+    glass.blurIntensity = 0.16f;
+    glass.noiseIntensity = 0.0f;
+    glass.glowIntensity = 0.055f + 0.018f * breathe;
+    glass.saturation = 1.02f;
+    glass.opacityMultiplier = 1.0f;
+    glass.roughness = 0.006f;
+    glass.powerFactor = 18.0f;
+
+    ren.drawLiquidGlass(
+        0,
+        panel,
+        34.f,
+        nxui::Color(0.12f, 0.16f, 0.36f, 0.34f * opacity),
+        0.90f * opacity,
+        0.07f
+    );
+    ren.liquidGlassSettings() = savedGlass;
+
+    ren.drawRoundedRectOutline(
+        panel.shrunk(1.5f),
+        nxui::Color(
+            0.72f, 0.84f, 1.00f,
+            (0.20f + 0.055f * breathe) * opacity
+        ),
+        32.5f,
+        1.8f
+    );
+
+    const std::string title = "Écran verrouillé";
+    const nxui::Vec2 titleSize = m_fontNormal.measure(title);
+    constexpr float titleScale = 1.26f;
+    ren.drawText(
+        title,
+        {
+            panel.x + (panel.width - titleSize.x * titleScale) * 0.5f,
+            panel.y + 42.f
+        },
+        &m_fontNormal,
+        m_theme.textPrimary.withAlpha(0.96f * opacity),
+        titleScale
+    );
+
+    const std::string instruction = "Appuyez trois fois sur A";
+    const nxui::Vec2 instructionSize = m_fontSmall.measure(instruction);
+    constexpr float instructionScale = 0.92f;
+    ren.drawText(
+        instruction,
+        {
+            panel.x + (panel.width - instructionSize.x * instructionScale) * 0.5f,
+            panel.y + 102.f
+        },
+        &m_fontSmall,
+        m_theme.textSecondary.withAlpha(0.88f * opacity),
+        instructionScale
+    );
+
+    const std::string aGlyph = buttonGlyph(nxui::Button::A);
+    const nxui::Vec2 glyphSize = m_fontIcons.measure(aGlyph);
+    constexpr float glyphScale = 1.32f;
+    ren.drawText(
+        aGlyph,
+        {
+            panel.x + (panel.width - glyphSize.x * glyphScale) * 0.5f,
+            panel.y + 138.f
+        },
+        &m_fontIcons,
+        nxui::Color(
+            0.88f, 0.95f, 1.00f,
+            (0.84f + 0.12f * breathe) * opacity
+        ),
+        glyphScale
+    );
+
+    constexpr float circleRadius = 13.f;
+    constexpr float circleGap = 56.f;
+    const float firstCircleX = panel.x + panel.width * 0.5f - circleGap;
+    const float circleY = panel.y + 232.f;
+
+    for (int i = 0; i < 3; ++i) {
+        const float x = firstCircleX + i * circleGap;
+        const bool completed = i < m_lockPressCount;
+        const bool next = i == m_lockPressCount && !m_lockScreenUnlocking;
+
+        ren.drawCircle(
+            {x, circleY},
+            circleRadius + 4.f,
+            nxui::Color(0.02f, 0.04f, 0.12f, 0.64f * opacity),
+            32
+        );
+
+        ren.drawCircle(
+            {x, circleY},
+            circleRadius,
+            completed
+                ? nxui::Color(0.30f, 0.68f, 1.00f, 0.96f * opacity)
+                : nxui::Color(
+                    0.58f, 0.68f, 0.86f,
+                    (next ? 0.22f + 0.12f * breathe : 0.14f) * opacity
+                  ),
+            32
+        );
+
+        if (completed) {
+            ren.drawCircle(
+                {x, circleY - 3.f},
+                circleRadius * 0.42f,
+                nxui::Color(0.82f, 0.94f, 1.00f, 0.42f * opacity),
+                24
+            );
+        }
+    }
+}
+
 void WiiUMenuApp::onRender(nxui::Renderer& ren) {
     if (m_returnFadeTimer > 0.f) {
         float alpha = m_returnFadeTimer / kReturnFadeInDur;
@@ -2039,6 +2267,8 @@ void WiiUMenuApp::onRender(nxui::Renderer& ren) {
     // Final topmost pass for move-mode ghost.
     if (m_editMode && m_editGhostIcon)
         m_editGhostIcon->render(ren);
+
+    renderLockScreen(ren);
 
 
 #ifdef SWITCHU_DEBUG_UI
