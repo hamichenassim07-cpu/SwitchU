@@ -349,7 +349,7 @@ void WiiUMenuApp::buildUserAvatarBar() {
     m_userAvatarButtons.clear();
 
     m_userAvatarBar = std::make_shared<nxui::Box>(nxui::Axis::ROW);
-    m_userAvatarBar->setMarginTop(17.f);
+    m_userAvatarBar->setMarginTop(0.f);
     m_userAvatarBar->setGap(10.f);
     m_userAvatarBar->setShrink(0.f);
     m_userAvatarBar->setSize(0.f, 56.f);
