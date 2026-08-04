@@ -15,6 +15,8 @@
 #include <cmath>
 #include <string>
 #include <chrono>
+#include <ctime>
+#include <array>
 #include <vector>
 #include <algorithm>
 #include <unordered_map>
@@ -191,6 +193,89 @@ std::string buttonGlyph(nxui::Button button) {
 
 std::string dpadGlyph() {
     return utf8Codepoint(0xE0EA);
+}
+
+float lockClamp01(float value) {
+    return std::clamp(value, 0.f, 1.f);
+}
+
+float lockSmoothStep(float value) {
+    value = lockClamp01(value);
+    return value * value * (3.f - 2.f * value);
+}
+
+float lockEaseOutCubic(float value) {
+    value = lockClamp01(value);
+    const float inv = 1.f - value;
+    return 1.f - inv * inv * inv;
+}
+
+void drawLockArc(nxui::Renderer& ren,
+                 const nxui::Vec2& center,
+                 float radius,
+                 float startAngle,
+                 float endAngle,
+                 const nxui::Color& color,
+                 float thickness,
+                 int segments = 72) {
+    if (segments < 2 || radius <= 0.f)
+        return;
+
+    nxui::Vec2 previous = {
+        center.x + std::cos(startAngle) * radius,
+        center.y + std::sin(startAngle) * radius
+    };
+
+    for (int i = 1; i <= segments; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(segments);
+        const float angle = startAngle + (endAngle - startAngle) * t;
+        nxui::Vec2 current = {
+            center.x + std::cos(angle) * radius,
+            center.y + std::sin(angle) * radius
+        };
+        ren.drawLine(previous, current, color, thickness);
+        previous = current;
+    }
+}
+
+void drawLockGlow(nxui::Renderer& ren,
+                  const nxui::Vec2& center,
+                  float radius,
+                  const nxui::Color& color,
+                  float opacity) {
+    const float alpha = lockClamp01(opacity);
+    ren.drawCircle(center, radius * 2.10f, color.withAlpha(color.a * 0.035f * alpha), 72);
+    ren.drawCircle(center, radius * 1.58f, color.withAlpha(color.a * 0.055f * alpha), 64);
+    ren.drawCircle(center, radius * 1.22f, color.withAlpha(color.a * 0.085f * alpha), 56);
+    ren.drawCircle(center, radius, color.withAlpha(color.a * 0.96f * alpha), 48);
+}
+
+void buildLockClockStrings(bool use12Hour,
+                           std::string& timeText,
+                           std::string& dateText) {
+    std::time_t now = std::time(nullptr);
+    std::tm* local = std::localtime(&now);
+    if (!local) {
+        timeText = "--:--";
+        dateText = "-- · -- · ----";
+        return;
+    }
+
+    char buffer[64] = {};
+    if (use12Hour) {
+        int hour = local->tm_hour % 12;
+        if (hour == 0)
+            hour = 12;
+        std::snprintf(buffer, sizeof(buffer), "%d:%02d %s",
+                      hour, local->tm_min, local->tm_hour >= 12 ? "PM" : "AM");
+    } else {
+        std::snprintf(buffer, sizeof(buffer), "%02d:%02d", local->tm_hour, local->tm_min);
+    }
+    timeText = buffer;
+
+    std::snprintf(buffer, sizeof(buffer), "%02d  ·  %02d  ·  %04d",
+                  local->tm_mday, local->tm_mon + 1, local->tm_year + 1900);
+    dateText = buffer;
 }
 
 bool appEntriesRefreshEquivalent(const AppEntry& a, const AppEntry& b) {
@@ -2015,23 +2100,52 @@ void WiiUMenuApp::showLockScreen() {
     m_lockPressResetTimer = 0.f;
     m_lockScreenPulse = 0.f;
     m_lockScreenOpacity = 1.f;
+    m_lockScreenReveal = 0.f;
+    m_lockUnlockProgress = 0.f;
+    m_lockPressFlash = 0.f;
+    m_lockBatteryPollTimer = 0.f;
+
+    u32 percentage = 100;
+    if (R_SUCCEEDED(psmGetBatteryChargePercentage(&percentage)))
+        m_lockBatteryPercent = std::min<uint32_t>(percentage, 100u);
+
+    PsmChargerType charger = PsmChargerType_Unconnected;
+    if (R_SUCCEEDED(psmGetChargerType(&charger)))
+        m_lockBatteryCharging = charger != PsmChargerType_Unconnected;
 }
 
 void WiiUMenuApp::handleLockScreen(float dt) {
     m_lockScreenPulse += dt;
+    m_lockScreenReveal = std::min(1.f, m_lockScreenReveal + dt / 0.48f);
+    m_lockPressFlash = std::max(0.f, m_lockPressFlash - dt * 2.8f);
+
+    m_lockBatteryPollTimer -= dt;
+    if (m_lockBatteryPollTimer <= 0.f) {
+        m_lockBatteryPollTimer = 2.f;
+
+        u32 percentage = m_lockBatteryPercent;
+        if (R_SUCCEEDED(psmGetBatteryChargePercentage(&percentage)))
+            m_lockBatteryPercent = std::min<uint32_t>(percentage, 100u);
+
+        PsmChargerType charger = PsmChargerType_Unconnected;
+        if (R_SUCCEEDED(psmGetChargerType(&charger)))
+            m_lockBatteryCharging = charger != PsmChargerType_Unconnected;
+    }
 
     if (m_lockScreenUnlocking) {
-        constexpr float kUnlockFadeDuration = 0.28f;
-        m_lockScreenOpacity = std::max(
-            0.f,
-            m_lockScreenOpacity - dt / kUnlockFadeDuration
+        constexpr float kUnlockDuration = 0.72f;
+        m_lockUnlockProgress = std::min(
+            1.f,
+            m_lockUnlockProgress + dt / kUnlockDuration
         );
+        m_lockScreenOpacity = 1.f - lockSmoothStep(m_lockUnlockProgress);
 
-        if (m_lockScreenOpacity <= 0.f) {
+        if (m_lockUnlockProgress >= 1.f) {
             m_lockScreenActive = false;
             m_lockScreenUnlocking = false;
             m_lockPressCount = 0;
             m_lockPressResetTimer = 0.f;
+            m_lockScreenOpacity = 0.f;
             m_audio.playSfx(Sfx::ModalHide);
             DebugLog::log("[lockscreen] unlocked");
         }
@@ -2042,6 +2156,7 @@ void WiiUMenuApp::handleLockScreen(float dt) {
         m_lockPressResetTimer = std::max(0.f, m_lockPressResetTimer - dt);
         if (m_lockPressResetTimer <= 0.f && m_lockPressCount > 0) {
             m_lockPressCount = 0;
+            m_lockPressFlash = 0.72f;
             m_audio.playSfx(Sfx::ToggleOff);
         }
     }
@@ -2051,6 +2166,7 @@ void WiiUMenuApp::handleLockScreen(float dt) {
 
     ++m_lockPressCount;
     m_lockPressResetTimer = 1.55f;
+    m_lockPressFlash = 1.f;
 
     if (m_lockPressCount < 3) {
         m_audio.playSfx(Sfx::Navigate);
@@ -2060,6 +2176,7 @@ void WiiUMenuApp::handleLockScreen(float dt) {
     m_lockPressCount = 3;
     m_lockPressResetTimer = 0.f;
     m_lockScreenUnlocking = true;
+    m_lockUnlockProgress = 0.f;
     m_audio.playSfx(Sfx::ConfirmPositive);
 }
 
@@ -2067,144 +2184,407 @@ void WiiUMenuApp::renderLockScreen(nxui::Renderer& ren) {
     if (!m_lockScreenActive || m_lockScreenOpacity <= 0.f)
         return;
 
-    const float opacity = std::clamp(m_lockScreenOpacity, 0.f, 1.f);
-    const float breathe = 0.5f + 0.5f * std::sin(m_lockScreenPulse * 1.65f);
+    auto& i18n = nxui::I18n::instance();
 
-    ren.drawRect(
+    const float opacity = lockClamp01(m_lockScreenOpacity);
+    const float reveal = lockEaseOutCubic(m_lockScreenReveal);
+    const float unlock = lockSmoothStep(m_lockUnlockProgress);
+    const float breathe = 0.5f + 0.5f * std::sin(m_lockScreenPulse * 1.45f);
+    const float slowPulse = 0.5f + 0.5f * std::sin(m_lockScreenPulse * 0.58f);
+    const float lift = -34.f * unlock;
+    const float contentAlpha = opacity * reveal;
+
+    // A deep translucent veil keeps the HOME visible as part of the same world.
+    ren.drawGradientRect(
         {0.f, 0.f, 1280.f, 720.f},
-        nxui::Color(0.005f, 0.008f, 0.030f, 0.76f * opacity)
+        nxui::Color(0.006f, 0.008f, 0.030f, 0.90f * opacity),
+        nxui::Color(0.018f, 0.010f, 0.055f, 0.94f * opacity)
     );
 
-    ren.drawRoundedRect(
-        {130.f, 72.f, 1020.f, 576.f},
-        nxui::Color(
-            0.08f, 0.12f, 0.32f,
-            (0.08f + 0.035f * breathe) * opacity
-        ),
-        42.f
+    // Layered cosmic glows. They deliberately sit partly outside the screen.
+    ren.drawCircle(
+        {-65.f, 620.f + lift},
+        410.f,
+        nxui::Color(0.02f, 0.48f, 0.64f, (0.075f + 0.020f * slowPulse) * opacity),
+        96
+    );
+    ren.drawCircle(
+        {1215.f, 80.f + lift},
+        360.f,
+        nxui::Color(0.66f, 0.08f, 0.42f, (0.070f + 0.018f * breathe) * opacity),
+        96
+    );
+    ren.drawCircle(
+        {700.f, 780.f + lift},
+        330.f,
+        nxui::Color(0.14f, 0.16f, 0.68f, 0.055f * opacity),
+        96
     );
 
-    const nxui::Rect panel = {376.f, 220.f, 528.f, 286.f};
+    // Quiet star field with a tiny amount of parallax.
+    static constexpr std::array<nxui::Vec2, 24> kStars = {{
+        {72.f, 110.f}, {154.f, 238.f}, {232.f, 82.f}, {318.f, 168.f},
+        {406.f, 58.f}, {492.f, 128.f}, {572.f, 72.f}, {660.f, 112.f},
+        {742.f, 48.f}, {826.f, 145.f}, {906.f, 86.f}, {1004.f, 174.f},
+        {1102.f, 112.f}, {1190.f, 246.f}, {112.f, 430.f}, {210.f, 552.f},
+        {330.f, 628.f}, {454.f, 520.f}, {562.f, 650.f}, {744.f, 588.f},
+        {862.f, 656.f}, {986.f, 540.f}, {1106.f, 632.f}, {1214.f, 468.f}
+    }};
 
+    for (size_t i = 0; i < kStars.size(); ++i) {
+        const float phase = static_cast<float>(i) * 0.71f;
+        const float twinkle = 0.52f + 0.48f * std::sin(m_lockScreenPulse * 0.82f + phase);
+        const float radius = (i % 5 == 0) ? 2.1f : ((i % 3 == 0) ? 1.45f : 1.0f);
+        ren.drawCircle(
+            {kStars[i].x, kStars[i].y + lift * 0.24f},
+            radius,
+            nxui::Color(0.78f, 0.88f, 1.f, (0.10f + 0.18f * twinkle) * contentAlpha),
+            16
+        );
+    }
+
+    // Orbital architecture: the lock screen feels embedded in the HOME world.
+    const nxui::Vec2 orbitCenter = {640.f, 352.f + lift};
+    const float orbitRotation = m_lockScreenPulse * 0.055f;
+    drawLockArc(
+        ren, orbitCenter, 276.f,
+        -2.78f + orbitRotation, 0.38f + orbitRotation,
+        nxui::Color(0.48f, 0.68f, 1.f, 0.085f * contentAlpha), 1.35f, 92
+    );
+    drawLockArc(
+        ren, orbitCenter, 276.f,
+        0.72f + orbitRotation, 2.58f + orbitRotation,
+        nxui::Color(0.75f, 0.42f, 0.96f, 0.065f * contentAlpha), 1.15f, 58
+    );
+    drawLockArc(
+        ren, orbitCenter, 344.f,
+        -0.92f - orbitRotation * 0.55f, 1.08f - orbitRotation * 0.55f,
+        nxui::Color(0.96f, 0.73f, 0.28f, 0.060f * contentAlpha), 1.0f, 64
+    );
+
+    // Small orbiting lights.
+    const float orbiterAngleA = -0.74f + orbitRotation * 2.2f;
+    const float orbiterAngleB = 2.32f - orbitRotation * 1.5f;
+    const nxui::Vec2 orbiterA = {
+        orbitCenter.x + std::cos(orbiterAngleA) * 276.f,
+        orbitCenter.y + std::sin(orbiterAngleA) * 276.f
+    };
+    const nxui::Vec2 orbiterB = {
+        orbitCenter.x + std::cos(orbiterAngleB) * 344.f,
+        orbitCenter.y + std::sin(orbiterAngleB) * 344.f
+    };
+    drawLockGlow(ren, orbiterA, 3.4f, nxui::Color(0.62f, 0.86f, 1.f, 1.f), contentAlpha);
+    drawLockGlow(ren, orbiterB, 2.8f, nxui::Color(1.f, 0.76f, 0.34f, 1.f), contentAlpha);
+
+    // Top-left brand mark.
+    const std::string brand = "SWITCH  U";
+    constexpr float brandScale = 0.78f;
+    const nxui::Vec2 brandSize = m_fontSmall.measure(brand);
+    ren.drawText(
+        brand,
+        {58.f, 42.f + lift * 0.25f},
+        &m_fontSmall,
+        nxui::Color(0.88f, 0.94f, 1.f, 0.72f * contentAlpha),
+        brandScale
+    );
+    ren.drawLine(
+        {58.f, 72.f + lift * 0.25f},
+        {58.f + std::max(62.f, brandSize.x * brandScale), 72.f + lift * 0.25f},
+        nxui::Color(0.40f, 0.72f, 1.f, 0.38f * contentAlpha),
+        1.4f
+    );
+
+    // Top-right battery capsule.
+    char batteryBuffer[16] = {};
+    std::snprintf(batteryBuffer, sizeof(batteryBuffer), "%u%%", m_lockBatteryPercent);
+    const std::string batteryText = batteryBuffer;
+    const nxui::Vec2 batteryTextSize = m_fontSmall.measure(batteryText);
+    const nxui::Rect batteryPill = {1090.f, 31.f + lift * 0.25f, 132.f, 48.f};
     ren.drawRoundedRect(
-        {panel.x, panel.y + 9.f, panel.width, panel.height},
-        nxui::Color(0.f, 0.f, 0.f, 0.28f * opacity),
-        34.f
+        batteryPill,
+        nxui::Color(0.05f, 0.08f, 0.18f, 0.34f * contentAlpha),
+        24.f
+    );
+    ren.drawRoundedRectOutline(
+        batteryPill.shrunk(1.f),
+        nxui::Color(0.72f, 0.84f, 1.f, 0.16f * contentAlpha),
+        23.f,
+        1.1f
+    );
+    const nxui::Rect batteryBody = {1110.f, 47.f + lift * 0.25f, 35.f, 16.f};
+    ren.drawRoundedRectOutline(
+        batteryBody,
+        nxui::Color(0.86f, 0.93f, 1.f, 0.64f * contentAlpha),
+        5.f,
+        1.4f
+    );
+    ren.drawRoundedRect(
+        {1146.5f, 52.f + lift * 0.25f, 3.f, 6.f},
+        nxui::Color(0.86f, 0.93f, 1.f, 0.54f * contentAlpha),
+        1.5f
+    );
+    const float batteryFill = lockClamp01(static_cast<float>(m_lockBatteryPercent) / 100.f);
+    const nxui::Color batteryColor = m_lockBatteryPercent <= 20
+        ? nxui::Color(1.f, 0.28f, 0.30f, 0.92f * contentAlpha)
+        : (m_lockBatteryCharging
+            ? nxui::Color(0.98f, 0.76f, 0.28f, 0.94f * contentAlpha)
+            : nxui::Color(0.44f, 0.88f, 1.f, 0.92f * contentAlpha));
+    if (batteryFill > 0.f) {
+        ren.drawRoundedRect(
+            {1113.f, 50.f + lift * 0.25f, 29.f * batteryFill, 10.f},
+            batteryColor,
+            std::min(4.f, 14.5f * batteryFill)
+        );
+    }
+    ren.drawText(
+        batteryText,
+        {1185.f - batteryTextSize.x * 0.42f, 46.f + lift * 0.25f},
+        &m_fontSmall,
+        nxui::Color(0.88f, 0.94f, 1.f, 0.80f * contentAlpha),
+        0.84f
+    );
+    if (m_lockBatteryCharging) {
+        ren.drawLine(
+            {1160.f, 45.f + lift * 0.25f}, {1155.f, 54.f + lift * 0.25f},
+            nxui::Color(1.f, 0.78f, 0.30f, 0.88f * contentAlpha), 2.f
+        );
+        ren.drawLine(
+            {1155.f, 54.f + lift * 0.25f}, {1162.f, 54.f + lift * 0.25f},
+            nxui::Color(1.f, 0.78f, 0.30f, 0.88f * contentAlpha), 2.f
+        );
+        ren.drawLine(
+            {1162.f, 54.f + lift * 0.25f}, {1157.f, 64.f + lift * 0.25f},
+            nxui::Color(1.f, 0.78f, 0.30f, 0.88f * contentAlpha), 2.f
+        );
+    }
+
+    std::string timeText;
+    std::string dateText;
+    buildLockClockStrings(m_config.clockUse12Hour, timeText, dateText);
+
+    const std::string welcome = i18n.tr("lockscreen.welcome", "WELCOME BACK");
+    constexpr float welcomeScale = 0.72f;
+    const nxui::Vec2 welcomeSize = m_fontSmall.measure(welcome);
+    ren.drawText(
+        welcome,
+        {
+            640.f - welcomeSize.x * welcomeScale * 0.5f,
+            171.f + lift + (1.f - reveal) * 16.f
+        },
+        &m_fontSmall,
+        nxui::Color(0.62f, 0.76f, 1.f, 0.70f * contentAlpha),
+        welcomeScale
+    );
+
+    constexpr float timeScale = 3.15f;
+    const nxui::Vec2 timeSize = m_fontNormal.measure(timeText);
+    const float timeX = 640.f - timeSize.x * timeScale * 0.5f;
+    const float timeY = 207.f + lift + (1.f - reveal) * 22.f;
+    ren.drawText(
+        timeText,
+        {timeX + 2.2f, timeY + 3.2f},
+        &m_fontNormal,
+        nxui::Color(0.f, 0.f, 0.f, 0.30f * contentAlpha),
+        timeScale
+    );
+    ren.drawText(
+        timeText,
+        {timeX, timeY},
+        &m_fontNormal,
+        nxui::Color(0.94f, 0.97f, 1.f, 0.98f * contentAlpha),
+        timeScale
+    );
+    ren.drawText(
+        timeText,
+        {timeX + 0.8f, timeY},
+        &m_fontNormal,
+        nxui::Color(0.74f, 0.88f, 1.f, 0.34f * contentAlpha),
+        timeScale
+    );
+
+    constexpr float dateScale = 0.92f;
+    const nxui::Vec2 dateSize = m_fontSmall.measure(dateText);
+    ren.drawText(
+        dateText,
+        {640.f - dateSize.x * dateScale * 0.5f, 322.f + lift},
+        &m_fontSmall,
+        nxui::Color(0.76f, 0.83f, 0.96f, 0.70f * contentAlpha),
+        dateScale
+    );
+
+    // The three presses are represented as one constellation, not another lock method.
+    constexpr float nodeYBase = 438.f;
+    constexpr float nodeGap = 82.f;
+    const float nodeY = nodeYBase + lift;
+    const float firstNodeX = 640.f - nodeGap;
+    const float lineY = nodeY;
+    ren.drawLine(
+        {firstNodeX, lineY},
+        {firstNodeX + nodeGap * 2.f, lineY},
+        nxui::Color(0.42f, 0.58f, 0.88f, 0.18f * contentAlpha),
+        2.f
+    );
+
+    if (m_lockPressCount > 1) {
+        const float completedWidth = nodeGap * static_cast<float>(m_lockPressCount - 1);
+        ren.drawLine(
+            {firstNodeX, lineY},
+            {firstNodeX + completedWidth, lineY},
+            nxui::Color(0.45f, 0.82f, 1.f, 0.72f * contentAlpha),
+            3.f
+        );
+    }
+
+    for (int i = 0; i < 3; ++i) {
+        const float x = firstNodeX + nodeGap * static_cast<float>(i);
+        const bool completed = i < m_lockPressCount;
+        const bool next = i == m_lockPressCount && !m_lockScreenUnlocking;
+        const float localPulse = next ? (0.72f + 0.28f * breathe) : 1.f;
+        const float flash = completed && i == m_lockPressCount - 1 ? m_lockPressFlash : 0.f;
+
+        if (next || flash > 0.f) {
+            ren.drawCircle(
+                {x, nodeY},
+                24.f + flash * 10.f,
+                nxui::Color(0.40f, 0.72f, 1.f, (0.045f + flash * 0.075f) * contentAlpha),
+                48
+            );
+        }
+
+        ren.drawCircle(
+            {x, nodeY},
+            13.5f,
+            nxui::Color(0.01f, 0.02f, 0.08f, 0.80f * contentAlpha),
+            40
+        );
+        ren.drawCircle(
+            {x, nodeY},
+            completed ? 9.5f + flash * 1.8f : 7.5f * localPulse,
+            completed
+                ? nxui::Color(0.47f, 0.84f, 1.f, 0.98f * contentAlpha)
+                : nxui::Color(0.62f, 0.70f, 0.92f, (next ? 0.30f : 0.14f) * contentAlpha),
+            36
+        );
+        if (completed) {
+            ren.drawCircle(
+                {x - 2.6f, nodeY - 3.2f},
+                3.1f,
+                nxui::Color(0.95f, 0.99f, 1.f, 0.60f * contentAlpha),
+                20
+            );
+        }
+    }
+
+    // Compact glass action bar.
+    const nxui::Rect actionPanel = {
+        430.f,
+        505.f + lift + unlock * 18.f,
+        420.f,
+        82.f
+    };
+    ren.drawRoundedRect(
+        {actionPanel.x, actionPanel.y + 8.f, actionPanel.width, actionPanel.height},
+        nxui::Color(0.f, 0.f, 0.f, 0.25f * contentAlpha),
+        41.f
     );
 
     nxui::LiquidGlassSettings savedGlass = ren.liquidGlassSettings();
     auto& glass = ren.liquidGlassSettings();
-    glass.refractionIntensity = 0.022f;
-    glass.blurIntensity = 0.16f;
-    glass.noiseIntensity = 0.0f;
-    glass.glowIntensity = 0.055f + 0.018f * breathe;
+    glass.refractionIntensity = 0.020f;
+    glass.blurIntensity = 0.13f;
+    glass.noiseIntensity = 0.f;
+    glass.glowIntensity = 0.040f + 0.020f * breathe;
     glass.saturation = 1.02f;
-    glass.opacityMultiplier = 1.0f;
-    glass.roughness = 0.006f;
-    glass.powerFactor = 18.0f;
-
+    glass.opacityMultiplier = 1.f;
+    glass.roughness = 0.005f;
+    glass.powerFactor = 18.f;
     ren.drawLiquidGlass(
         0,
-        panel,
-        34.f,
-        nxui::Color(0.12f, 0.16f, 0.36f, 0.34f * opacity),
-        0.90f * opacity,
-        0.07f
+        actionPanel,
+        41.f,
+        nxui::Color(0.10f, 0.14f, 0.32f, 0.30f * contentAlpha),
+        0.92f * contentAlpha,
+        0.06f
     );
     ren.liquidGlassSettings() = savedGlass;
-
     ren.drawRoundedRectOutline(
-        panel.shrunk(1.5f),
-        nxui::Color(
-            0.72f, 0.84f, 1.00f,
-            (0.20f + 0.055f * breathe) * opacity
-        ),
-        32.5f,
-        1.8f
+        actionPanel.shrunk(1.2f),
+        nxui::Color(0.68f, 0.82f, 1.f, (0.15f + 0.05f * breathe) * contentAlpha),
+        39.8f,
+        1.4f
     );
 
-    const std::string title = "Écran verrouillé";
-    const nxui::Vec2 titleSize = m_fontNormal.measure(title);
-    constexpr float titleScale = 1.26f;
-    ren.drawText(
-        title,
-        {
-            panel.x + (panel.width - titleSize.x * titleScale) * 0.5f,
-            panel.y + 42.f
-        },
-        &m_fontNormal,
-        m_theme.textPrimary.withAlpha(0.96f * opacity),
-        titleScale
+    const nxui::Vec2 buttonCenter = {474.f, actionPanel.y + actionPanel.height * 0.5f};
+    ren.drawCircle(
+        buttonCenter,
+        25.f + 2.f * breathe,
+        nxui::Color(0.34f, 0.72f, 1.f, 0.12f * contentAlpha),
+        44
     );
-
-    const std::string instruction = "Appuyez trois fois sur A";
-    const nxui::Vec2 instructionSize = m_fontSmall.measure(instruction);
-    constexpr float instructionScale = 0.92f;
-    ren.drawText(
-        instruction,
-        {
-            panel.x + (panel.width - instructionSize.x * instructionScale) * 0.5f,
-            panel.y + 102.f
-        },
-        &m_fontSmall,
-        m_theme.textSecondary.withAlpha(0.88f * opacity),
-        instructionScale
+    ren.drawCircle(
+        buttonCenter,
+        21.f,
+        nxui::Color(0.10f, 0.20f, 0.42f, 0.78f * contentAlpha),
+        44
     );
 
     const std::string aGlyph = buttonGlyph(nxui::Button::A);
+    constexpr float glyphScale = 1.06f;
     const nxui::Vec2 glyphSize = m_fontIcons.measure(aGlyph);
-    constexpr float glyphScale = 1.32f;
     ren.drawText(
         aGlyph,
         {
-            panel.x + (panel.width - glyphSize.x * glyphScale) * 0.5f,
-            panel.y + 138.f
+            buttonCenter.x - glyphSize.x * glyphScale * 0.5f,
+            buttonCenter.y - glyphSize.y * glyphScale * 0.5f
         },
         &m_fontIcons,
-        nxui::Color(
-            0.88f, 0.95f, 1.00f,
-            (0.84f + 0.12f * breathe) * opacity
-        ),
+        nxui::Color(0.92f, 0.97f, 1.f, 0.94f * contentAlpha),
         glyphScale
     );
 
-    constexpr float circleRadius = 13.f;
-    constexpr float circleGap = 56.f;
-    const float firstCircleX = panel.x + panel.width * 0.5f - circleGap;
-    const float circleY = panel.y + 232.f;
+    const std::string instruction = i18n.tr("lockscreen.instruction", "Press A three times");
+    constexpr float instructionScale = 0.90f;
+    const nxui::Vec2 instructionSize = m_fontSmall.measure(instruction);
+    ren.drawText(
+        instruction,
+        {518.f, actionPanel.y + 20.f},
+        &m_fontSmall,
+        nxui::Color(0.92f, 0.96f, 1.f, 0.91f * contentAlpha),
+        instructionScale
+    );
 
-    for (int i = 0; i < 3; ++i) {
-        const float x = firstCircleX + i * circleGap;
-        const bool completed = i < m_lockPressCount;
-        const bool next = i == m_lockPressCount && !m_lockScreenUnlocking;
+    char progressBuffer[16] = {};
+    std::snprintf(progressBuffer, sizeof(progressBuffer), "%d / 3", m_lockPressCount);
+    const std::string progressText = progressBuffer;
+    constexpr float progressScale = 0.72f;
+    ren.drawText(
+        progressText,
+        {518.f, actionPanel.y + 49.f},
+        &m_fontSmall,
+        nxui::Color(0.54f, 0.72f, 0.96f, 0.70f * contentAlpha),
+        progressScale
+    );
 
-        ren.drawCircle(
-            {x, circleY},
-            circleRadius + 4.f,
-            nxui::Color(0.02f, 0.04f, 0.12f, 0.64f * opacity),
-            32
+    // Unlock flash: the constellation opens into the HOME instead of cutting away.
+    if (m_lockScreenUnlocking) {
+        const float flashT = std::sin(std::min(1.f, m_lockUnlockProgress * 1.35f) * 3.14159265f);
+        const float ringRadius = 42.f + 430.f * lockEaseOutCubic(m_lockUnlockProgress);
+        drawLockArc(
+            ren,
+            orbitCenter,
+            ringRadius,
+            0.f,
+            6.28318530f,
+            nxui::Color(0.70f, 0.90f, 1.f, 0.30f * flashT * opacity),
+            2.4f,
+            104
         );
-
         ren.drawCircle(
-            {x, circleY},
-            circleRadius,
-            completed
-                ? nxui::Color(0.30f, 0.68f, 1.00f, 0.96f * opacity)
-                : nxui::Color(
-                    0.58f, 0.68f, 0.86f,
-                    (next ? 0.22f + 0.12f * breathe : 0.14f) * opacity
-                  ),
-            32
+            orbitCenter,
+            32.f + 220.f * lockEaseOutCubic(m_lockUnlockProgress),
+            nxui::Color(0.72f, 0.90f, 1.f, 0.055f * flashT * opacity),
+            96
         );
-
-        if (completed) {
-            ren.drawCircle(
-                {x, circleY - 3.f},
-                circleRadius * 0.42f,
-                nxui::Color(0.82f, 0.94f, 1.00f, 0.42f * opacity),
-                24
-            );
-        }
     }
 }
 
