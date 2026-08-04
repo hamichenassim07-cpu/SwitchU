@@ -258,6 +258,7 @@ private:
     float m_lockBatteryPollTimer = 0.f;
     uint32_t m_lockBatteryPercent = 100;
     bool m_lockBatteryCharging = false;
+    int m_lockGreetingIndex = 0;
 
     int  m_deferredRefreshFrames = 0;
     bool m_refreshQueued         = false;
