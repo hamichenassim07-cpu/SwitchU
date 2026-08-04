@@ -6,8 +6,8 @@
 namespace {
 constexpr int kVisibleIcons = 4;
 constexpr int kTrailingEmptySlots = 4;
-constexpr float kLargeIconSize = 240.f;
-constexpr float kLargeIconGap = 24.f;
+constexpr float kLargeIconSize = 255.f;
+constexpr float kLargeIconGap = 34.f;
 }
 
 IconGrid::IconGrid() {
