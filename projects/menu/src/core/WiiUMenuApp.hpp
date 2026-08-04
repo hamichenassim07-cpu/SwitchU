@@ -250,6 +250,12 @@ private:
     float m_lockPressResetTimer = 0.f;
     float m_lockScreenPulse = 0.f;
     float m_lockScreenOpacity = 1.f;
+    float m_lockScreenReveal = 0.f;
+    float m_lockUnlockProgress = 0.f;
+    float m_lockPressFlash = 0.f;
+    float m_lockBatteryPollTimer = 0.f;
+    uint32_t m_lockBatteryPercent = 100;
+    bool m_lockBatteryCharging = false;
 
     int  m_deferredRefreshFrames = 0;
     bool m_refreshQueued         = false;
