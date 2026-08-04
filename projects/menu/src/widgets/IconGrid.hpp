@@ -62,12 +62,12 @@ private:
     nxui::FocusManager m_focus;
 
     int m_visibleCols = 4;
-    int m_displayCount = 1;
+    int m_displayCount = 0;
     int m_windowStart = 0;
 
     float m_cellW = 255.f;
     float m_cellH = 255.f;
-    float m_padX = 34.f;
+    float m_padX = 12.f;
     float m_originX = 0.f;
     float m_originY = 0.f;
 
