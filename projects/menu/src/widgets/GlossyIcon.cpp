@@ -17,7 +17,7 @@ GlossyIcon::GlossyIcon() {
 
 void GlossyIcon::onFocusGained() {
     m_focused = true;
-    m_focusScale.set(1.075f, 0.18f, nxui::Easing::outBack);
+    m_focusScale.set(1.12f, 0.20f, nxui::Easing::outBack);
     m_focusGlow.set(1.f, 0.16f, nxui::Easing::outCubic);
 }
 
