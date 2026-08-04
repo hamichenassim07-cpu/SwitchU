@@ -6,6 +6,7 @@
 #include <nxui/core/Input.hpp>
 #include <nxui/focus/FocusManager.hpp>
 #include <switch.h>
+#include <cstdlib>
 
 namespace nxui {
 
@@ -99,30 +100,30 @@ void Application::dispatchInput() {
     }
 
     // Debounced D-pad and stick navigation with horizontal hold-repeat.
-    // A short press still moves once. Holding left/right starts repeating
-    // after about 0.33 s, then repeats about every 0.08 s.
+    // V6: right stick acts as a faster horizontal scroll.
     static int s_horizontalHoldFrames = 0;
     static int s_horizontalHeldDir = 0;
 
     const bool leftDown =
         m_input.isDown(Button::DLeft) ||
-        m_input.isDown(Button::LStickL) ||
-        m_input.isDown(Button::RStickL);
+        m_input.isDown(Button::LStickL);
 
     const bool rightDown =
         m_input.isDown(Button::DRight) ||
-        m_input.isDown(Button::LStickR) ||
-        m_input.isDown(Button::RStickR);
+        m_input.isDown(Button::LStickR);
 
     const bool leftHeld =
         m_input.isHeld(Button::DLeft) ||
-        m_input.isHeld(Button::LStickL) ||
-        m_input.isHeld(Button::RStickL);
+        m_input.isHeld(Button::LStickL);
 
     const bool rightHeld =
         m_input.isHeld(Button::DRight) ||
-        m_input.isHeld(Button::LStickR) ||
-        m_input.isHeld(Button::RStickR);
+        m_input.isHeld(Button::LStickR);
+
+    const bool fastLeftDown = m_input.isDown(Button::RStickL);
+    const bool fastRightDown = m_input.isDown(Button::RStickR);
+    const bool fastLeftHeld = m_input.isHeld(Button::RStickL);
+    const bool fastRightHeld = m_input.isHeld(Button::RStickR);
 
     bool repeatLeft = false;
     bool repeatRight = false;
@@ -131,24 +132,43 @@ void Application::dispatchInput() {
         (leftHeld && !rightHeld) ? -1 :
         (rightHeld && !leftHeld) ? 1 : 0;
 
-    if (leftDown) {
+    const int fastHeldDir =
+        (fastLeftHeld && !fastRightHeld) ? -1 :
+        (fastRightHeld && !fastLeftHeld) ? 1 : 0;
+
+    if (fastLeftDown) {
+        s_horizontalHeldDir = -2;
+        s_horizontalHoldFrames = 8;
+    } else if (fastRightDown) {
+        s_horizontalHeldDir = 2;
+        s_horizontalHoldFrames = 8;
+    } else if (leftDown) {
         s_horizontalHeldDir = -1;
         s_horizontalHoldFrames = 20;
     } else if (rightDown) {
         s_horizontalHeldDir = 1;
         s_horizontalHoldFrames = 20;
-    } else if (heldDir == 0) {
+    } else if (fastHeldDir == 0 && heldDir == 0) {
         s_horizontalHeldDir = 0;
         s_horizontalHoldFrames = 0;
-    } else if (heldDir != s_horizontalHeldDir) {
-        s_horizontalHeldDir = heldDir;
-        s_horizontalHoldFrames = 20;
-    } else if (s_horizontalHoldFrames > 0) {
-        --s_horizontalHoldFrames;
     } else {
-        repeatLeft = (heldDir < 0);
-        repeatRight = (heldDir > 0);
-        s_horizontalHoldFrames = 5;
+        const int wantedDir =
+            (fastHeldDir != 0) ? fastHeldDir : heldDir;
+
+        const int wantedDelay =
+            (std::abs(wantedDir) == 2) ? 8 : 20;
+
+        if (wantedDir != s_horizontalHeldDir) {
+            s_horizontalHeldDir = wantedDir;
+            s_horizontalHoldFrames = wantedDelay;
+        } else if (s_horizontalHoldFrames > 0) {
+            --s_horizontalHoldFrames;
+        } else {
+            repeatLeft = (wantedDir < 0);
+            repeatRight = (wantedDir > 0);
+            s_horizontalHoldFrames =
+                (std::abs(wantedDir) == 2) ? 2 : 5;
+        }
     }
 
     bool anyDpad =
@@ -163,8 +183,6 @@ void Application::dispatchInput() {
     if (m_navDebounce > 0) {
         --m_navDebounce;
     } else if (anyDpad) {
-        // Normal presses keep the original debounce. Repeated horizontal
-        // movement is timed by s_horizontalHoldFrames instead.
         m_navDebounce = (repeatLeft || repeatRight) ? 0 : 6;
 
         Widget* cur = fm.current();
@@ -187,7 +205,6 @@ void Application::dispatchInput() {
             if (!dpadDown && !leftStickDown && !rightStickDown)
                 return;
 
-            // Focused widget's action takes priority (no bubbling for D-pad).
             if (cur) {
                 if (dpadDown && cur->fireAction(static_cast<uint64_t>(dpad)))
                     return;
