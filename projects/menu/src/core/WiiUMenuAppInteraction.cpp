@@ -852,12 +852,7 @@ void WiiUMenuApp::handleTouch() {
             return nullptr;
 
         focusManager().setFocus(cur);
-        if (m_cursor) {
-            m_cursor->moveTo(cur->focusRect().expanded(4.f), 0.f);
-            m_cursor->setVisible(true);
-        } else {
-            updateCursor();
-        }
+        updateCursor();
 
         if (!isEditableIcon(cur))
             return nullptr;
