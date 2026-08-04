@@ -95,19 +95,22 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
     float focusGlow = m_focusGlow.value();
 
     if (focusGlow > 0.01f && s > 0.5f) {
-        float breathe = 0.5f + 0.5f * std::sin(m_suspendPulse * 1.8f + 0.4f);
+        // V5: the large coloured halo is now drawn by SelectionCursor.
+        // Keep only a very faint ambient bloom behind the selected cover.
+        const float breathe =
+            0.5f + 0.5f * std::sin(m_suspendPulse * 0.85f);
 
-        nxui::Color purple(
-            0.48f, 0.12f, 0.98f,
-            (0.055f + 0.025f * breathe) * focusGlow * a
+        ren.drawRoundedRect(
+            r.expanded(5.f + breathe),
+            nxui::Color(
+                0.40f,
+                0.10f,
+                0.78f,
+                (0.012f + 0.010f * breathe) *
+                    focusGlow * a
+            ),
+            rad + 6.f
         );
-        nxui::Color blue(
-            0.12f, 0.65f, 1.00f,
-            (0.040f + 0.020f * breathe) * focusGlow * a
-        );
-
-        ren.drawRoundedRect(r.expanded(10.f * focusGlow), purple, rad + 10.f);
-        ren.drawRoundedRect(r.expanded(6.f * focusGlow), blue, rad + 6.f);
     }
 
     if (m_isGameCard && !m_notLaunchable && s > 0.5f) {
@@ -173,9 +176,6 @@ void GlossyIcon::onRender(nxui::Renderer& ren) {
 }
 
 void GlossyIcon::onContentRender(nxui::Renderer& ren) {
-    if (!m_tex || !m_tex->valid())
-        return;
-
     float s = scale();
     float rad = cornerRadius();
     nxui::Rect r = m_rect;
@@ -191,7 +191,82 @@ void GlossyIcon::onContentRender(nxui::Renderer& ren) {
 
     float inset = 8.f * s;
     nxui::Rect texRect = r.shrunk(inset);
-    nxui::Color iconTint = nxui::Color::white().withAlpha(m_opacity);
+    float texRadius = std::max(2.f, rad - 3.f);
+
+    // V5: stronger frosted placeholder while an icon is empty or loading.
+    // It avoids a flat transparent square without using an aggressive blur.
+    if (!m_tex || !m_tex->valid()) {
+        const float breathe =
+            0.5f + 0.5f * std::sin(m_suspendPulse * 0.70f);
+
+        ren.drawRoundedRect(
+            texRect,
+            nxui::Color(
+                0.025f,
+                0.020f,
+                0.070f,
+                0.78f * m_opacity
+            ),
+            texRadius
+        );
+
+        ren.drawRoundedRect(
+            texRect.shrunk(5.f),
+            nxui::Color(
+                0.20f,
+                0.12f,
+                0.42f,
+                (0.070f + 0.025f * breathe) * m_opacity
+            ),
+            std::max(2.f, texRadius - 4.f)
+        );
+
+        ren.drawRoundedRect(
+            texRect.shrunk(14.f),
+            nxui::Color(
+                0.12f,
+                0.32f,
+                0.58f,
+                (0.040f + 0.018f * breathe) * m_opacity
+            ),
+            std::max(2.f, texRadius - 9.f)
+        );
+
+        ren.drawRoundedRectOutline(
+            texRect.shrunk(1.f),
+            nxui::Color(
+                0.70f,
+                0.62f,
+                1.00f,
+                0.16f * m_opacity
+            ),
+            std::max(2.f, texRadius - 1.f),
+            1.4f
+        );
+
+        // Soft central light gives the impression of deeper frosted glass.
+        const nxui::Vec2 center = {
+            texRect.x + texRect.width * 0.5f,
+            texRect.y + texRect.height * 0.5f
+        };
+
+        ren.drawCircle(
+            center,
+            texRect.width * (0.13f + 0.01f * breathe),
+            nxui::Color(
+                0.46f,
+                0.30f,
+                0.82f,
+                (0.055f + 0.020f * breathe) * m_opacity
+            ),
+            32
+        );
+
+        return;
+    }
+
+    nxui::Color iconTint =
+        nxui::Color::white().withAlpha(m_opacity);
 
     if (m_notLaunchable) {
         iconTint.r = 0.80f;
@@ -199,5 +274,43 @@ void GlossyIcon::onContentRender(nxui::Renderer& ren) {
         iconTint.b = 0.80f;
     }
 
-    ren.drawTextureRounded(m_tex, texRect, rad - 3.f, iconTint);
+    ren.drawTextureRounded(
+        m_tex,
+        texRect,
+        texRadius,
+        iconTint
+    );
+
+    // V5: extremely light breathing colour filter on the selected cover.
+    // The original artwork remains dominant.
+    const float focus = m_focusGlow.value();
+
+    if (focus > 0.01f && m_focused) {
+        const float breathe =
+            0.5f + 0.5f * std::sin(m_suspendPulse * 0.72f);
+
+        const float colourShift =
+            0.5f + 0.5f * std::sin(m_suspendPulse * 0.24f);
+
+        const nxui::Color purple(0.42f, 0.12f, 0.78f, 1.f);
+        const nxui::Color blue(0.08f, 0.48f, 0.92f, 1.f);
+
+        nxui::Color filter(
+            purple.r + (blue.r - purple.r) * colourShift,
+            purple.g + (blue.g - purple.g) * colourShift,
+            purple.b + (blue.b - purple.b) * colourShift,
+            1.f
+        );
+
+        const float filterAlpha =
+            (0.018f + 0.012f * breathe) *
+            focus *
+            m_opacity;
+
+        ren.drawRoundedRect(
+            texRect,
+            filter.withAlpha(filterAlpha),
+            texRadius
+        );
+    }
 }
