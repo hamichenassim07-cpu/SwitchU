@@ -19,6 +19,7 @@
 #include "widgets/ProgressDialog.hpp"
 #include "widgets/AppletButton.hpp"
 #include "widgets/PageIndicator.hpp"
+#include "widgets/LockScreenView.hpp"
 #include "widgets/UserAvatarButton.hpp"
 #include "settings/SettingsScreen.hpp"
 #include "themeshop/ThemeShopScreen.hpp"
@@ -107,6 +108,12 @@ private:
     void showLockScreen();
     void handleLockScreen(float dt);
     void renderLockScreen(nxui::Renderer& ren);
+    void prepareLockScreenView();
+    void rememberLaunchUser(AccountUid uid);
+    std::string resolveLockProfileName(bool hasSuspendedGame) const;
+    std::string buildAdaptiveLockGreeting(bool hasSuspendedGame,
+                                          const std::string& profileName,
+                                          const std::string& gameTitle) const;
     std::shared_ptr<GlossyIcon> makeIcon(const AppEntry& entry);
     void wireFocusCallback();
     void wireGlobalActions();
@@ -172,6 +179,7 @@ private:
     std::shared_ptr<BatteryWidget>     m_battery;
     std::shared_ptr<TitlePillWidget>   m_titlePill;
     std::shared_ptr<PageIndicator>     m_pageIndicator;
+    std::shared_ptr<LockScreenView>    m_lockScreenView;
     std::shared_ptr<LaunchAnimation>   m_launchAnim;
     std::shared_ptr<OverlayDialog>     m_userSelect;
     std::shared_ptr<OverlayDialog>     m_dialog;
@@ -259,6 +267,10 @@ private:
     uint32_t m_lockBatteryPercent = 100;
     bool m_lockBatteryCharging = false;
     int m_lockGreetingIndex = 0;
+    int m_lockPinnedIconIndex = -1;
+    AccountUid m_lastLaunchUid = {};
+    bool m_lastLaunchUidValid = false;
+    std::string m_lastLaunchProfileName;
 
     int  m_deferredRefreshFrames = 0;
     bool m_refreshQueued         = false;
