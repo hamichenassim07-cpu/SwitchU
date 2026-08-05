@@ -1,0 +1,79 @@
+#pragma once
+
+#include <nxui/widgets/Widget.hpp>
+#include <nxui/widgets/GlassPanel.hpp>
+#include <nxui/core/Font.hpp>
+#include <nxui/core/Texture.hpp>
+#include <nxui/Theme.hpp>
+#include "BatteryWidget.hpp"
+#include "GlossyIcon.hpp"
+#include "TitlePillWidget.hpp"
+#include "LockPressIndicator.hpp"
+#include <cstdint>
+#include <string>
+
+class LockScreenView : public nxui::Widget {
+public:
+    LockScreenView();
+
+    void setFonts(nxui::Font* normal,
+                  nxui::Font* small,
+                  nxui::Font* large,
+                  nxui::Font* medium,
+                  nxui::Font* icons);
+    void setTheme(const nxui::Theme* theme);
+    void setUse12HourClock(bool enabled) { m_use12Hour = enabled; }
+    void setGameCardTexture(nxui::Texture* texture);
+
+    void setSuspendedGame(nxui::Texture* texture,
+                          const std::string& title,
+                          std::uint64_t titleId,
+                          bool gameCard);
+    void clearSuspendedGame();
+    bool hasSuspendedGame() const { return m_hasGame; }
+
+    void setGreeting(const std::string& greeting) { m_greeting = greeting; }
+    void setBatteryStatus(std::uint32_t percentage, bool charging);
+    void setProgress(int progress, float flash);
+    void setTransition(float opacity,
+                       float reveal,
+                       float unlockProgress,
+                       float pulse,
+                       bool unlocking);
+
+protected:
+    void onUpdate(float dt) override;
+    void onRender(nxui::Renderer& ren) override;
+
+private:
+    void applyThemeToWidgets();
+
+    nxui::Font* m_fontNormal = nullptr;
+    nxui::Font* m_fontSmall = nullptr;
+    nxui::Font* m_fontLarge = nullptr;
+    nxui::Font* m_fontMedium = nullptr;
+    nxui::Font* m_fontIcons = nullptr;
+    const nxui::Theme* m_theme = nullptr;
+
+    nxui::GlassPanel m_infoPanel;
+    nxui::GlassPanel m_actionPanel;
+    BatteryWidget m_battery;
+    GlossyIcon m_gameIcon;
+    TitlePillWidget m_titlePill;
+    LockPressIndicator m_progress;
+
+    nxui::Texture* m_gameCardTexture = nullptr;
+    std::string m_gameTitle;
+    std::string m_greeting = "Bon retour.";
+    bool m_hasGame = false;
+    bool m_use12Hour = false;
+    std::uint32_t m_batteryPercent = 100;
+    bool m_batteryCharging = false;
+    int m_pressCount = 0;
+    float m_pressFlash = 0.f;
+    float m_viewOpacity = 1.f;
+    float m_reveal = 1.f;
+    float m_unlockProgress = 0.f;
+    float m_pulse = 0.f;
+    bool m_unlocking = false;
+};
