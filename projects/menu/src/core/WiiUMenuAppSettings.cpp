@@ -1175,6 +1175,9 @@ void WiiUMenuApp::applyTheme() {
     m_battery->setHighlightColor(m_theme.panelHighlight);
     m_battery->setTextColor(m_theme.textPrimary);
 
+    if (m_lockScreenView)
+        m_lockScreenView->setTheme(&m_theme);
+
     m_titlePill->setBaseColor(m_theme.panelBase);
     m_titlePill->setBorderColor(m_theme.panelBorder);
     m_titlePill->setHighlightColor(m_theme.panelHighlight);
