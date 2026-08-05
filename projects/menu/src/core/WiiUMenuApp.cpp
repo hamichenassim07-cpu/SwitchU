@@ -149,6 +149,46 @@ bool hexToAccountUid(const std::string& s, AccountUid& out) {
     return true;
 }
 
+static constexpr const char* kLastProfileUidPath =
+    "sdmc:/config/SwitchU/last_profile_uid.txt";
+
+std::string accountUidToHexString(AccountUid uid) {
+    if (!accountUidIsValid(&uid))
+        return {};
+    char buffer[33] = {};
+    std::snprintf(buffer,
+                  sizeof(buffer),
+                  "%016llX%016llX",
+                  static_cast<unsigned long long>(uid.uid[0]),
+                  static_cast<unsigned long long>(uid.uid[1]));
+    return buffer;
+}
+
+std::string nicknameForAccountUid(AccountUid uid) {
+    if (!accountUidIsValid(&uid))
+        return {};
+
+    AccountProfile profile{};
+    if (R_FAILED(accountGetProfile(&profile, uid)))
+        return {};
+
+    AccountUserData userData{};
+    AccountProfileBase base{};
+    std::string nickname;
+    if (R_SUCCEEDED(accountProfileGet(&profile, &userData, &base)))
+        nickname = base.nickname;
+    accountProfileClose(&profile);
+
+    while (!nickname.empty() &&
+           (nickname.back() == ' ' || nickname.back() == '\t' ||
+            nickname.back() == '\r' || nickname.back() == '\n')) {
+        nickname.pop_back();
+    }
+    if (nickname.size() > 20)
+        nickname.clear();
+    return nickname;
+}
+
 const char* safeTag(const nxui::Widget* widget) {
     if (!widget || widget->tag().empty())
         return "<none>";
@@ -433,7 +473,9 @@ void WiiUMenuApp::setTutorialStartupFade(bool enabled) {
 #ifdef SWITCHU_MENU
 void WiiUMenuApp::setStartupStatus(uint64_t suspendedTitleId, bool appRunning) {
     m_launcher.setStartupStatus(suspendedTitleId, appRunning);
-    m_skipStartupLock = appRunning && suspendedTitleId != 0;
+    // V5: the lockscreen must also appear when a game is suspended,
+    // so it can present the running game and the adapted greeting.
+    m_skipStartupLock = false;
 }
 #endif
 
@@ -976,6 +1018,7 @@ std::shared_ptr<GlossyIcon> WiiUMenuApp::makeIcon(const AppEntry& entry) {
             nxui::Color  base = m_theme.panelBase;
             nxui::Color  bord = m_theme.panelBorder;
             auto startLaunch = [this, fr, tex, cr, base, bord, tid](AccountUid uid) {
+                rememberLaunchUser(uid);
                 m_audio.playSfx(Sfx::LaunchGame);
                 m_launchAnim->start(fr, tex, cr, base, bord, tid, uid,
                     [this](uint64_t id, AccountUid u) { m_launcher.launchApplication(id, u); });
@@ -1116,6 +1159,18 @@ void WiiUMenuApp::buildGrid() {
     m_battery->setCornerRadius(m_theme.cellCornerRadius);
     m_battery->setForceLiquidGlass(true);
     m_battery->setBlurEnabled(false);
+
+    m_lockScreenView = std::make_shared<LockScreenView>();
+    m_lockScreenView->setRect({0.f, 0.f, 1280.f, 720.f});
+    m_lockScreenView->setFonts(&m_fontNormal,
+                               &m_fontSmall,
+                               &m_fontLockLarge,
+                               &m_fontLockMedium,
+                               &m_fontIcons);
+    m_lockScreenView->setTheme(&m_theme);
+    m_lockScreenView->setGameCardTexture(&m_gameCardTex);
+    m_lockScreenView->setUse12HourClock(m_config.clockUse12Hour);
+    m_lockScreenView->setVisible(false);
 
     buildUserAvatarBar();
 
@@ -1796,6 +1851,11 @@ void WiiUMenuApp::onUpdate(float dt) {
                     const uint32_t percent = switchu::smi::batteryPayloadPercentage(notif.payload);
                     const bool charging = switchu::smi::batteryPayloadCharging(notif.payload);
                     m_battery->setBatteryStatus(percent, charging);
+                    m_lockBatteryPercent = std::min<uint32_t>(percent, 100u);
+                    m_lockBatteryCharging = charging;
+                    if (m_lockScreenView)
+                        m_lockScreenView->setBatteryStatus(m_lockBatteryPercent,
+                                                           m_lockBatteryCharging);
                     DebugLog::log("[battery] daemon status percent=%u charging=%d",
                                   (unsigned)percent,
                                   charging ? 1 : 0);
@@ -2205,6 +2265,216 @@ void WiiUMenuApp::renderActionHintBar(nxui::Renderer& ren) {
     ren.popClipRect();
 }
 
+void WiiUMenuApp::rememberLaunchUser(AccountUid uid) {
+    if (!accountUidIsValid(&uid)) {
+        m_lastLaunchUid = {};
+        m_lastLaunchUidValid = false;
+        m_lastLaunchProfileName.clear();
+        std::error_code ec;
+        std::filesystem::remove(kLastProfileUidPath, ec);
+        return;
+    }
+
+    const std::string nickname = nicknameForAccountUid(uid);
+    if (nickname.empty())
+        return;
+
+    m_lastLaunchUid = uid;
+    m_lastLaunchUidValid = true;
+    m_lastLaunchProfileName = nickname;
+
+    const std::string uidHex = accountUidToHexString(uid);
+    if (!uidHex.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(AppConfig::kConfigDir, ec);
+        std::ofstream out(kLastProfileUidPath, std::ios::trunc);
+        if (out)
+            out << uidHex;
+    }
+
+    DebugLog::log("[lockscreen] remembered launch profile: %s",
+                  m_lastLaunchProfileName.c_str());
+}
+
+std::string WiiUMenuApp::resolveLockProfileName(bool hasSuspendedGame) const {
+    if (hasSuspendedGame && !m_lastLaunchProfileName.empty())
+        return m_lastLaunchProfileName;
+
+    if (hasSuspendedGame) {
+        std::ifstream in(kLastProfileUidPath);
+        std::string persistedUid;
+        if (in && (in >> persistedUid)) {
+            AccountUid uid{};
+            if (hexToAccountUid(persistedUid, uid)) {
+                const std::string nickname = nicknameForAccountUid(uid);
+                if (!nickname.empty())
+                    return nickname;
+            }
+        }
+    }
+
+    if (m_config.defaultProfileEnabled) {
+        AccountUid defaultUid{};
+        if (hexToAccountUid(m_config.defaultProfileUid, defaultUid)) {
+            const std::string nickname = nicknameForAccountUid(defaultUid);
+            if (!nickname.empty())
+                return nickname;
+        }
+    }
+
+    AccountUid silentUid{};
+    if (R_SUCCEEDED(accountTrySelectUserWithoutInteraction(&silentUid, false)) &&
+        accountUidIsValid(&silentUid)) {
+        const std::string nickname = nicknameForAccountUid(silentUid);
+        if (!nickname.empty())
+            return nickname;
+    }
+
+    AccountUid users[8] = {};
+    s32 count = 0;
+    if (R_SUCCEEDED(accountListAllUsers(users, 8, &count)) && count == 1)
+        return nicknameForAccountUid(users[0]);
+
+    if (!hasSuspendedGame && !m_lastLaunchProfileName.empty())
+        return m_lastLaunchProfileName;
+
+    return {};
+}
+
+std::string WiiUMenuApp::buildAdaptiveLockGreeting(
+    bool hasSuspendedGame,
+    const std::string& profileName,
+    const std::string& gameTitle) const {
+    static const std::array<const char*, 6> noGameGeneric = {{
+        "Bon retour.",
+        "Tout est prêt.",
+        "Prêt à jouer ?",
+        "À toi de choisir.",
+        "Une nouvelle session commence.",
+        "Que l'aventure commence."
+    }};
+    static const std::array<const char*, 6> gameGeneric = {{
+        "Prêt à reprendre ?",
+        "Ta partie t'attend.",
+        "Reprise en douceur.",
+        "Retour en jeu ?",
+        "L'aventure continue.",
+        "Là où tu t'étais arrêté."
+    }};
+
+    const std::uint64_t tick = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count()
+    );
+    const std::uint64_t seed = tick ^
+        (static_cast<std::uint64_t>(profileName.size()) << 17) ^
+        (static_cast<std::uint64_t>(gameTitle.size()) << 9) ^
+        (hasSuspendedGame ? 0x5A5A5A5Au : 0x13579BDFu);
+
+    const bool useProfile = !profileName.empty() && (seed % 3u != 0u);
+    if (useProfile) {
+        const std::size_t choice = static_cast<std::size_t>((seed / 3u) % 6u);
+        if (hasSuspendedGame) {
+            switch (choice) {
+                case 0: return "Ta partie t'attend, " + profileName + ".";
+                case 1: return "Prêt à reprendre, " + profileName + " ?";
+                case 2: return "On reprend, " + profileName + " ?";
+                case 3: return "L'aventure continue, " + profileName + ".";
+                case 4: return "Retour en jeu, " + profileName + " ?";
+                default: return "Reprise en douceur, " + profileName + ".";
+            }
+        }
+
+        switch (choice) {
+            case 0: return "Bon retour, " + profileName + ".";
+            case 1: return "Prêt à jouer, " + profileName + " ?";
+            case 2: return "À toi de choisir, " + profileName + ".";
+            case 3: return "Tout est prêt, " + profileName + ".";
+            case 4: return "Une nouvelle session, " + profileName + " ?";
+            default: return "Que choisis-tu, " + profileName + " ?";
+        }
+    }
+
+    if (hasSuspendedGame && !gameTitle.empty() &&
+        gameTitle.size() <= 18 && seed % 7u == 0u) {
+        return gameTitle + " t'attend.";
+    }
+
+    if (hasSuspendedGame)
+        return gameGeneric[static_cast<std::size_t>(seed % gameGeneric.size())];
+    return noGameGeneric[static_cast<std::size_t>(seed % noGameGeneric.size())];
+}
+
+void WiiUMenuApp::prepareLockScreenView() {
+    if (!m_lockScreenView)
+        return;
+
+    m_iconStreamer.clearPinnedIndex();
+    m_lockPinnedIconIndex = -1;
+    m_lockScreenView->clearSuspendedGame();
+
+    const uint64_t suspendedTitleId = m_launcher.suspendedTitleId();
+    const bool hasSuspendedGame = suspendedTitleId != 0;
+    std::string gameTitle;
+
+    if (hasSuspendedGame && m_grid) {
+        const int suspendedIndex = findTitleIndex(suspendedTitleId);
+        if (suspendedIndex >= 0 &&
+            suspendedIndex < static_cast<int>(m_grid->allIcons().size())) {
+            m_lockPinnedIconIndex = suspendedIndex;
+            m_iconStreamer.setPinnedIndex(suspendedIndex);
+
+            const int perPage = std::max(1, m_grid->iconsPerPage());
+            const int suspendedPage = suspendedIndex / perPage;
+            m_iconStreamer.onPageChanged(suspendedPage,
+                                         perPage,
+                                         app().gpu(),
+                                         app().renderer(),
+                                         m_grid->allIcons());
+
+            const auto& source = m_grid->allIcons()[(size_t)suspendedIndex];
+            if (source) {
+                gameTitle = source->title();
+                nxui::Texture* texture = source->texture();
+                if (texture && texture->valid()) {
+                    m_lockScreenView->setSuspendedGame(
+                        texture,
+                        gameTitle,
+                        source->titleId(),
+                        source->isGameCard()
+                    );
+                }
+            }
+        }
+    }
+
+    const std::string profileName = resolveLockProfileName(hasSuspendedGame);
+    const std::string greeting = buildAdaptiveLockGreeting(
+        hasSuspendedGame,
+        profileName,
+        gameTitle
+    );
+
+    m_lockScreenView->setTheme(&m_theme);
+    m_lockScreenView->setUse12HourClock(m_config.clockUse12Hour);
+    m_lockScreenView->setGameCardTexture(&m_gameCardTex);
+    m_lockScreenView->setGreeting(greeting);
+    m_lockScreenView->setBatteryStatus(m_lockBatteryPercent,
+                                       m_lockBatteryCharging);
+    m_lockScreenView->setProgress(m_lockPressCount, m_lockPressFlash);
+    m_lockScreenView->setTransition(m_lockScreenOpacity,
+                                    m_lockScreenReveal,
+                                    m_lockUnlockProgress,
+                                    m_lockScreenPulse,
+                                    m_lockScreenUnlocking);
+    m_lockScreenView->setVisible(true);
+
+    DebugLog::log("[lockscreen] prepared suspended=%d profile=%s greeting=%s icon=%d",
+                  hasSuspendedGame ? 1 : 0,
+                  profileName.empty() ? "<none>" : profileName.c_str(),
+                  greeting.c_str(),
+                  m_lockScreenView->hasSuspendedGame() ? 1 : 0);
+}
+
 void WiiUMenuApp::showLockScreen() {
     closeActiveOverlays();
 
@@ -2234,12 +2504,7 @@ void WiiUMenuApp::showLockScreen() {
     if (R_SUCCEEDED(psmGetChargerType(&charger)))
         m_lockBatteryCharging = charger != PsmChargerType_Unconnected;
 
-    const auto tick = static_cast<std::uint64_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count()
-    );
-    const auto& greetings = lockGreetings();
-    if (!greetings.empty())
-        m_lockGreetingIndex = static_cast<int>((tick / 1000ull) % greetings.size());
+    prepareLockScreenView();
 }
 
 void WiiUMenuApp::handleLockScreen(float dt) {
@@ -2258,7 +2523,23 @@ void WiiUMenuApp::handleLockScreen(float dt) {
         PsmChargerType charger = PsmChargerType_Unconnected;
         if (R_SUCCEEDED(psmGetChargerType(&charger)))
             m_lockBatteryCharging = charger != PsmChargerType_Unconnected;
+
+        if (m_lockScreenView)
+            m_lockScreenView->setBatteryStatus(m_lockBatteryPercent,
+                                               m_lockBatteryCharging);
     }
+
+    auto syncView = [this, dt]() {
+        if (!m_lockScreenView)
+            return;
+        m_lockScreenView->setProgress(m_lockPressCount, m_lockPressFlash);
+        m_lockScreenView->setTransition(m_lockScreenOpacity,
+                                        m_lockScreenReveal,
+                                        m_lockUnlockProgress,
+                                        m_lockScreenPulse,
+                                        m_lockScreenUnlocking);
+        m_lockScreenView->update(dt);
+    };
 
     if (m_lockScreenUnlocking) {
         constexpr float kUnlockDuration = 0.72f;
@@ -2267,8 +2548,23 @@ void WiiUMenuApp::handleLockScreen(float dt) {
             m_lockUnlockProgress + dt / kUnlockDuration
         );
         m_lockScreenOpacity = 1.f - lockSmoothStep(m_lockUnlockProgress);
+        syncView();
 
         if (m_lockUnlockProgress >= 1.f) {
+            if (m_lockScreenView) {
+                m_lockScreenView->clearSuspendedGame();
+                m_lockScreenView->setVisible(false);
+            }
+            m_iconStreamer.clearPinnedIndex();
+            m_lockPinnedIconIndex = -1;
+            if (m_grid) {
+                m_iconStreamer.onPageChanged(m_grid->currentPage(),
+                                             std::max(1, m_grid->iconsPerPage()),
+                                             app().gpu(),
+                                             app().renderer(),
+                                             m_grid->allIcons());
+            }
+
             m_lockScreenActive = false;
             m_lockScreenUnlocking = false;
             m_lockPressCount = 0;
@@ -2289,8 +2585,10 @@ void WiiUMenuApp::handleLockScreen(float dt) {
         }
     }
 
-    if (!app().input().isDown(nxui::Button::A))
+    if (!app().input().isDown(nxui::Button::A)) {
+        syncView();
         return;
+    }
 
     ++m_lockPressCount;
     m_lockPressResetTimer = 1.55f;
@@ -2298,6 +2596,7 @@ void WiiUMenuApp::handleLockScreen(float dt) {
 
     if (m_lockPressCount < 3) {
         m_audio.playSfx(Sfx::Navigate);
+        syncView();
         return;
     }
 
@@ -2306,427 +2605,21 @@ void WiiUMenuApp::handleLockScreen(float dt) {
     m_lockScreenUnlocking = true;
     m_lockUnlockProgress = 0.f;
     m_audio.playSfx(Sfx::ConfirmPositive);
+    syncView();
 }
 
 void WiiUMenuApp::renderLockScreen(nxui::Renderer& ren) {
-    if (!m_lockScreenActive || m_lockScreenOpacity <= 0.f)
+    if (!m_lockScreenActive || m_lockScreenOpacity <= 0.f ||
+        !m_lockScreenView)
         return;
 
-    const float opacity = lockClamp01(m_lockScreenOpacity);
-    const float reveal = lockEaseOutCubic(m_lockScreenReveal);
-    const float unlock = lockSmoothStep(m_lockUnlockProgress);
-    const float breathe = 0.5f + 0.5f * std::sin(m_lockScreenPulse * 1.24f);
-    const float slowPulse = 0.5f + 0.5f * std::sin(m_lockScreenPulse * 0.40f);
-    const float chargePulse = m_lockBatteryCharging
-        ? 0.80f + 0.20f * (0.5f + 0.5f * std::sin(m_lockScreenPulse * 5.0f))
-        : 1.f;
-    const float lift = -22.f * unlock;
-    const float contentAlpha = opacity * reveal;
-
-    ren.drawGradientRect(
-        {0.f, 0.f, 1280.f, 720.f},
-        nxui::Color(0.008f, 0.010f, 0.028f, 0.98f * opacity),
-        nxui::Color(0.016f, 0.012f, 0.040f, 0.99f * opacity)
-    );
-    ren.drawRect(
-        {0.f, 0.f, 1280.f, 720.f},
-        nxui::Color(0.010f, 0.012f, 0.026f, 0.55f * opacity)
-    );
-    ren.drawGradientRect(
-        {0.f, 0.f, 1280.f, 720.f},
-        nxui::Color(0.115f, 0.055f, 0.210f, 0.10f * opacity),
-        nxui::Color(0.028f, 0.105f, 0.185f, 0.04f * opacity)
-    );
-
-    ren.drawCircle(
-        {188.f, 602.f + lift * 0.16f},
-        290.f,
-        nxui::Color(0.06f, 0.20f, 0.56f, (0.08f + 0.02f * slowPulse) * opacity),
-        88
-    );
-    ren.drawCircle(
-        {1108.f, 106.f + lift * 0.08f},
-        270.f,
-        nxui::Color(0.30f, 0.08f, 0.52f, (0.08f + 0.02f * breathe) * opacity),
-        88
-    );
-    ren.drawCircle(
-        {980.f, 606.f + lift * 0.06f},
-        220.f,
-        nxui::Color(0.24f, 0.08f, 0.42f, 0.055f * opacity),
-        72
-    );
-
-    const nxui::Vec2 artCenter = {310.f, 300.f + lift * 0.10f};
-    drawLockArc(
-        ren, artCenter, 258.f,
-        -2.95f, 1.98f,
-        nxui::Color(0.28f, 0.52f, 1.f, (0.18f + 0.05f * breathe) * contentAlpha), 2.2f, 110
-    );
-    drawLockArc(
-        ren, artCenter, 292.f,
-        -0.28f, 3.05f,
-        nxui::Color(0.84f, 0.42f, 1.f, (0.14f + 0.03f * slowPulse) * contentAlpha), 1.7f, 104
-    );
-    drawLockArc(
-        ren, artCenter, 344.f,
-        -2.60f, 0.55f,
-        nxui::Color(1.f, 0.76f, 0.28f, 0.10f * contentAlpha), 1.2f, 96
-    );
-
-    nxui::Texture* suspendedTexture = nullptr;
-    std::string suspendedTitle;
-    if (m_grid && m_launcher.suspendedTitleId() != 0) {
-        for (const auto& icon : m_grid->allIcons()) {
-            if (icon && icon->titleId() == m_launcher.suspendedTitleId()) {
-                suspendedTexture = icon->texture();
-                suspendedTitle = icon->title();
-                break;
-            }
-        }
-    }
-    const bool hasSuspendedApp = suspendedTexture && suspendedTexture->valid();
-
-    const nxui::Rect iconRect = {184.f, 166.f + lift * 0.10f, 252.f, 252.f};
-    ren.drawCircle(
-        artCenter,
-        176.f,
-        nxui::Color(0.02f, 0.04f, 0.12f, 0.92f * contentAlpha),
-        96
-    );
-    ren.drawCircle(
-        artCenter,
-        203.f,
-        nxui::Color(0.02f, 0.06f, 0.18f, (0.22f + 0.05f * breathe) * contentAlpha),
-        96
-    );
-    ren.drawCircle(
-        artCenter,
-        224.f + 8.f * breathe,
-        nxui::Color(0.14f, 0.38f, 0.98f, (0.06f + 0.05f * breathe) * contentAlpha),
-        96
-    );
-
-    if (hasSuspendedApp) {
-        ren.drawRoundedRect(
-            iconRect.expanded(16.f),
-            nxui::Color(0.05f, 0.10f, 0.24f, 0.28f * contentAlpha),
-            44.f
-        );
-        ren.drawRoundedRect(
-            iconRect,
-            nxui::Color(0.02f, 0.04f, 0.12f, 0.94f * contentAlpha),
-            34.f
-        );
-        ren.drawRoundedRectOutline(
-            iconRect,
-            nxui::Color(0.82f, 0.90f, 1.f, 0.16f * contentAlpha),
-            34.f,
-            1.5f
-        );
-        ren.drawTextureRounded(
-            suspendedTexture,
-            iconRect.shrunk(10.f),
-            24.f,
-            nxui::Color::white().withAlpha(0.98f * contentAlpha)
-        );
-    } else {
-        ren.drawRoundedRect(
-            iconRect,
-            nxui::Color(0.03f, 0.05f, 0.14f, 0.80f * contentAlpha),
-            34.f
-        );
-        ren.drawCircle(
-            artCenter,
-            84.f,
-            nxui::Color(0.20f, 0.22f, 0.70f, 0.20f * contentAlpha),
-            64
-        );
-        drawLockArc(
-            ren, artCenter, 112.f,
-            -1.55f, 1.20f,
-            nxui::Color(0.66f, 0.52f, 1.f, 0.24f * contentAlpha), 2.0f, 60
-        );
-    }
-
-    if (hasSuspendedApp) {
-        const nxui::Rect titlePill = {152.f, 446.f + lift * 0.10f, 316.f, 64.f};
-        ren.drawRoundedRect(
-            titlePill.expanded(4.f),
-            nxui::Color(0.18f, 0.28f, 0.72f, 0.08f * contentAlpha),
-            30.f
-        );
-        ren.drawRoundedRect(
-            titlePill,
-            nxui::Color(0.02f, 0.03f, 0.10f, 0.86f * contentAlpha),
-            28.f
-        );
-        ren.drawRoundedRectOutline(
-            titlePill,
-            nxui::Color(0.62f, 0.78f, 1.f, 0.18f * contentAlpha),
-            28.f,
-            1.2f
-        );
-        ren.drawText(
-            "Jeu suspendu",
-            {174.f, 458.f + lift * 0.10f},
-            &m_fontSmall,
-            nxui::Color(0.62f, 0.84f, 1.f, 0.86f * contentAlpha),
-            0.84f
-        );
-        if (!suspendedTitle.empty()) {
-            std::string appTitle = suspendedTitle;
-            if (appTitle.size() > 24)
-                appTitle = appTitle.substr(0, 24) + "…";
-            ren.drawText(
-                appTitle,
-                {174.f, 482.f + lift * 0.10f},
-                &m_fontLockMedium,
-                nxui::Color(0.96f, 0.98f, 1.f, 0.96f * contentAlpha),
-                0.60f
-            );
-        }
-    }
-
-    const nxui::Rect infoPanel = {610.f, 126.f + lift * 0.06f, 530.f, 348.f};
-    ren.drawRoundedRect(
-        infoPanel.expanded(8.f),
-        nxui::Color(0.16f, 0.22f, 0.64f, (0.07f + 0.03f * breathe) * contentAlpha),
-        46.f
-    );
-    ren.drawRoundedRect(
-        {infoPanel.x, infoPanel.y + 12.f, infoPanel.width, infoPanel.height},
-        nxui::Color(0.f, 0.f, 0.f, 0.28f * contentAlpha),
-        42.f
-    );
-    ren.drawRoundedRect(
-        infoPanel,
-        nxui::Color(0.02f, 0.03f, 0.10f, 0.88f * contentAlpha),
-        42.f
-    );
-    ren.drawRoundedRectOutline(
-        infoPanel,
-        nxui::Color(0.58f, 0.72f, 1.f, 0.16f * contentAlpha),
-        42.f,
-        1.5f
-    );
-
-    std::string timeText;
-    std::string dateText;
-    buildLockClockStrings(m_config.clockUse12Hour, timeText, dateText);
-    const std::string greeting = lockGreetingAt(m_lockGreetingIndex);
-
-    nxui::Font* timeFont = &m_fontLockLarge;
-    const float timeScale = 1.14f;
-    const nxui::Vec2 timeSize = timeFont->measure(timeText);
-    const float panelRight = infoPanel.right() - 50.f;
-    const float timeX = panelRight - timeSize.x * timeScale;
-    const float timeY = infoPanel.y + 38.f;
-    ren.drawText(
-        timeText,
-        {timeX + 3.0f, timeY + 4.0f},
-        timeFont,
-        nxui::Color(0.f, 0.f, 0.f, 0.30f * contentAlpha),
-        timeScale
-    );
-    ren.drawText(
-        timeText,
-        {timeX, timeY},
-        timeFont,
-        nxui::Color(0.97f, 0.98f, 1.f, 1.0f * contentAlpha),
-        timeScale
-    );
-
-    const float dateScale = 0.98f;
-    const nxui::Vec2 dateSize = m_fontLockMedium.measure(dateText);
-    ren.drawText(
-        dateText,
-        {panelRight - dateSize.x * dateScale, infoPanel.y + 128.f},
-        &m_fontLockMedium,
-        nxui::Color(0.84f, 0.88f, 0.98f, 0.90f * contentAlpha),
-        dateScale
-    );
-
-    const float greetScale = 0.98f;
-    const float greetY = infoPanel.y + 220.f;
-    std::vector<std::string> greetParts;
-    for (char ch : greeting) greetParts.push_back(std::string(1, ch));
-    float greetTotalW = 0.f;
-    for (const auto& part : greetParts)
-        greetTotalW += m_fontLockMedium.measure(part).x * greetScale;
-    float cursorX = panelRight - greetTotalW;
-    const nxui::Color gradA(0.18f, 0.76f, 1.f, 1.f);
-    const nxui::Color gradB(0.34f, 0.56f, 1.f, 1.f);
-    const nxui::Color gradC(0.76f, 0.38f, 1.f, 1.f);
-    const float denom = std::max(1.f, static_cast<float>(greetParts.size() - 1));
-    for (size_t i = 0; i < greetParts.size(); ++i) {
-        float t = static_cast<float>(i) / denom;
-        nxui::Color c;
-        if (t < 0.5f) {
-            float u = t / 0.5f;
-            c = nxui::Color(
-                gradA.r + (gradB.r - gradA.r) * u,
-                gradA.g + (gradB.g - gradA.g) * u,
-                gradA.b + (gradB.b - gradA.b) * u,
-                0.98f * contentAlpha
-            );
-        } else {
-            float u = (t - 0.5f) / 0.5f;
-            c = nxui::Color(
-                gradB.r + (gradC.r - gradB.r) * u,
-                gradB.g + (gradC.g - gradB.g) * u,
-                gradB.b + (gradC.b - gradB.b) * u,
-                0.98f * contentAlpha
-            );
-        }
-        ren.drawText(greetParts[i], {cursorX, greetY}, &m_fontLockMedium, c, greetScale);
-        cursorX += m_fontLockMedium.measure(greetParts[i]).x * greetScale;
-    }
-
-    char batteryBuffer[16] = {};
-    std::snprintf(batteryBuffer, sizeof(batteryBuffer), "%u %%", m_lockBatteryPercent);
-    const float batteryTextScale = 0.94f;
-    const float batteryY = infoPanel.y + 287.f;
-    const nxui::Rect batteryBody = {infoPanel.x + 246.f, batteryY + 2.f, 64.f, 30.f};
-    drawLockBatteryMicro(
-        ren,
-        batteryBody,
-        static_cast<float>(m_lockBatteryPercent) / 100.f,
-        m_lockBatteryCharging,
-        nxui::Color(0.98f, 0.98f, 1.f, 1.f),
-        m_lockBatteryPercent <= 20
-            ? nxui::Color(0.98f, 0.34f, 0.24f, 1.f)
-            : nxui::Color(0.96f, 0.96f, 1.f, 1.f),
-        0.98f * contentAlpha,
-        chargePulse
-    );
-    float batteryTextX = batteryBody.right() + 18.f;
-    ren.drawText(
-        batteryBuffer,
-        {batteryTextX, batteryY - 5.f},
-        &m_fontLockMedium,
-        nxui::Color(0.96f, 0.98f, 1.f, 0.96f * contentAlpha),
-        batteryTextScale
-    );
-    if (m_lockBatteryCharging) {
-        drawLockLightningBolt(
-            ren,
-            {batteryBody.right() + 80.f, batteryY - 2.f, 20.f, 26.f},
-            nxui::Color(1.f, 0.82f, 0.18f, 0.94f * contentAlpha * chargePulse),
-            nxui::Color(1.f, 0.66f, 0.10f, 0.80f * contentAlpha),
-            1.0f
-        );
-    }
-
-    const nxui::Rect actionPanel = {420.f, 584.f + lift + unlock * 8.f, 442.f, 76.f};
-    ren.drawRoundedRect(
-        actionPanel.expanded(5.f),
-        nxui::Color(0.24f, 0.14f, 0.56f, (0.06f + 0.02f * breathe) * contentAlpha),
-        34.f
-    );
-    ren.drawRoundedRect(
-        {actionPanel.x, actionPanel.y + 8.f, actionPanel.width, actionPanel.height},
-        nxui::Color(0.f, 0.f, 0.f, 0.22f * contentAlpha),
-        32.f
-    );
-    ren.drawRoundedRect(
-        actionPanel,
-        nxui::Color(0.02f, 0.03f, 0.10f, 0.84f * contentAlpha),
-        32.f
-    );
-    ren.drawRoundedRectOutline(
-        actionPanel,
-        nxui::Color(0.64f, 0.70f, 1.f, (0.14f + 0.03f * breathe) * contentAlpha),
-        32.f,
-        1.2f
-    );
-
-    const std::string instruction = "Appuie 3 fois sur";
-    const float instructionScale = 0.82f;
-    const nxui::Vec2 instructionSize = m_fontLockMedium.measure(instruction);
-    const float dotSpacing = 36.f;
-    const float dotsWidth = dotSpacing * 2.f + 16.f;
-    const float aCircleSize = 36.f;
-    const float gapTextToA = 16.f;
-    const float gapAToDots = 22.f;
-    const float groupWidth = instructionSize.x * instructionScale + gapTextToA + aCircleSize + gapAToDots + dotsWidth;
-    const float groupX = actionPanel.x + (actionPanel.width - groupWidth) * 0.5f;
-    const float centerY = actionPanel.y + actionPanel.height * 0.5f;
-
-    ren.drawText(
-        instruction,
-        {groupX, centerY - 15.f},
-        &m_fontLockMedium,
-        nxui::Color(0.96f, 0.98f, 1.f, 0.98f * contentAlpha),
-        instructionScale
-    );
-
-    const nxui::Vec2 aCenter = {groupX + instructionSize.x * instructionScale + gapTextToA + aCircleSize * 0.5f, centerY};
-    ren.drawCircle(
-        aCenter,
-        aCircleSize * 0.5f,
-        nxui::Color(0.98f, 0.99f, 1.f, 0.98f * contentAlpha),
-        36
-    );
-    ren.drawText(
-        "A",
-        {aCenter.x - 7.5f, aCenter.y - 14.0f},
-        &m_fontLockMedium,
-        nxui::Color(0.06f, 0.08f, 0.20f, 0.98f * contentAlpha),
-        0.64f
-    );
-
-    const float firstDotX = aCenter.x + aCircleSize * 0.5f + gapAToDots + 8.f;
-    for (int i = 0; i < 3; ++i) {
-        const bool completed = i < m_lockPressCount;
-        const bool next = i == m_lockPressCount && !m_lockScreenUnlocking;
-        const float flash = completed && i == m_lockPressCount - 1 ? m_lockPressFlash : 0.f;
-        const nxui::Vec2 dotCenter = {firstDotX + dotSpacing * i, centerY};
-        if (next || flash > 0.f) {
-            ren.drawCircle(
-                dotCenter,
-                15.f + flash * 4.f,
-                nxui::Color(0.34f, 0.72f, 1.f, (0.05f + flash * 0.05f) * contentAlpha),
-                24
-            );
-        }
-        ren.drawCircle(
-            dotCenter,
-            8.5f,
-            nxui::Color(0.16f, 0.18f, 0.26f, 0.92f * contentAlpha),
-            20
-        );
-        ren.drawCircle(
-            dotCenter,
-            completed ? 6.3f + flash * 1.2f : (next ? 5.2f + 0.6f * breathe : 4.8f),
-            completed
-                ? nxui::Color(0.48f, 0.86f, 1.f, 0.98f * contentAlpha)
-                : nxui::Color(0.48f, 0.54f, 0.68f, (next ? 0.34f : 0.18f) * contentAlpha),
-            18
-        );
-    }
-
-    if (m_lockScreenUnlocking) {
-        const float flashT = std::sin(std::min(1.f, m_lockUnlockProgress * 1.28f) * 3.14159265f);
-        const nxui::Vec2 waveCenter = {actionPanel.x + actionPanel.width * 0.5f, centerY};
-        const float waveRadius = 26.f + 430.f * lockEaseOutCubic(m_lockUnlockProgress);
-        drawLockArc(
-            ren,
-            waveCenter,
-            waveRadius,
-            0.f,
-            6.28318530f,
-            nxui::Color(0.72f, 0.90f, 1.f, 0.28f * flashT * opacity),
-            2.3f,
-            112
-        );
-        ren.drawCircle(
-            waveCenter,
-            24.f + 190.f * lockEaseOutCubic(m_lockUnlockProgress),
-            nxui::Color(0.62f, 0.82f, 1.f, 0.05f * flashT * opacity),
-            96
-        );
-    }
+    m_lockScreenView->setProgress(m_lockPressCount, m_lockPressFlash);
+    m_lockScreenView->setTransition(m_lockScreenOpacity,
+                                    m_lockScreenReveal,
+                                    m_lockUnlockProgress,
+                                    m_lockScreenPulse,
+                                    m_lockScreenUnlocking);
+    m_lockScreenView->render(ren);
 }
 
 void WiiUMenuApp::onRender
