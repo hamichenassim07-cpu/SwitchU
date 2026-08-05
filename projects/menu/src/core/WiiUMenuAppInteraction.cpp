@@ -1285,12 +1285,13 @@ void WiiUMenuApp::handleTouch() {
 void WiiUMenuApp::handleSystemAction(SysAction a) {
     switch (a) {
         case SysAction::HomeButton:
-            DebugLog::log("[pump] HomeButton -> UI update");
+            DebugLog::log("[pump] HomeButton -> lockscreen update");
             m_launcher.setAppHasForeground(false);
 
             markSuspendedIcon(m_launcher.suspendedTitleId());
             closeActiveOverlays();
             focusTitle(m_launcher.suspendedTitleId());
+            showLockScreen();
             break;
         case SysAction::WakeUp:
             DebugLog::log("[pump] WakeUp -> lockscreen");
