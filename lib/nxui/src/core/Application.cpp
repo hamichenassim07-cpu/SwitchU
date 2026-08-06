@@ -6,8 +6,14 @@
 #include <nxui/core/Input.hpp>
 #include <nxui/focus/FocusManager.hpp>
 #include <switch.h>
+#include <vector>
+#ifdef SWITCHU_MENU
+#include <switchu/file_log.hpp>
+#endif
 
 namespace nxui {
+
+Application* Application::s_current = nullptr;
 
 Application::~Application() {
     shutdown();
@@ -43,43 +49,48 @@ bool Application::applyPendingActivity() {
 }
 
 bool Application::initialize() {
-    if (!m_gpu.initialize()) return false;
+    s_current = this;
+    m_running = true;
+    m_renderEnabled = true;
+
+    if (!m_gpu.initialize()) {
+        s_current = nullptr;
+        return false;
+    }
 
     m_renderer = std::make_unique<Renderer>(m_gpu);
-    if (!m_renderer->initialize()) return false;
+    if (!m_renderer->initialize()) {
+        s_current = nullptr;
+        return false;
+    }
 
     m_input.initialize();
 
-    // Present one clean frame immediately so that stale framebuffer
-    // content from a previous process is never visible on screen.
+    // Present one clean frame immediately so stale framebuffer content from a
+    // previous process is never visible on screen.
     m_gpu.beginFrame();
     m_renderer->beginFrame();
     m_renderer->endFrame();
     m_gpu.endFrame();
 
     if (m_activity) {
-        // Set the root box to cover the entire screen
         m_activity->m_rootBox->setRect({0, 0, (float)m_gpu.width(), (float)m_gpu.height()});
-        if (!m_activity->onCreate()) return false;
+        if (!m_activity->onCreate()) {
+            s_current = nullptr;
+            return false;
+        }
     }
     return true;
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Automatic input dispatch
-// ══════════════════════════════════════════════════════════════════════════════
 
 void Application::dispatchInput() {
     if (!m_activity) return;
 
     Widget* root = m_activity->focusRoot();
-    if (!root) return;      // nullptr = all input blocked this frame
+    if (!root) return;
 
     auto& fm = m_activity->focusManager();
 
-    // Keep focus constrained to the currently active input root.
-    // Without this, stale focus from another UI layer (e.g. home grid while
-    // settings/dialog is active) can still receive A/button dispatches.
     auto isUnderRoot = [root](Widget* w) {
         for (Widget* it = w; it != nullptr; it = it->parent()) {
             if (it == root) return true;
@@ -98,9 +109,6 @@ void Application::dispatchInput() {
         }
     }
 
-    // Debounced D-pad and stick navigation with horizontal hold-repeat.
-    // A short press still moves once. Holding left/right starts repeating
-    // after about 0.33 s, then repeats about every 0.08 s.
     static int s_horizontalHoldFrames = 0;
     static int s_horizontalHeldDir = 0;
 
@@ -108,17 +116,14 @@ void Application::dispatchInput() {
         m_input.isDown(Button::DLeft) ||
         m_input.isDown(Button::LStickL) ||
         m_input.isDown(Button::RStickL);
-
     const bool rightDown =
         m_input.isDown(Button::DRight) ||
         m_input.isDown(Button::LStickR) ||
         m_input.isDown(Button::RStickR);
-
     const bool leftHeld =
         m_input.isHeld(Button::DLeft) ||
         m_input.isHeld(Button::LStickL) ||
         m_input.isHeld(Button::RStickL);
-
     const bool rightHeld =
         m_input.isHeld(Button::DRight) ||
         m_input.isHeld(Button::LStickR) ||
@@ -163,8 +168,6 @@ void Application::dispatchInput() {
     if (m_navDebounce > 0) {
         --m_navDebounce;
     } else if (anyDpad) {
-        // Normal presses keep the original debounce. Repeated horizontal
-        // movement is timed by s_horizontalHoldFrames instead.
         m_navDebounce = (repeatLeft || repeatRight) ? 0 : 6;
 
         Widget* cur = fm.current();
@@ -173,12 +176,10 @@ void Application::dispatchInput() {
                 m_input.isDown(dpad) ||
                 (dpad == Button::DLeft && repeatLeft) ||
                 (dpad == Button::DRight && repeatRight);
-
             bool leftStickDown =
                 m_input.isDown(leftStick) ||
                 (leftStick == Button::LStickL && repeatLeft) ||
                 (leftStick == Button::LStickR && repeatRight);
-
             bool rightStickDown =
                 m_input.isDown(rightStick) ||
                 (rightStick == Button::RStickL && repeatLeft) ||
@@ -186,8 +187,6 @@ void Application::dispatchInput() {
 
             if (!dpadDown && !leftStickDown && !rightStickDown)
                 return;
-
-            // Focused widget's action takes priority (no bubbling for D-pad).
             if (cur) {
                 if (dpadDown && cur->fireAction(static_cast<uint64_t>(dpad)))
                     return;
@@ -196,7 +195,6 @@ void Application::dispatchInput() {
                 if (rightStickDown && cur->fireAction(static_cast<uint64_t>(rightStick)))
                     return;
             }
-
             fm.navigate(dir, root);
         };
 
@@ -206,9 +204,6 @@ void Application::dispatchInput() {
         tryDir(Button::DDown,  Button::LStickD, Button::RStickD, FocusDirection::DOWN);
     }
 
-
-    // Dispatch non-D-pad actions with parent bubbling.
-    // Exclude D-pad buttons so they aren't fired a second time.
     constexpr uint64_t kDpadMask =
         static_cast<uint64_t>(Button::DLeft)   | static_cast<uint64_t>(Button::DRight)  |
         static_cast<uint64_t>(Button::DUp)     | static_cast<uint64_t>(Button::DDown)   |
@@ -225,24 +220,14 @@ void Application::dispatchInput() {
 
     uint64_t consumed = fm.dispatchActions(m_input, actionExcludeMask);
 
-    // Auto-activate with A.
-    // If the focused widget didn't register an explicit addAction(A, ...),
-    // fall through to the legacy activate() / setOnActivate() mechanism.
     if (!pointerConsumesA && !(consumed & kA) && m_input.isDown(Button::A)) {
         if (auto* w = fm.current())
             w->activate();
     }
 
-    // Touch-based focus navigation.
-    // Some screens own richer touch handling locally (drag/scroll/menus) and
-    // should not also receive the generic focus-manager tap model.
     if (root->frameworkTouchEnabled())
         fm.handleTouch(m_input, root);
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Main loop
-// ══════════════════════════════════════════════════════════════════════════════
 
 void Application::run() {
     uint64_t prevTick = armGetSystemTick();
@@ -265,35 +250,58 @@ void Application::run() {
             }
             m_activity->m_rootBox->update(dt);
 
-            if (m_renderEnabled) {
+            if (m_renderEnabled && m_running) {
                 m_gpu.beginFrame();
                 m_renderer->beginFrame();
                 m_activity->m_rootBox->render(*m_renderer);
                 m_activity->onRender(*m_renderer);
                 m_renderer->endFrame();
                 m_gpu.endFrame();
-            } else {
-                // Yield CPU while another app owns the foreground.
-                svcSleepThread(100000000LL); // 100 ms
+            } else if (m_running) {
+                svcSleepThread(100000000LL);
             }
         }
     }
 }
 
 void Application::shutdown() {
-    // Clear all pending animations before destroying the activity so that
-    // tween callbacks don't fire on already-destroyed widgets.
+    if (s_current != this && !m_renderer && !m_activity)
+        return;
+
+#ifdef SWITCHU_MENU
+    switchu::FileLog::log("[menu] shutdown begin");
+#endif
     AnimationManager::instance().clear();
+    m_renderEnabled = false;
+
+    // Critical V6.3 ordering: finish every submitted command before the
+    // Activity destroys textures that may still be referenced by the GPU.
+    // Previously this wait happened only inside GpuDevice::shutdown(), after
+    // m_activity.reset(), which could expose freed texture memory briefly.
+    m_gpu.waitIdle();
+#ifdef SWITCHU_MENU
+    switchu::FileLog::log("[menu] gpu idle before resource destruction");
+#endif
 
     m_input.shutdown();
 
     if (m_activity) {
         m_activity->onDestroy();
+#ifdef SWITCHU_MENU
+        switchu::FileLog::log("[menu] activity onDestroy complete");
+#endif
+        m_gpu.waitIdle();
         m_activity.reset();
     }
     m_pendingActivity.reset();
     m_renderer.reset();
     m_gpu.shutdown();
+#ifdef SWITCHU_MENU
+    switchu::FileLog::log("[menu] gpu shutdown complete");
+#endif
+
+    if (s_current == this)
+        s_current = nullptr;
 }
 
 } // namespace nxui
