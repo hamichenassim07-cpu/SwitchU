@@ -60,7 +60,6 @@ private:
     const nxui::Theme* m_theme = nullptr;
 
     nxui::GlassPanel m_profilePanel;
-    nxui::GlassPanel m_sessionPanel;
     LockPressIndicator m_progress;
 
     nxui::Texture* m_gameTexture = nullptr;
