@@ -20,35 +20,48 @@ nxui::Vec2 pointOnCircle(const nxui::Vec2& center, float radius, float angle) {
     };
 }
 
-// nxui does not expose a native stroked path, so the arc is approximated
-// with many very short line sections. V6.1 uses significantly more sections
-// than V6: the joins become nearly invisible on the real 720p display.
-void drawArc(nxui::Renderer& ren,
-             const nxui::Vec2& center,
-             float radius,
-             float startAngle,
-             float endAngle,
-             const nxui::Color& color,
-             float thickness,
-             int sections,
-             bool roundedCaps) {
-    if (radius <= 0.f || thickness <= 0.f)
+// Draws a genuine filled annular sector. Unlike the former implementation,
+// this does not build the arc from many neighbouring line strokes. Adjacent
+// triangles share the exact same vertices, so the body reads as one continuous
+// shape and cannot expose black gaps between short line segments.
+void drawFilledArc(nxui::Renderer& ren,
+                   const nxui::Vec2& center,
+                   float radius,
+                   float startAngle,
+                   float endAngle,
+                   const nxui::Color& color,
+                   float thickness,
+                   int sections,
+                   bool roundedCaps) {
+    if (radius <= 0.f || thickness <= 0.f || endAngle <= startAngle)
         return;
 
-    sections = std::max(24, sections);
-    nxui::Vec2 previous = pointOnCircle(center, radius, startAngle);
-    for (int i = 1; i <= sections; ++i) {
-        const float t = static_cast<float>(i) / static_cast<float>(sections);
-        const float angle = startAngle + (endAngle - startAngle) * t;
-        const nxui::Vec2 current = pointOnCircle(center, radius, angle);
-        ren.drawLine(previous, current, color, thickness);
-        previous = current;
+    sections = std::max(18, sections);
+    const float half = thickness * 0.5f;
+    const float innerRadius = std::max(0.5f, radius - half);
+    const float outerRadius = radius + half;
+
+    for (int i = 0; i < sections; ++i) {
+        const float t0 = static_cast<float>(i) / static_cast<float>(sections);
+        const float t1 = static_cast<float>(i + 1) / static_cast<float>(sections);
+        const float a0 = startAngle + (endAngle - startAngle) * t0;
+        const float a1 = startAngle + (endAngle - startAngle) * t1;
+
+        const nxui::Vec2 outer0 = pointOnCircle(center, outerRadius, a0);
+        const nxui::Vec2 outer1 = pointOnCircle(center, outerRadius, a1);
+        const nxui::Vec2 inner0 = pointOnCircle(center, innerRadius, a0);
+        const nxui::Vec2 inner1 = pointOnCircle(center, innerRadius, a1);
+
+        ren.drawTriangle(outer0, inner0, outer1, color);
+        ren.drawTriangle(inner0, inner1, outer1, color);
     }
 
     if (roundedCaps) {
-        const float capRadius = thickness * 0.50f;
-        ren.drawCircle(pointOnCircle(center, radius, startAngle), capRadius, color, 28);
-        ren.drawCircle(pointOnCircle(center, radius, endAngle), capRadius, color, 28);
+        const float capRadius = thickness * 0.5f;
+        ren.drawCircle(pointOnCircle(center, radius, startAngle),
+                       capRadius, color, 36);
+        ren.drawCircle(pointOnCircle(center, radius, endAngle),
+                       capRadius, color, 36);
     }
 }
 
@@ -67,8 +80,6 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
     const float radius = std::min(r.width, r.height) * 0.394f;
     const float breathe = 0.5f + 0.5f * std::sin(m_pulse * 1.70f);
 
-    // Activation order: cyan at the top, blue-violet on the left,
-    // then pink on the right.
     const std::array<RingSegment, 3> segments = {{
         {3.70f, 5.72f, nxui::Color(0.05f, 0.88f, 1.00f, 1.f)},
         {1.82f, 3.08f, nxui::Color(0.30f, 0.42f, 1.00f, 1.f)},
@@ -83,42 +94,34 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
             : 0.f;
         const RingSegment& segment = segments[static_cast<std::size_t>(i)];
 
-        // Slightly thicker inactive track than V6.
         const nxui::Color track = m_theme
-            ? m_theme->pageIndicator.withAlpha((0.17f + (next ? 0.045f * breathe : 0.f)) * alpha)
+            ? m_theme->pageIndicator.withAlpha(
+                  (0.18f + (next ? 0.055f * breathe : 0.f)) * alpha)
             : nxui::Color(0.22f, 0.27f, 0.48f,
-                          (0.17f + (next ? 0.045f * breathe : 0.f)) * alpha);
-        drawArc(ren, center, radius,
-                segment.startAngle, segment.endAngle,
-                track, 24.f, 128, true);
+                          (0.18f + (next ? 0.055f * breathe : 0.f)) * alpha);
+
+        // Slightly thicker than V6.1, but still restrained.
+        drawFilledArc(ren, center, radius,
+                      segment.startAngle, segment.endAngle,
+                      track, 26.f, 96, true);
 
         if (!active)
             continue;
 
-        const float flashBoost = 1.f + localFlash * 0.10f;
-        const nxui::Color activeColor = segment.color.withAlpha(
-            (0.92f + 0.08f * breathe) * alpha
-        );
+        const float flashBoost = 1.f + localFlash * 0.08f;
 
-        // One controlled bloom only. V6 used several wide strokes, which
-        // made the construction look visibly stacked.
-        drawArc(ren, center, radius,
-                segment.startAngle, segment.endAngle,
-                segment.color.withAlpha((0.085f + 0.045f * localFlash) * alpha),
-                49.f * flashBoost, 120, true);
+        // One soft bloom behind one solid body. No highlight stroke and no
+        // stack of several neighbouring outlines.
+        drawFilledArc(ren, center, radius,
+                      segment.startAngle, segment.endAngle,
+                      segment.color.withAlpha(
+                          (0.075f + 0.040f * localFlash) * alpha),
+                      45.f * flashBoost, 96, true);
 
-        // Main body: thicker, cleaner, and sampled with many more sections.
-        drawArc(ren, center, radius,
-                segment.startAngle, segment.endAngle,
-                activeColor, 31.f * flashBoost, 144, true);
-
-        // Narrow inner reflection, kept subtle so it does not read as a
-        // second stacked ring.
-        drawArc(ren, center, radius - 2.2f,
-                segment.startAngle + 0.018f,
-                segment.endAngle - 0.018f,
-                nxui::Color(0.90f, 0.98f, 1.f,
-                            (0.20f + 0.12f * localFlash) * alpha),
-                3.4f, 136, true);
+        drawFilledArc(ren, center, radius,
+                      segment.startAngle, segment.endAngle,
+                      segment.color.withAlpha(
+                          (0.94f + 0.06f * breathe) * alpha),
+                      33.f * flashBoost, 112, true);
     }
 }
