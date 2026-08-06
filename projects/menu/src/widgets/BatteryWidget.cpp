@@ -1,63 +1,41 @@
 #include "BatteryWidget.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <switch.h>
-#include <cstdio>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace {
 
-constexpr float kBatteryWidth = 58.f;
-constexpr float kBatteryHeight = 28.f;
-constexpr float kPercentageScale = 1.12f;
-
-nxui::Vec2 boltPoint(const nxui::Rect& r, float x, float y) {
-    return {
-        r.x + (x / 16.f) * r.width,
-        r.y + (y / 16.f) * r.height
-    };
-}
+constexpr float kBatteryWidth = 52.f;
+constexpr float kBatteryHeight = 25.f;
+constexpr float kBoltSlotWidth = 28.f;
+constexpr float kBatteryBoltGap = 10.f;
+constexpr float kTextGap = 7.f;
+constexpr float kPercentageScale = 1.00f;
 
 void drawLightningBolt(nxui::Renderer& ren,
-                       const nxui::Rect& r,
-                       const nxui::Color& fill,
-                       const nxui::Color& edge,
-                       float outlineThickness) {
-    nxui::Vec2 p0 = boltPoint(r, 4.732f, 7.95335f);
-    nxui::Vec2 p1 = boltPoint(r, 6.90908f, 2.f);
-    nxui::Vec2 p2 = boltPoint(r, 10.54547f, 2.f);
-    nxui::Vec2 p3 = boltPoint(r, 8.36364f, 7.01316f);
-    nxui::Vec2 p4 = boltPoint(r, 11.27275f, 7.01316f);
-    nxui::Vec2 p5 = boltPoint(r, 4.72725f, 14.f);
-    nxui::Vec2 p6 = boltPoint(r, 6.93656f, 7.95135f);
+                       const nxui::Rect& bolt,
+                       const nxui::Color& color) {
+    const nxui::Vec2 p0{bolt.x + 12.f, bolt.y + 1.f};
+    const nxui::Vec2 p1{bolt.x + 4.f, bolt.y + 15.f};
+    const nxui::Vec2 p2{bolt.x + 10.f, bolt.y + 15.f};
+    const nxui::Vec2 p3{bolt.x + 7.f, bolt.y + 27.f};
+    const nxui::Vec2 p4{bolt.x + 18.f, bolt.y + 11.f};
+    const nxui::Vec2 p5{bolt.x + 12.f, bolt.y + 11.f};
 
-    ren.drawTriangle(p0, p1, p2, fill);
-    ren.drawTriangle(p0, p2, p3, fill);
-    ren.drawTriangle(p0, p3, p6, fill);
-    ren.drawTriangle(p6, p3, p4, fill);
-    ren.drawTriangle(p6, p4, p5, fill);
-
-    if (outlineThickness > 0.f) {
-        ren.drawLine(p0, p1, edge, outlineThickness);
-        ren.drawLine(p1, p2, edge, outlineThickness);
-        ren.drawLine(p2, p3, edge, outlineThickness);
-        ren.drawLine(p3, p4, edge, outlineThickness);
-        ren.drawLine(p4, p5, edge, outlineThickness);
-        ren.drawLine(p5, p6, edge, outlineThickness);
-        ren.drawLine(p6, p0, edge, outlineThickness);
-    }
+    ren.drawTriangle(p0, p1, p5, color);
+    ren.drawTriangle(p1, p2, p5, color);
+    ren.drawTriangle(p2, p3, p4, color);
+    ren.drawTriangle(p2, p4, p5, color);
 }
 
 } // namespace
 
 void BatteryWidget::setBatteryStatus(uint32_t percentage,
                                      bool charging) {
-    if (percentage > 100)
-        percentage = 100;
-
-    m_level =
-        static_cast<float>(percentage) / 100.f;
-
+    percentage = std::min<uint32_t>(percentage, 100u);
+    m_level = static_cast<float>(percentage) / 100.f;
     m_charging = charging;
     m_timer = 0.f;
 }
@@ -72,332 +50,96 @@ void BatteryWidget::onContentUpdate(float dt) {
     m_timer = 0.f;
 
     u32 charge = 100;
-
-    if (R_SUCCEEDED(
-            psmGetBatteryChargePercentage(&charge))) {
-        if (charge > 100)
-            charge = 100;
-
+    if (R_SUCCEEDED(psmGetBatteryChargePercentage(&charge))) {
+        charge = std::min<u32>(charge, 100u);
         m_level = charge / 100.f;
     }
 
-    PsmChargerType ct =
-        PsmChargerType_Unconnected;
-
-    if (R_SUCCEEDED(psmGetChargerType(&ct)))
-        m_charging =
-            (ct != PsmChargerType_Unconnected);
+    PsmChargerType charger = PsmChargerType_Unconnected;
+    if (R_SUCCEEDED(psmGetChargerType(&charger)))
+        m_charging = charger != PsmChargerType_Unconnected;
 }
 
 void BatteryWidget::onContentRender(nxui::Renderer& ren) {
-    nxui::Rect cr = contentRect();
-    const float op = m_opacity;
+    const nxui::Rect cr = contentRect();
+    const float op = opacity();
+    const float level = std::clamp(m_level, 0.f, 1.f);
 
-    float level = std::clamp(m_level, 0.f, 1.f);
+    char buffer[16] = {};
+    std::snprintf(buffer, sizeof(buffer), "%d%%",
+                  static_cast<int>(std::round(level * 100.f)));
 
-    char buf[16];
-    std::snprintf(
-        buf,
-        sizeof(buf),
-        "%d%%",
-        static_cast<int>(level * 100)
-    );
+    const nxui::Vec2 measured = m_font
+        ? m_font->measure(buffer)
+        : nxui::Vec2{42.f, 18.f};
+    const float textW = measured.x * kPercentageScale;
+    const float textH = measured.y * kPercentageScale;
 
-    nxui::Vec2 textBase =
-        m_font
-            ? m_font->measure(buf)
-            : nxui::Vec2{42.f, 18.f};
+    const float fixedBatteryGroup = kBatteryWidth + kBatteryBoltGap + kBoltSlotWidth;
+    const float groupW = fixedBatteryGroup + kTextGap + textW;
+    const float groupH = std::max(kBatteryHeight, textH);
+    const float bx = cr.x + (cr.width - groupW) * 0.5f;
+    const float by = cr.y + (cr.height - groupH) * 0.5f +
+                     (groupH - kBatteryHeight) * 0.5f;
 
-    const float textW =
-        textBase.x * kPercentageScale;
+    const nxui::Rect body = {bx, by, kBatteryWidth, kBatteryHeight};
+    const nxui::Color edge = m_textColor.withAlpha(0.92f * op);
 
-    const float textH =
-        textBase.y * kPercentageScale;
+    // Same clean battery language as the V6.2 lockscreen.
+    ren.drawRoundedRectOutline(body, edge, 6.f, 1.9f);
+    ren.drawRoundedRect({body.right() + 2.5f, body.y + 7.f, 5.f, 11.f},
+                        edge.withAlpha(0.80f * op), 2.f);
 
-    const float bw = kBatteryWidth;
-    const float bh = kBatteryHeight;
-
-    const float boltSlotW =
-        m_charging ? 26.f : 0.f;
-
-    const float chargeGap =
-        m_charging ? 9.f : 0.f;
-
-    constexpr float kTextGap = 14.f;
-
-    const float batteryGroupW =
-        bw + chargeGap + boltSlotW;
-
-    const float groupW =
-        batteryGroupW + kTextGap + textW;
-
-    const float groupH =
-        std::max(bh, textH);
-
-    const float bx =
-        cr.x + (cr.width - groupW) * 0.5f;
-
-    const float by =
-        cr.y + (cr.height - groupH) * 0.5f +
-        (groupH - bh) * 0.5f;
-
-    nxui::Rect body = {bx, by, bw, bh};
-    const float radius = bh * 0.44f;
-
-    nxui::Color shell =
-        m_textColor.withAlpha(0.22f * op);
-
-    nxui::Color shellTop =
-        nxui::Color::white().withAlpha(0.18f * op);
-
-    nxui::Color shellEdge =
-        m_textColor.withAlpha(0.66f * op);
-
-    nxui::Color terminal =
-        m_textColor.withAlpha(0.48f * op);
-
-    ren.drawRoundedRect(body, shell, radius);
-
-    ren.drawRoundedRect(
-        {
-            body.x + 2.4f,
-            body.y + 2.2f,
-            body.width - 4.8f,
-            body.height * 0.42f
-        },
-        shellTop,
-        radius * 0.72f
-    );
-
-    ren.drawRoundedRectOutline(
-        body,
-        shellEdge,
-        radius,
-        1.65f
-    );
-
-    ren.drawRoundedRect(
-        {
-            body.right() + 2.f,
-            body.y + bh * 0.32f,
-            5.6f,
-            bh * 0.36f
-        },
-        terminal,
-        2.8f
-    );
-
-    const float chargePulse =
-        m_charging
-            ? 0.74f +
-                0.26f *
-                (0.5f +
-                 0.5f *
-                 std::sin(m_chargeAnim * 5.2f))
-            : 1.f;
-
-    nxui::Color fill =
-        level > 0.20f
-            ? nxui::Color(
-                0.32f,
-                0.93f,
-                0.52f,
-                op * chargePulse
-              )
-            : nxui::Color(
-                0.95f,
-                0.24f,
-                0.20f,
-                op
-              );
-
-    if (m_charging && level > 0.20f) {
-        fill = nxui::Color(
-            0.46f,
-            0.96f,
-            0.66f,
-            op * chargePulse
-        );
+    nxui::Rect fill = body.shrunk(3.5f);
+    fill.width *= level;
+    if (fill.width > 0.5f) {
+        const float pulse = 0.72f + 0.28f *
+            (0.5f + 0.5f * std::sin(m_chargeAnim * 5.2f));
+        const nxui::Color fillColor = level <= 0.20f
+            ? nxui::Color(1.f, 0.26f, 0.24f, 0.96f * op)
+            : m_textColor.withAlpha((m_charging ? pulse : 0.96f) * op);
+        ren.drawRoundedRect(fill, fillColor,
+                            std::min(4.f, fill.width * 0.5f));
     }
 
-    nxui::Rect inner = body.shrunk(4.f);
-    const float innerW =
-        std::max(0.f, inner.width * level);
-
-    if (innerW > 0.5f) {
-        nxui::Rect fillRect = {
-            inner.x,
-            inner.y,
-            innerW,
-            inner.height
-        };
-
-        ren.drawRoundedRect(
-            fillRect,
-            fill,
-            std::min(
-                radius * 0.68f,
-                fillRect.width * 0.5f
-            )
-        );
-
-        ren.drawRoundedRect(
-            {
-                fillRect.x + 1.5f,
-                fillRect.y + 1.3f,
-                std::max(
-                    0.f,
-                    fillRect.width - 3.f
-                ),
-                fillRect.height * 0.34f
-            },
-            nxui::Color::white().withAlpha(
-                0.18f * op * chargePulse
-            ),
-            std::min(
-                radius * 0.45f,
-                fillRect.width * 0.45f
-            )
-        );
-    }
-
+    const nxui::Rect bolt = {
+        body.right() + kBatteryBoltGap + 2.f,
+        body.y - 1.5f,
+        21.f,
+        28.f
+    };
     if (m_charging) {
-        const float boltPulse =
-            0.70f +
-            0.30f *
-            (0.5f +
-             0.5f *
-             std::sin(m_chargeAnim * 6.8f));
-
-        const float boltH =
-            32.f + 1.8f * boltPulse;
-
-        const float boltW =
-            boltH * 0.78f;
-
-        const float boltX =
-            body.right() +
-            chargeGap +
-            (boltSlotW - boltW) * 0.5f;
-
-        const float boltY =
-            by +
-            (bh - boltH) * 0.5f -
-            0.5f;
-
-        nxui::Rect boltRect = {
-            boltX,
-            boltY,
-            boltW,
-            boltH
-        };
-
-        nxui::Color glow =
-            nxui::Color(
-                1.f,
-                0.74f,
-                0.12f,
-                0.18f * op * boltPulse
-            );
-
-        drawLightningBolt(
-            ren,
-            boltRect.expanded(3.f),
-            glow,
-            glow.withAlpha(0.f),
-            0.f
-        );
-
-        nxui::Color boltColor =
-            nxui::Color(
-                1.f,
-                0.86f,
-                0.18f,
-                op *
-                (0.88f + 0.12f * boltPulse)
-            );
-
-        nxui::Color boltEdge =
-            nxui::Color(
-                1.f,
-                0.64f,
-                0.08f,
-                op * 0.72f
-            );
-
-        drawLightningBolt(
-            ren,
-            boltRect,
-            boltColor,
-            boltEdge,
-            1.25f
-        );
+        const float pulse = 0.5f + 0.5f * std::sin(m_chargeAnim * 5.8f);
+        const nxui::Color glow(0.40f, 1.f, 0.70f,
+                               (0.16f + 0.08f * pulse) * op);
+        ren.drawCircle({bolt.x + bolt.width * 0.5f,
+                        bolt.y + bolt.height * 0.5f},
+                       17.f, glow, 30);
+        drawLightningBolt(ren, bolt,
+                          nxui::Color(0.42f, 1.f, 0.68f, op));
     }
 
     if (m_font) {
-        const float tx =
-            bx + batteryGroupW + kTextGap;
-
-        const float ty =
-            cr.y + (cr.height - textH) * 0.5f;
-
-        const nxui::Color shadow =
-            nxui::Color(
-                0.f,
-                0.f,
-                0.f,
-                0.36f * op
-            );
-
-        const nxui::Color text =
-            m_textColor.withAlpha(op);
-
-        ren.drawText(
-            buf,
-            {tx + 1.1f, ty + 1.1f},
-            m_font,
-            shadow,
-            kPercentageScale
-        );
-
-        ren.drawText(
-            buf,
-            {tx, ty},
-            m_font,
-            text,
-            kPercentageScale
-        );
-
-        ren.drawText(
-            buf,
-            {tx + 0.55f, ty},
-            m_font,
-            text.withAlpha(0.52f * op),
-            kPercentageScale
-        );
+        const float tx = bx + fixedBatteryGroup + kTextGap;
+        // Slight downward optical alignment with the battery body.
+        const float ty = cr.y + (cr.height - textH) * 0.5f + 1.5f;
+        const nxui::Color text = m_textColor.withAlpha(op);
+        const nxui::Color shadow(0.f, 0.f, 0.f, 0.30f * op);
+        ren.drawText(buffer, {tx + 1.f, ty + 1.f}, m_font,
+                     shadow, kPercentageScale);
+        ren.drawText(buffer, {tx, ty}, m_font,
+                     text, kPercentageScale);
     }
 }
 
 nxui::Vec2 BatteryWidget::computeContentSize() const {
-    nxui::Vec2 textBase =
-        m_font
-            ? m_font->measure("100%")
-            : nxui::Vec2{42.f, 18.f};
-
-    const float textW =
-        textBase.x * kPercentageScale;
-
-    const float textH =
-        textBase.y * kPercentageScale;
-
-    constexpr float kTextGap = 14.f;
-    constexpr float kMaximumBoltSpace = 35.f;
+    const nxui::Vec2 measured = m_font
+        ? m_font->measure("100%")
+        : nxui::Vec2{42.f, 18.f};
 
     return {
-        kBatteryWidth +
-            kMaximumBoltSpace +
-            kTextGap +
-            textW,
-        std::max(kBatteryHeight, textH)
+        kBatteryWidth + kBatteryBoltGap + kBoltSlotWidth +
+            kTextGap + measured.x * kPercentageScale,
+        std::max(kBatteryHeight, measured.y * kPercentageScale)
     };
 }
