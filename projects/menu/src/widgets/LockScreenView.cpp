@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -308,6 +309,13 @@ std::string cleanDeviceName(std::string name) {
     return truncateUtf8(name, 34);
 }
 
+std::string lowercaseAscii(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return text;
+}
+
 std::string profileHintFromGreeting(const std::string& greeting) {
     const std::size_t comma = greeting.rfind(',');
     if (comma == std::string::npos || comma + 1 >= greeting.size())
@@ -380,6 +388,13 @@ void drawGradientText(nxui::Renderer& ren,
         const float t = static_cast<float>(i) / denom;
         const nxui::Color color =
             animatedLockGradient(t, phase).withAlpha(0.99f * alpha);
+        const nxui::Color outline(0.002f, 0.004f, 0.014f, 0.56f * alpha);
+        ren.drawText(glyphs[i], {cursorX - 1.15f, center.y + 0.35f},
+                     font, outline, scale);
+        ren.drawText(glyphs[i], {cursorX + 1.15f, center.y + 0.35f},
+                     font, outline, scale);
+        ren.drawText(glyphs[i], {cursorX, center.y + 1.35f},
+                     font, outline, scale);
         ren.drawText(glyphs[i], {cursorX, center.y}, font, color, scale);
         cursorX += font->measure(glyphs[i]).x * scale;
     }
@@ -393,14 +408,14 @@ void drawBattery(nxui::Renderer& ren,
                  float pulse,
                  float alpha) {
     const float level = std::clamp(static_cast<float>(percentage) / 100.f, 0.f, 1.f);
-    const nxui::Rect body = {origin.x, origin.y, 54.f, 26.f};
+    const nxui::Rect body = {origin.x, origin.y, 50.f, 24.f};
     const nxui::Color edge(0.97f, 0.985f, 1.f, 0.94f * alpha);
 
-    ren.drawRoundedRectOutline(body, edge, 6.2f, 1.9f);
-    ren.drawRoundedRect({body.right() + 2.5f, body.y + 7.f, 5.f, 12.f},
-                        edge.withAlpha(0.82f * alpha), 2.f);
+    ren.drawRoundedRectOutline(body, edge, 5.8f, 1.65f);
+    ren.drawRoundedRect({body.right() + 2.2f, body.y + 6.5f, 4.5f, 11.f},
+                        edge.withAlpha(0.82f * alpha), 1.8f);
 
-    nxui::Rect fill = body.shrunk(3.7f);
+    nxui::Rect fill = body.shrunk(3.4f);
     fill.width *= level;
     if (fill.width > 0.5f) {
         nxui::Color fillColor;
@@ -426,7 +441,7 @@ void drawBattery(nxui::Renderer& ren,
         char buffer[16] = {};
         std::snprintf(buffer, sizeof(buffer), "%u%%", static_cast<unsigned>(percentage));
         drawReadableText(ren, buffer,
-                         {body.right() + 16.f, origin.y + 1.6f},
+                         {body.right() + 13.f, origin.y + 0.9f},
                          font,
                          nxui::Color(0.97f, 0.985f, 1.f, 0.98f),
                          0.96f, alpha, 0.38f);
@@ -445,8 +460,9 @@ struct FloatingShapeSpec {
 
 void drawFloatingShapes(nxui::Renderer& ren,
                         float animationTime,
-                        float alpha) {
-    static constexpr std::array<FloatingShapeSpec, 11> shapes = {{
+                        float alpha,
+                        bool strongMode) {
+    static constexpr std::array<FloatingShapeSpec, 15> shapes = {{
         {90.f,  650.f, 22.f, 10.f, 13.f, 0.2f, 0},
         {210.f, 450.f, 14.f, 14.f, 18.f, 1.4f, 2},
         {330.f, 690.f, 18.f,  8.f, 12.f, 2.7f, 1},
@@ -458,7 +474,16 @@ void drawFloatingShapes(nxui::Renderer& ren,
         {740.f, 170.f, 10.f,  8.f,  9.f, 1.9f, 0},
         {540.f, 690.f, 13.f, 10.f, 13.f, 3.9f, 2},
         {1040.f,160.f, 16.f,  6.f, 10.f, 4.8f, 1},
+        {610.f, 610.f, 18.f,  9.f, 14.f, 0.6f, 3},
+        {790.f, 510.f, 13.f, 12.f, 16.f, 2.9f, 1},
+        {150.f, 235.f, 16.f,  7.f, 11.f, 4.5f, 2},
+        {1125.f,580.f, 15.f, 10.f, 13.f, 5.6f, 0},
     }};
+
+    const float sizeScale = strongMode ? 1.30f : 1.f;
+    const float bodyBaseAlpha = strongMode ? 0.105f : 0.030f;
+    const float bodyShimmerAlpha = strongMode ? 0.070f : 0.026f;
+    const float glowBaseAlpha = strongMode ? 0.030f : 0.010f;
 
     for (std::size_t i = 0; i < shapes.size(); ++i) {
         const auto& shape = shapes[i];
@@ -473,38 +498,52 @@ void drawFloatingShapes(nxui::Renderer& ren,
                                shape.phase;
         const float shimmer = 0.72f + 0.28f *
             std::sin(animationTime * 0.7f + shape.phase);
-        const nxui::Color c = lockGradient(
+        const float size = shape.size * sizeScale;
+        const nxui::Color baseColor = lockGradient(
             static_cast<float>(i % 3) / 2.f
-        ).withAlpha((0.030f + 0.026f * shimmer) * alpha);
+        );
+        const nxui::Color c = baseColor.withAlpha(
+            (bodyBaseAlpha + bodyShimmerAlpha * shimmer) * alpha);
+        const nxui::Color glow = baseColor.withAlpha(
+            (glowBaseAlpha + 0.018f * shimmer) * alpha);
+
+        if (strongMode) {
+            if (shape.type == 0) {
+                ren.drawCircle({x, y}, size * 1.34f, glow, 30);
+            } else {
+                ren.drawCircle({x, y}, size * 1.42f,
+                               glow.withAlpha(glow.a * 0.72f), 28);
+            }
+        }
 
         switch (shape.type) {
             case 0:
-                ren.drawCircle({x, y}, shape.size, c, 28);
-                ren.drawCircle({x - shape.size * 0.18f, y - shape.size * 0.22f},
-                               shape.size * 0.44f,
-                               nxui::Color(1.f, 1.f, 1.f, 0.018f * alpha), 20);
+                ren.drawCircle({x, y}, size, c, 28);
+                ren.drawCircle({x - size * 0.18f, y - size * 0.22f},
+                               size * 0.44f,
+                               nxui::Color(1.f, 1.f, 1.f, (strongMode ? 0.040f : 0.018f) * alpha), 20);
                 break;
             case 1: {
                 const float cs = std::cos(rotation);
                 const float sn = std::sin(rotation);
-                const nxui::Vec2 p0{x + cs * shape.size, y + sn * shape.size};
-                const nxui::Vec2 p1{x + std::cos(rotation + 2.094f) * shape.size,
-                                    y + std::sin(rotation + 2.094f) * shape.size};
-                const nxui::Vec2 p2{x + std::cos(rotation + 4.188f) * shape.size,
-                                    y + std::sin(rotation + 4.188f) * shape.size};
+                const nxui::Vec2 p0{x + cs * size, y + sn * size};
+                const nxui::Vec2 p1{x + std::cos(rotation + 2.094f) * size,
+                                    y + std::sin(rotation + 2.094f) * size};
+                const nxui::Vec2 p2{x + std::cos(rotation + 4.188f) * size,
+                                    y + std::sin(rotation + 4.188f) * size};
                 ren.drawTriangle(p0, p1, p2, c);
                 break;
             }
             case 2:
-                ren.drawRoundedRect({x - shape.size, y - shape.size,
-                                     shape.size * 2.f, shape.size * 2.f},
-                                    c, shape.size * 0.28f);
+                ren.drawRoundedRect({x - size, y - size,
+                                     size * 2.f, size * 2.f},
+                                    c, size * 0.28f);
                 break;
             default: {
-                const nxui::Vec2 top{x, y - shape.size};
-                const nxui::Vec2 right{x + shape.size, y};
-                const nxui::Vec2 bottom{x, y + shape.size};
-                const nxui::Vec2 left{x - shape.size, y};
+                const nxui::Vec2 top{x, y - size};
+                const nxui::Vec2 right{x + size, y};
+                const nxui::Vec2 bottom{x, y + size};
+                const nxui::Vec2 left{x - size, y};
                 ren.drawTriangle(top, right, bottom, c);
                 ren.drawTriangle(top, bottom, left, c);
                 break;
@@ -611,21 +650,24 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
 } // namespace
 
 LockScreenView::LockScreenView() {
-    DebugLog::log("[lockscreen] Switch U V6.4 view created");
+    DebugLog::log("[lockscreen] Switch U V6.5 view created");
     setRect({0.f, 0.f, 1280.f, 720.f});
 
-    // The profile is no longer a full card in V6.4, but the member is kept
+    // The profile is no longer a full card in V6.5, but the member is kept
     // for source compatibility with older layouts.
     m_profilePanel.setForceLiquidGlass(true);
     m_profilePanel.setBlurEnabled(true);
     m_profilePanel.setBackingEnabled(false);
 
-    m_connectionPanel.setForceLiquidGlass(true);
+    m_connectionPanel.setForceLiquidGlass(false);
+    m_connectionPanel.setLiquidGlassEnabled(false);
     m_connectionPanel.setBlurEnabled(true);
-    m_connectionPanel.setBackingEnabled(true);
-    m_connectionPanel.setBackingColor({0.006f, 0.009f, 0.028f, 0.58f});
+    m_connectionPanel.setBlurRadius(1.75f);
+    m_connectionPanel.setBlurPasses(1);
+    m_connectionPanel.setBackingEnabled(false);
+    m_connectionPanel.setPanelOpacity(0.94f);
     m_connectionPanel.setMaterialTextureEnabled(true);
-    m_connectionPanel.setMaterialTextureIntensity(0.22f);
+    m_connectionPanel.setMaterialTextureIntensity(0.10f);
 }
 
 void LockScreenView::setFonts(nxui::Font* normal,
@@ -805,9 +847,9 @@ void LockScreenView::setTransition(float opacity,
 }
 
 void LockScreenView::applyThemeToWidgets() {
-    const nxui::Color base = {0.018f, 0.026f, 0.075f, 0.48f};
-    const nxui::Color border = {0.44f, 0.48f, 1.00f, 0.32f};
-    const nxui::Color highlight = {0.90f, 0.97f, 1.00f, 0.12f};
+    const nxui::Color base = {0.030f, 0.040f, 0.100f, 0.18f};
+    const nxui::Color border = {0.50f, 0.58f, 1.00f, 0.24f};
+    const nxui::Color highlight = {0.92f, 0.98f, 1.00f, 0.10f};
 
     m_profilePanel.setBaseColor(base);
     m_profilePanel.setBorderColor(border);
@@ -816,9 +858,9 @@ void LockScreenView::applyThemeToWidgets() {
     m_profilePanel.setCornerRadius(25.f);
 
     m_connectionPanel.setBaseColor(base);
-    m_connectionPanel.setBorderColor(border.withAlpha(0.36f));
+    m_connectionPanel.setBorderColor(border);
     m_connectionPanel.setHighlightColor(highlight);
-    m_connectionPanel.setBorderWidth(1.45f);
+    m_connectionPanel.setBorderWidth(1.20f);
     m_connectionPanel.setCornerRadius(28.f);
 }
 
@@ -973,14 +1015,30 @@ void LockScreenView::onUpdate(float dt) {
         m_audioStatus = "Haut-parleurs de la console";
         if (bluetooth::IsAvailable()) {
             const BtmAudioDevice device = bluetooth::GetConnectedAudioDevice();
+            bool knownPairedDevice = false;
             if (bluetooth::IsDeviceValid(device)) {
+                const auto paired = bluetooth::ListPairedAudioDevices();
+                for (const auto& candidate : paired) {
+                    if (bluetooth::AddressesEqual(candidate.addr, device.addr)) {
+                        knownPairedDevice = true;
+                        break;
+                    }
+                }
+            }
+
+            // A few firmwares expose an internal/temporary audio endpoint
+            // through btmsys. It is not a real Bluetooth headset and must not
+            // replace the console-speaker status. Only a device that is both
+            // connected and present in the paired-audio list is accepted.
+            if (knownPairedDevice) {
                 std::string name = cleanDeviceName(bluetooth::DeviceName(device));
-                // Some firmwares briefly expose a broken two-character tail
-                // while the Bluetooth route is changing. Never display it.
-                if (splitUtf8(name).size() >= 3)
+                const std::string lowered = lowercaseAscii(name);
+                const bool brokenShortName = splitUtf8(name).size() < 3;
+                const bool internalEndpoint = lowered == "ch" || lowered == "audio";
+                if (!brokenShortName && !internalEndpoint)
                     m_audioStatus = name;
                 else
-                    m_audioStatus = "Audio Bluetooth connecté";
+                    m_audioStatus = "Périphérique Bluetooth";
             }
         }
 
@@ -1055,10 +1113,17 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     ren.drawRect(screen, nxui::Color(0.002f, 0.004f, 0.014f,
                                      0.17f * m_viewOpacity));
 
-    // Reuse the HOME menu's floating-geometric-shape language, but with a
-    // much lower density and opacity so custom game backgrounds stay readable.
-    if (m_hasGame)
-        drawFloatingShapes(ren, m_animationTime, contentAlpha);
+    // A local top veil stabilises the readability of the animated greeting,
+    // clock, battery and profile without hiding the personalised background.
+    ren.drawGradientRect(
+        {0.f, 0.f, 1280.f, 232.f},
+        nxui::Color(0.004f, 0.006f, 0.020f, 0.56f * m_viewOpacity),
+        nxui::Color(0.020f, 0.008f, 0.052f, 0.025f * m_viewOpacity)
+    );
+
+    // Floating geometry is intentionally more visible when there is no
+    // suspended game, where it becomes the main decorative background.
+    drawFloatingShapes(ren, m_animationTime, contentAlpha, !m_hasGame);
 
     // The full central composition moves upward, while the cover itself is
     // placed a few pixels below the exact ring centre as requested.
@@ -1067,6 +1132,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     // colon instantly disappears and reappears every second.
     ClockStrings clock;
     buildClockStrings(m_use12Hour, clock);
+    float clockVisualCenterX = 150.f;
     if (m_fontLarge) {
         const float scale = 1.22f;
         const float x = 44.f;
@@ -1084,9 +1150,10 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         const float minuteX = x + hourW + colonW + 2.f;
         drawReadableText(ren, clock.minute, {minuteX, y}, m_fontLarge,
                          white, scale, contentAlpha, 0.65f);
+        const float minuteW = m_fontLarge->measure(clock.minute).x * scale;
+        clockVisualCenterX = x + (hourW + colonW + 2.f + minuteW) * 0.5f;
 
         if (!clock.suffix.empty() && m_fontMedium) {
-            const float minuteW = m_fontLarge->measure(clock.minute).x * scale;
             drawReadableText(ren, clock.suffix,
                              {minuteX + minuteW + 13.f, y + 39.f},
                              m_fontMedium,
@@ -1095,13 +1162,16 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         }
     }
     if (m_fontMedium) {
+        const float dateScale = 0.82f;
+        const float dateWidth = m_fontMedium->measure(clock.date).x * dateScale;
+        const float dateX = clockVisualCenterX - dateWidth * 0.5f + 4.f;
         drawReadableText(ren, clock.date,
-                         {48.f, 124.f + lift * 0.04f},
+                         {dateX, 124.f + lift * 0.04f},
                          m_fontMedium,
                          nxui::Color(0.95f, 0.97f, 1.f, 0.97f),
-                         0.82f, contentAlpha, 0.45f);
+                         dateScale, contentAlpha, 0.45f);
     }
-    // V6.4: the battery leaves the crowded date block and is right-aligned
+    // V6.5: the battery leaves the crowded date block and is right-aligned
     // in the upper-right area. The larger gap prevents percentage overlap.
     drawBattery(ren, m_fontNormal, {1092.f, 38.f + lift * 0.03f},
                 m_batteryPercent, m_batteryCharging,
@@ -1159,38 +1229,30 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                                0.66f * contentAlpha),
                                    30.f, 1.9f);
 
-        if (m_fontSmall) {
-            const std::string label = "Jeu suspendu";
-            const float scale = 0.84f;
-            const nxui::Vec2 size = m_fontSmall->measure(label);
-            drawReadableText(ren, label,
-                             {650.f - size.x * scale * 0.5f,
-                              543.f + lift * 0.12f},
-                             m_fontSmall,
-                             nxui::Color(0.78f, 0.84f, 1.f, 0.88f),
-                             scale, contentAlpha, 0.22f);
-        }
-
+        // The cover and ring already communicate that the application is
+        // suspended. V6.5 removes the redundant status label and lets the
+        // game title occupy the clean central gap below the cover.
         if (m_fontMedium && !m_gameTitle.empty()) {
+            constexpr float titleScale = 0.84f;
             const std::string shownTitle = truncateUtf8ToWidth(
-                m_gameTitle, m_fontMedium, 0.78f, 460.f);
+                m_gameTitle, m_fontMedium, titleScale, 480.f);
             const nxui::Vec2 titleSize = m_fontMedium->measure(shownTitle);
             drawReadableText(ren, shownTitle,
-                             {650.f - titleSize.x * 0.78f * 0.5f,
-                              570.f + lift * 0.15f},
+                             {650.f - titleSize.x * titleScale * 0.5f,
+                              550.f + lift * 0.14f},
                              m_fontMedium,
-                             nxui::Color(0.985f, 0.992f, 1.f, 0.98f),
-                             0.78f, contentAlpha, 0.48f);
+                             nxui::Color(0.985f, 0.992f, 1.f, 0.99f),
+                             titleScale, contentAlpha, 0.52f);
         }
     }
 
     // Compact profile identity: no dedicated card, only avatar + name.
-    const nxui::Rect avatarRect = {1024.f, 94.f + lift * 0.04f, 48.f, 48.f};
+    const nxui::Rect avatarRect = {1054.f, 86.f + lift * 0.04f, 58.f, 58.f};
     if (m_profileAvatarTexture.valid()) {
-        ren.drawTextureRounded(&m_profileAvatarTexture, avatarRect, 24.f,
+        ren.drawTextureRounded(&m_profileAvatarTexture, avatarRect, 29.f,
                                nxui::Color::white().withAlpha(contentAlpha));
     } else {
-        ren.drawCircle({avatarRect.x + 24.f, avatarRect.y + 24.f}, 24.f,
+        ren.drawCircle({avatarRect.x + 29.f, avatarRect.y + 29.f}, 29.f,
                        animatedLockGradient(0.16f,
                            std::fmod(m_animationTime / 3.6f, 1.f))
                            .withAlpha(0.88f * contentAlpha), 34);
@@ -1198,28 +1260,28 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
             const std::string initial = splitUtf8(m_profileName).front();
             const nxui::Vec2 size = m_fontSmall->measure(initial);
             drawReadableText(ren, initial,
-                             {avatarRect.x + (avatarRect.width - size.x * 1.02f) * 0.5f,
-                              avatarRect.y + 10.f},
+                             {avatarRect.x + (avatarRect.width - size.x * 1.10f) * 0.5f,
+                              avatarRect.y + 12.f},
                              m_fontSmall,
                              nxui::Color(1.f, 1.f, 1.f, 1.f),
-                             1.02f, contentAlpha, 0.30f);
+                             1.10f, contentAlpha, 0.30f);
         }
     }
-    ren.drawCircle({avatarRect.x + 24.f, avatarRect.y + 24.f}, 27.f,
+    ren.drawCircle({avatarRect.x + 29.f, avatarRect.y + 29.f}, 32.f,
                    nxui::Color(0.60f, 0.74f, 1.f, 0.08f * contentAlpha), 34);
     if (m_fontMedium) {
         const std::string shownName = truncateUtf8ToWidth(
-            m_profileName, m_fontMedium, 0.76f, 142.f
+            m_profileName, m_fontMedium, 0.84f, 132.f
         );
         drawReadableText(ren, shownName,
-                         {1086.f, 103.f + lift * 0.04f},
+                         {1128.f, 100.f + lift * 0.04f},
                          m_fontMedium,
                          nxui::Color(0.99f, 0.995f, 1.f, 0.98f),
-                         0.76f, contentAlpha, 0.34f);
+                         0.84f, contentAlpha, 0.34f);
     }
 
     // One larger contextual card. Real blur is enabled on the GlassPanel;
-    // the backing is only a dark tint instead of the old opaque black card.
+    // the old opaque backing is removed so the personalised background remains visible.
     const nxui::Rect connectionRect = {930.f, 214.f + lift * 0.06f, 324.f, 244.f};
     m_connectionPanel.setRect(connectionRect);
     m_connectionPanel.setOpacity(contentAlpha);

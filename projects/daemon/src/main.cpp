@@ -737,24 +737,42 @@ static void handleAppletMessages() {
         appletStartSleepSequence(true);
         break;
 
-        case 26:
-        switchu::FileLog::log("[ae] -> Wakeup");
-        g_batteryRefreshPending.store(true);
-        if (daemon::app::isRunning() && !daemon::menu_la::isActive()) {
-            Result rc = daemon::app::resume();
-            if (R_FAILED(rc)) {
-                switchu::FileLog::log("[ae] wake resume FAIL: 0x%X", rc);
-                appletRequestToGetForeground();
+        case 26: {
+            switchu::FileLog::log("[ae] -> Wakeup");
+            g_batteryRefreshPending.store(true);
+
+            // V6.5.1: waking the console is the only path that intentionally
+            // presents the lockscreen. Never resume the suspended game here.
+            // A physical HOME press still launches MainMenu through
+            // openMenuFromHome(), so it opens Switch U HOME directly.
+            if (daemon::app::isRunning() && daemon::app::hasForeground()) {
+                if (!takeForegroundFromRunningApp("ae-wake")) {
+                    switchu::FileLog::log("[ae] wake: foreground takeover failed");
+                    break;
+                }
+            } else {
+                const Result foregroundRc = appletRequestToGetForeground();
+                switchu::FileLog::log("[ae] wake RequestToGetForeground rc=0x%X", foregroundRc);
             }
-        } else {
-            appletRequestToGetForeground();
+
+            if (daemon::menu_la::isActive()) {
+                switchu::FileLog::log("[ae] wake: active menu -> WakeUp notification");
+                pushNotification(smi::MenuMessage::WakeUp);
+            } else {
+                const auto status = buildSystemStatus();
+                switchu::FileLog::log(
+                    "[ae] wake: launching StartupBoot lockscreen running=%d suspended=0x%016lX",
+                    status.app_running ? 1 : 0,
+                    status.suspended_app_id);
+                const Result menuRc = daemon::menu_la::launch(
+                    smi::MenuStartMode::StartupBoot,
+                    status);
+                switchu::FileLog::log("[ae] wake StartupBoot launch rc=0x%X", menuRc);
+                if (R_SUCCEEDED(menuRc))
+                    g_appCatalogRefreshDelay = 80;
+            }
+            break;
         }
-        if (daemon::menu_la::isActive()) {
-            pushNotification(smi::MenuMessage::WakeUp);
-        } else if (!daemon::app::isRunning()) {
-            daemon::menu_la::launch(smi::MenuStartMode::MainMenu, buildSystemStatus());
-        }
-        break;
     }
 }
 

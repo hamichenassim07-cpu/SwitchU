@@ -1,307 +1,317 @@
-#include <nxui/Application.hpp>
-#include <nxui/Activity.hpp>
-#include <nxui/core/Animation.hpp>
-#include <nxui/core/GpuDevice.hpp>
-#include <nxui/core/Renderer.hpp>
-#include <nxui/core/Input.hpp>
-#include <nxui/focus/FocusManager.hpp>
+#include "AppListLoader.hpp"
+#include "core/DebugLog.hpp"
+#include "smi_commands.hpp"
 #include <switch.h>
+#include <cstdio>
 #include <vector>
+#include <algorithm>
 #ifdef SWITCHU_MENU
-#include <switchu/file_log.hpp>
+#include <switchu/control_cache.hpp>
+#include <switchu/ns_ext.hpp>
 #endif
 
-namespace nxui {
+namespace {
 
-Application* Application::s_current = nullptr;
-
-Application::~Application() {
-    shutdown();
+bool requiresInteractiveUserSelection(uint8_t account, uint8_t option) {
+    return account == 1 && option == 0;
 }
 
-void Application::setActivity(std::unique_ptr<Activity> activity) {
-    m_activity = std::move(activity);
-    if (m_activity) m_activity->m_app = this;
-}
+#ifdef SWITCHU_MENU
+static constexpr s32 kMaxTrackedApplicationRecords = 1024;
+static constexpr s32 kApplicationRecordChunkCount = 30;
 
-void Application::requestActivity(std::unique_ptr<Activity> activity) {
-    m_pendingActivity = std::move(activity);
-    if (m_pendingActivity)
-        m_pendingActivity->m_app = this;
-}
+bool listApplicationRecords(std::vector<switchu::ns::ExtApplicationRecord>& records) {
+    records.clear();
 
-bool Application::applyPendingActivity() {
-    if (!m_pendingActivity)
-        return true;
-
-    AnimationManager::instance().clear();
-    if (m_activity)
-        m_activity->onDestroy();
-
-    m_activity = std::move(m_pendingActivity);
-    m_navDebounce = 0;
-
-    if (m_activity) {
-        m_activity->m_rootBox->setRect({0, 0, (float)m_gpu.width(), (float)m_gpu.height()});
-        return m_activity->onCreate();
-    }
-    return true;
-}
-
-bool Application::initialize() {
-    s_current = this;
-    m_running = true;
-    m_renderEnabled = true;
-
-    if (!m_gpu.initialize()) {
-        s_current = nullptr;
-        return false;
-    }
-
-    m_renderer = std::make_unique<Renderer>(m_gpu);
-    if (!m_renderer->initialize()) {
-        s_current = nullptr;
-        return false;
-    }
-
-    m_input.initialize();
-
-    // Present one clean frame immediately so stale framebuffer content from a
-    // previous process is never visible on screen.
-    m_gpu.beginFrame();
-    m_renderer->beginFrame();
-    m_renderer->endFrame();
-    m_gpu.endFrame();
-
-    if (m_activity) {
-        m_activity->m_rootBox->setRect({0, 0, (float)m_gpu.width(), (float)m_gpu.height()});
-        if (!m_activity->onCreate()) {
-            s_current = nullptr;
+    switchu::ns::ExtApplicationRecord chunk[kApplicationRecordChunkCount] = {};
+    s32 offset = 0;
+    while (offset < kMaxTrackedApplicationRecords) {
+        s32 readCount = 0;
+        Result rc = nsListApplicationRecord(
+            reinterpret_cast<NsApplicationRecord*>(chunk),
+            kApplicationRecordChunkCount,
+            offset,
+            &readCount);
+        if (R_FAILED(rc)) {
+            DebugLog::log("[loader] nsListApplicationRecord failed rc=0x%X offset=%d",
+                          rc, offset);
+            records.clear();
             return false;
         }
+        if (readCount <= 0)
+            break;
+
+        const s32 remaining = kMaxTrackedApplicationRecords - offset;
+        const s32 appendCount = readCount > remaining ? remaining : readCount;
+        records.insert(records.end(), chunk, chunk + appendCount);
+        offset += readCount;
+
+        if (readCount < kApplicationRecordChunkCount)
+            break;
     }
+
+    std::sort(records.begin(), records.end(),
+              [](const switchu::ns::ExtApplicationRecord& a,
+                 const switchu::ns::ExtApplicationRecord& b) {
+                  return a.id < b.id;
+              });
     return true;
 }
 
-void Application::dispatchInput() {
-    if (!m_activity) return;
-
-    Widget* root = m_activity->focusRoot();
-    if (!root) return;
-
-    auto& fm = m_activity->focusManager();
-
-    auto isUnderRoot = [root](Widget* w) {
-        for (Widget* it = w; it != nullptr; it = it->parent()) {
-            if (it == root) return true;
-        }
-        return false;
-    };
-    Widget* curFocus = fm.current();
-    if (!curFocus || !isUnderRoot(curFocus)) {
-        if (root->isFocusable()) {
-            fm.setFocus(root);
-        } else {
-            std::vector<Widget*> focusables;
-            root->collectFocusable(focusables);
-            if (!focusables.empty())
-                fm.setFocus(focusables[0]);
-        }
-    }
-
-    static int s_horizontalHoldFrames = 0;
-    static int s_horizontalHeldDir = 0;
-
-    const bool leftDown =
-        m_input.isDown(Button::DLeft) ||
-        m_input.isDown(Button::LStickL) ||
-        m_input.isDown(Button::RStickL);
-    const bool rightDown =
-        m_input.isDown(Button::DRight) ||
-        m_input.isDown(Button::LStickR) ||
-        m_input.isDown(Button::RStickR);
-    const bool leftHeld =
-        m_input.isHeld(Button::DLeft) ||
-        m_input.isHeld(Button::LStickL) ||
-        m_input.isHeld(Button::RStickL);
-    const bool rightHeld =
-        m_input.isHeld(Button::DRight) ||
-        m_input.isHeld(Button::LStickR) ||
-        m_input.isHeld(Button::RStickR);
-
-    bool repeatLeft = false;
-    bool repeatRight = false;
-
-    const int heldDir =
-        (leftHeld && !rightHeld) ? -1 :
-        (rightHeld && !leftHeld) ? 1 : 0;
-
-    if (leftDown) {
-        s_horizontalHeldDir = -1;
-        s_horizontalHoldFrames = 20;
-    } else if (rightDown) {
-        s_horizontalHeldDir = 1;
-        s_horizontalHoldFrames = 20;
-    } else if (heldDir == 0) {
-        s_horizontalHeldDir = 0;
-        s_horizontalHoldFrames = 0;
-    } else if (heldDir != s_horizontalHeldDir) {
-        s_horizontalHeldDir = heldDir;
-        s_horizontalHoldFrames = 20;
-    } else if (s_horizontalHoldFrames > 0) {
-        --s_horizontalHoldFrames;
-    } else {
-        repeatLeft = (heldDir < 0);
-        repeatRight = (heldDir > 0);
-        s_horizontalHoldFrames = 5;
-    }
-
-    bool anyDpad =
-        m_input.isDown(Button::DLeft)   || m_input.isDown(Button::DRight)  ||
-        m_input.isDown(Button::DUp)     || m_input.isDown(Button::DDown)   ||
-        m_input.isDown(Button::LStickL) || m_input.isDown(Button::LStickR) ||
-        m_input.isDown(Button::LStickU) || m_input.isDown(Button::LStickD) ||
-        m_input.isDown(Button::RStickL) || m_input.isDown(Button::RStickR) ||
-        m_input.isDown(Button::RStickU) || m_input.isDown(Button::RStickD) ||
-        repeatLeft || repeatRight;
-
-    if (m_navDebounce > 0) {
-        --m_navDebounce;
-    } else if (anyDpad) {
-        m_navDebounce = (repeatLeft || repeatRight) ? 0 : 6;
-
-        Widget* cur = fm.current();
-        auto tryDir = [&](Button dpad, Button leftStick, Button rightStick, FocusDirection dir) {
-            bool dpadDown =
-                m_input.isDown(dpad) ||
-                (dpad == Button::DLeft && repeatLeft) ||
-                (dpad == Button::DRight && repeatRight);
-            bool leftStickDown =
-                m_input.isDown(leftStick) ||
-                (leftStick == Button::LStickL && repeatLeft) ||
-                (leftStick == Button::LStickR && repeatRight);
-            bool rightStickDown =
-                m_input.isDown(rightStick) ||
-                (rightStick == Button::RStickL && repeatLeft) ||
-                (rightStick == Button::RStickR && repeatRight);
-
-            if (!dpadDown && !leftStickDown && !rightStickDown)
-                return;
-            if (cur) {
-                if (dpadDown && cur->fireAction(static_cast<uint64_t>(dpad)))
-                    return;
-                if (leftStickDown && cur->fireAction(static_cast<uint64_t>(leftStick)))
-                    return;
-                if (rightStickDown && cur->fireAction(static_cast<uint64_t>(rightStick)))
-                    return;
-            }
-            fm.navigate(dir, root);
-        };
-
-        tryDir(Button::DLeft,  Button::LStickL, Button::RStickL, FocusDirection::LEFT);
-        tryDir(Button::DRight, Button::LStickR, Button::RStickR, FocusDirection::RIGHT);
-        tryDir(Button::DUp,    Button::LStickU, Button::RStickU, FocusDirection::UP);
-        tryDir(Button::DDown,  Button::LStickD, Button::RStickD, FocusDirection::DOWN);
-    }
-
-    constexpr uint64_t kDpadMask =
-        static_cast<uint64_t>(Button::DLeft)   | static_cast<uint64_t>(Button::DRight)  |
-        static_cast<uint64_t>(Button::DUp)     | static_cast<uint64_t>(Button::DDown)   |
-        static_cast<uint64_t>(Button::LStickL) | static_cast<uint64_t>(Button::LStickR) |
-        static_cast<uint64_t>(Button::LStickU) | static_cast<uint64_t>(Button::LStickD) |
-        static_cast<uint64_t>(Button::RStickL) | static_cast<uint64_t>(Button::RStickR) |
-        static_cast<uint64_t>(Button::RStickU) | static_cast<uint64_t>(Button::RStickD);
-
-    constexpr uint64_t kA = static_cast<uint64_t>(Button::A);
-    bool pointerConsumesA = m_input.pointerConsumesButton(Button::A);
-    uint64_t actionExcludeMask = kDpadMask;
-    if (pointerConsumesA)
-        actionExcludeMask |= kA;
-
-    uint64_t consumed = fm.dispatchActions(m_input, actionExcludeMask);
-
-    if (!pointerConsumesA && !(consumed & kA) && m_input.isDown(Button::A)) {
-        if (auto* w = fm.current())
-            w->activate();
-    }
-
-    if (root->frameworkTouchEnabled())
-        fm.handleTouch(m_input, root);
-}
-
-void Application::run() {
-    uint64_t prevTick = armGetSystemTick();
-
-    while (m_running) {
-        uint64_t nowTick = armGetSystemTick();
-        float dt = static_cast<float>(nowTick - prevTick)
-                 / static_cast<float>(armGetSystemTickFreq());
-        prevTick = nowTick;
-        if (dt > 0.1f) dt = 0.016f;
-
-        m_input.update();
-        dispatchInput();
-
-        if (m_activity) {
-            m_activity->onUpdate(dt);
-            if (!applyPendingActivity()) {
-                m_running = false;
-                break;
-            }
-            m_activity->m_rootBox->update(dt);
-
-            if (m_renderEnabled && m_running) {
-                m_gpu.beginFrame();
-                m_renderer->beginFrame();
-                m_activity->m_rootBox->render(*m_renderer);
-                m_activity->onRender(*m_renderer);
-                m_renderer->endFrame();
-                m_gpu.endFrame();
-            } else if (m_running) {
-                svcSleepThread(100000000LL);
-            }
-        }
-    }
-}
-
-void Application::shutdown() {
-    if (s_current != this && !m_renderer && !m_activity)
+void queryApplicationViews(const std::vector<switchu::ns::ExtApplicationRecord>& records,
+                           std::vector<switchu::ns::ExtApplicationView>& views) {
+    views.clear();
+    if (records.empty())
         return;
 
-#ifdef SWITCHU_MENU
-    switchu::FileLog::log("[menu] shutdown begin");
-#endif
-    AnimationManager::instance().clear();
-    m_renderEnabled = false;
+    std::vector<uint64_t> tids(records.size());
+    for (size_t i = 0; i < records.size(); ++i)
+        tids[i] = records[i].id;
 
-    // Critical V6.3 ordering: finish every submitted command before the
-    // Activity destroys textures that may still be referenced by the GPU.
-    // Previously this wait happened only inside GpuDevice::shutdown(), after
-    // m_activity.reset(), which could expose freed texture memory briefly.
-    m_gpu.waitIdle();
-#ifdef SWITCHU_MENU
-    switchu::FileLog::log("[menu] gpu idle before resource destruction");
-#endif
-
-    m_input.shutdown();
-
-    if (m_activity) {
-        m_activity->onDestroy();
-#ifdef SWITCHU_MENU
-        switchu::FileLog::log("[menu] activity onDestroy complete");
-#endif
-        m_gpu.waitIdle();
-        m_activity.reset();
+    views.resize(records.size());
+    Result rc = switchu::ns::queryApplicationViews(
+        tids.data(),
+        static_cast<int>(tids.size()),
+        views.data());
+    if (R_FAILED(rc)) {
+        DebugLog::log("[loader] queryApplicationViews failed rc=0x%X", rc);
+        std::fill(views.begin(), views.end(), switchu::ns::ExtApplicationView{});
     }
-    m_pendingActivity.reset();
-    m_renderer.reset();
-    m_gpu.shutdown();
-#ifdef SWITCHU_MENU
-    switchu::FileLog::log("[menu] gpu shutdown complete");
+}
 #endif
 
-    if (s_current == this)
-        s_current = nullptr;
+bool fetchDaemonCatalog(std::vector<PendingApp>& out) {
+#ifdef SWITCHU_MENU
+    std::vector<switchu::menu::smi_cmd::AppEntry> catalog;
+    Result rc = switchu::menu::smi_cmd::getAppList(catalog, true);
+    if (R_FAILED(rc) || catalog.empty()) {
+        DebugLog::log("[loader] daemon catalog unavailable rc=0x%X count=%d",
+                      rc, (int)catalog.size());
+        return false;
+    }
+
+    char tidBuf[17];
+    out.clear();
+    out.reserve(catalog.size());
+    for (auto& ent : catalog) {
+        if (ent.titleId == 0 || ent.name.empty())
+            continue;
+
+        std::snprintf(tidBuf, sizeof(tidBuf), "%016lX", (unsigned long)ent.titleId);
+        PendingApp a;
+        a.id      = tidBuf;
+        a.title   = std::move(ent.name);
+        a.titleId = ent.titleId;
+        a.viewFlags = ent.viewFlags;
+        a.startupUserKnown = ent.startupUserKnown;
+        a.startupUserAccount = ent.startupUserKnown ? ent.startupUserAccount : 1;
+        a.startupUserAccountOption = ent.startupUserKnown ? ent.startupUserAccountOption : 0;
+        a.userRequired = !ent.startupUserKnown ||
+                         requiresInteractiveUserSelection(a.startupUserAccount,
+                                                          a.startupUserAccountOption);
+        a.iconData = std::move(ent.icon);
+
+        switchu::control_cache::Meta meta{};
+        if (switchu::control_cache::readMeta(ent.titleId, meta)) {
+            if (meta.name[0] != '\0')
+                a.title = meta.name;
+            a.startupUserKnown = true;
+            a.startupUserAccount = meta.startup_user_account;
+            a.startupUserAccountOption = meta.startup_user_account_option;
+            a.userRequired = requiresInteractiveUserSelection(a.startupUserAccount,
+                                                              a.startupUserAccountOption);
+            a.iconData = switchu::control_cache::readIcon(ent.titleId);
+        }
+
+        out.push_back(std::move(a));
+    }
+
+    if (out.empty())
+        return false;
+
+    DebugLog::log("[loader] loaded %d apps from daemon catalog", (int)out.size());
+    return true;
+#else
+    (void)out;
+    return false;
+#endif
 }
 
-} // namespace nxui
+void registerEntries(std::vector<PendingApp>& apps,
+                     GridModel& model,
+                     IconStreamer& streamer) {
+    streamer.init((int)apps.size());
+    streamer.setIconDataLoader(AppListLoader::loadIconData);
+    for (int i = 0; i < (int)apps.size(); ++i) {
+        auto& p = apps[i];
+        streamer.setTitleId(i, p.titleId);
+        if (!p.iconData.empty())
+            streamer.setIconData(i, std::move(p.iconData));
+        AppEntry entry;
+        entry.id           = std::move(p.id);
+        entry.title        = std::move(p.title);
+        entry.titleId      = p.titleId;
+        entry.iconTexIndex = -1;  // unused — IconStreamer handles textures
+        entry.viewFlags    = p.viewFlags;
+        entry.userRequired = p.userRequired;
+        entry.startupUserKnown = p.startupUserKnown;
+        entry.startupUserAccount = p.startupUserAccount;
+        entry.startupUserAccountOption = p.startupUserAccountOption;
+        model.addEntry(std::move(entry));
+    }
+}
+
+}
+
+void AppListLoader::fetchApps() {
+    char tidBuf[17];
+    m_pending.clear();
+
+#ifdef SWITCHU_HOMEBREW
+    static const char* dummyNames[] = {
+        "The Legend of Zelda: TotK",
+        "Super Mario Odyssey",
+        "Animal Crossing: NH",
+        "Splatoon 3",
+        "Mario Kart 8 Deluxe",
+        "Super Smash Bros. Ultimate",
+        "Pokemon Scarlet",
+        "Fire Emblem Engage",
+        "Xenoblade Chronicles 3",
+        "Metroid Dread",
+        "Kirby and the Forgotten Land",
+        "Bayonetta 3",
+        "Pikmin 4",
+        "Luigi's Mansion 3",
+        "Hollow Knight",
+        "Celeste",
+        "Stardew Valley",
+        "Hades",
+        "Undertale",
+        "Minecraft",
+    };
+    constexpr int kDummyCount = sizeof(dummyNames) / sizeof(dummyNames[0]);
+    for (int i = 0; i < kDummyCount; ++i) {
+        uint64_t fakeTid = 0x0100000000010000ULL + (uint64_t)i;
+        std::snprintf(tidBuf, sizeof(tidBuf), "%016lX", (unsigned long)fakeTid);
+        PendingApp a;
+        a.id      = tidBuf;
+        a.title   = dummyNames[i];
+        a.titleId = fakeTid;
+        a.userRequired = true;
+        a.startupUserAccount = 1;
+        a.startupUserAccountOption = 0;
+        uint32_t flags = (1u << 0) | (1u << 1) | (1u << 8);
+        if (i == 5)  flags |= (1u << 6) | (1u << 7);
+        if (i == 10) flags = (1u << 6);
+        if (i == 15) flags = (1u << 13);
+        a.viewFlags = flags;
+        m_pending.push_back(std::move(a));
+    }
+    DebugLog::log("[loader] generated %d dummy apps", kDummyCount);
+
+#else
+    if (fetchDaemonCatalog(m_pending)) {
+        DebugLog::log("[loader] fetched %d apps via daemon catalog",
+                      (int)m_pending.size());
+        return;
+    }
+
+#ifdef SWITCHU_MENU
+    DebugLog::log("[loader] daemon catalog required; skipping menu-side app scan");
+    return;
+#endif
+
+    std::vector<switchu::ns::ExtApplicationRecord> records;
+    if (!listApplicationRecords(records))
+        return;
+
+    std::vector<switchu::ns::ExtApplicationView> views;
+    queryApplicationViews(records, views);
+
+    m_pending.reserve(records.size());
+
+    for (size_t i = 0; i < records.size(); ++i) {
+        uint64_t tid = records[i].id;
+        std::snprintf(tidBuf, sizeof(tidBuf), "%016lX", (unsigned long)tid);
+
+        uint32_t vf = views[i].flags;
+
+        switchu::control_cache::Meta meta{};
+        if (switchu::control_cache::readMeta(tid, meta)) {
+            PendingApp a;
+            a.id      = tidBuf;
+            a.title   = meta.name;
+            a.titleId = tid;
+            a.viewFlags = vf;
+            a.startupUserKnown = true;
+            a.startupUserAccount = meta.startup_user_account;
+            a.startupUserAccountOption = meta.startup_user_account_option;
+            a.userRequired = requiresInteractiveUserSelection(a.startupUserAccount,
+                                                              a.startupUserAccountOption);
+            a.iconData = switchu::control_cache::readIcon(tid);
+            m_pending.push_back(std::move(a));
+            continue;
+        }
+
+        PendingApp a;
+        a.id      = tidBuf;
+        a.title   = tidBuf;
+        a.titleId = tid;
+        a.viewFlags = vf;
+        a.startupUserKnown = false;
+        a.startupUserAccount = 1;
+        a.startupUserAccountOption = 0;
+        a.userRequired = requiresInteractiveUserSelection(a.startupUserAccount, a.startupUserAccountOption);
+        m_pending.push_back(std::move(a));
+    }
+#endif
+    DebugLog::log("[loader] fetched %d apps", (int)m_pending.size());
+}
+
+
+std::vector<uint8_t> AppListLoader::loadIconData(uint64_t titleId) {
+    std::vector<uint8_t> iconData;
+    if (titleId == 0)
+        return iconData;
+
+#ifdef SWITCHU_MENU
+    iconData = switchu::control_cache::readIcon(titleId);
+#endif
+
+    return iconData;
+}
+
+
+void AppListLoader::load(GridModel& model, IconStreamer& streamer) {
+    fetchApps();
+    if (m_pendingTransform)
+        m_pendingTransform(m_pending);
+    registerEntries(m_pending, model, streamer);
+    m_pending.clear();
+}
+
+
+void AppListLoader::startAsync(nxui::ThreadPool& pool) {
+    if (m_future.valid())
+        m_future.get();
+
+    m_future = pool.submit([this]() {
+        fetchApps();
+    });
+}
+
+bool AppListLoader::isReady() const {
+    return m_future.valid() &&
+           m_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+}
+
+void AppListLoader::finalize(GridModel& model, IconStreamer& streamer) {
+    if (m_future.valid())
+        m_future.get();
+
+    if (m_pendingTransform)
+        m_pendingTransform(m_pending);
+    registerEntries(m_pending, model, streamer);
+    m_pending.clear();
+}
