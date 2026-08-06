@@ -6,8 +6,8 @@
 class AppletLauncher {
 public:
     struct Callbacks {
-        std::function<void()>     playSfxModalHide;
-        std::function<void()>     requestExit;
+        std::function<void()> playSfxModalHide;
+        std::function<void()> requestExit;
     };
 
     void init(Callbacks cbs);
@@ -22,13 +22,13 @@ public:
     void reboot();
 
     void launchApplication(uint64_t titleId, AccountUid uid);
-    void resumeApplication();
+    Result resumeApplication();
     void terminateApplication();
 
     void checkRunningApplication();
 
-    bool     isAppRunning()  const;
-    bool     isAppSuspended(uint64_t titleId) const;
+    bool isAppRunning() const;
+    bool isAppSuspended(uint64_t titleId) const;
     uint64_t suspendedTitleId() const;
 
     void setAppRunning(bool v);
@@ -41,8 +41,8 @@ public:
 
 private:
 #ifdef SWITCHU_MENU
-    std::atomic<bool>     m_appRunning{false};
-    std::atomic<bool>     m_appHasForeground{false};
+    std::atomic<bool> m_appRunning{false};
+    std::atomic<bool> m_appHasForeground{false};
     std::atomic<uint64_t> m_suspendedTitleId{0};
 #endif
 
