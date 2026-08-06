@@ -7,11 +7,13 @@
 
 namespace {
 
-// V6.3 HOME battery: slightly larger, with no lightning-bolt slot.
-constexpr float kBatteryWidth = 58.f;
-constexpr float kBatteryHeight = 28.f;
-constexpr float kTextGap = 5.f;
-constexpr float kPercentageScale = 1.04f;
+// V6.4 HOME battery: still larger than stock, but recalibrated so the
+// percentage never touches the terminal or the battery body.
+constexpr float kBatteryWidth = 54.f;
+constexpr float kBatteryHeight = 26.f;
+constexpr float kTerminalExtent = 8.f;
+constexpr float kTextGap = 8.f;
+constexpr float kPercentageScale = 0.98f;
 
 } // namespace
 
@@ -58,7 +60,7 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const float textW = measured.x * kPercentageScale;
     const float textH = measured.y * kPercentageScale;
 
-    const float groupW = kBatteryWidth + kTextGap + textW;
+    const float groupW = kBatteryWidth + kTerminalExtent + kTextGap + textW;
     const float groupH = std::max(kBatteryHeight, textH);
     const float bx = cr.x + (cr.width - groupW) * 0.5f;
     const float by = cr.y + (cr.height - groupH) * 0.5f +
@@ -67,11 +69,11 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Rect body = {bx, by, kBatteryWidth, kBatteryHeight};
     const nxui::Color edge = m_textColor.withAlpha(0.94f * op);
 
-    ren.drawRoundedRectOutline(body, edge, 6.5f, 2.0f);
-    ren.drawRoundedRect({body.right() + 2.5f, body.y + 7.5f, 5.5f, 13.f},
-                        edge.withAlpha(0.82f * op), 2.2f);
+    ren.drawRoundedRectOutline(body, edge, 6.2f, 1.9f);
+    ren.drawRoundedRect({body.right() + 2.5f, body.y + 7.f, 5.f, 12.f},
+                        edge.withAlpha(0.82f * op), 2.f);
 
-    nxui::Rect fill = body.shrunk(3.8f);
+    nxui::Rect fill = body.shrunk(3.7f);
     fill.width *= level;
     if (fill.width > 0.5f) {
         // The charge state is now carried entirely by the fill. It stays
@@ -89,19 +91,19 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
             fillColor = m_textColor.withAlpha(0.96f * op);
         }
         ren.drawRoundedRect(fill, fillColor,
-                            std::min(4.3f, fill.width * 0.5f));
+                            std::min(4.0f, fill.width * 0.5f));
 
         if (m_charging) {
-            ren.drawRoundedRect(fill.expanded(1.2f),
+            ren.drawRoundedRect(fill.expanded(1.0f),
                                 nxui::Color(0.22f, 1.f, 0.48f,
                                             (0.025f + 0.055f * blink) * op),
-                                std::min(5.f, fill.width * 0.5f));
+                                std::min(4.8f, fill.width * 0.5f));
         }
     }
 
     if (m_font) {
-        const float tx = body.right() + kTextGap;
-        const float ty = cr.y + (cr.height - textH) * 0.5f + 1.8f;
+        const float tx = body.right() + kTerminalExtent + kTextGap;
+        const float ty = cr.y + (cr.height - textH) * 0.5f + 1.2f;
         const nxui::Color text = m_textColor.withAlpha(op);
         const nxui::Color shadow(0.f, 0.f, 0.f, 0.28f * op);
         ren.drawText(buffer, {tx + 1.f, ty + 1.f}, m_font,
@@ -117,7 +119,7 @@ nxui::Vec2 BatteryWidget::computeContentSize() const {
         : nxui::Vec2{42.f, 18.f};
 
     return {
-        kBatteryWidth + kTextGap + measured.x * kPercentageScale,
+        kBatteryWidth + kTerminalExtent + kTextGap + measured.x * kPercentageScale,
         std::max(kBatteryHeight, measured.y * kPercentageScale)
     };
 }
