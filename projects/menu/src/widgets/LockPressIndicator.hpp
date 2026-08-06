@@ -3,8 +3,7 @@
 #include <nxui/widgets/Widget.hpp>
 #include <nxui/Theme.hpp>
 
-// V6.1: the three presses are displayed as three thicker, cleaner
-// luminous segments around the suspended application's cover.
+// V6.2: three continuous filled ring sectors around the suspended game.
 class LockPressIndicator : public nxui::Widget {
 public:
     void setTheme(const nxui::Theme* theme) { m_theme = theme; }
