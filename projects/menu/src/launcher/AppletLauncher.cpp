@@ -11,19 +11,19 @@ void AppletLauncher::init(Callbacks cbs) {
 }
 
 #ifdef SWITCHU_MENU
-bool AppletLauncher::isAppRunning() const  { return m_appRunning; }
+bool AppletLauncher::isAppRunning() const { return m_appRunning; }
 bool AppletLauncher::isAppSuspended(uint64_t titleId) const {
     return m_suspendedTitleId != 0 && m_suspendedTitleId == titleId;
 }
 uint64_t AppletLauncher::suspendedTitleId() const { return m_suspendedTitleId; }
 
-void AppletLauncher::setAppRunning(bool v)          { m_appRunning = v; }
-void AppletLauncher::setAppHasForeground(bool v)    { m_appHasForeground = v; }
-void AppletLauncher::setSuspendedTitleId(uint64_t v){ m_suspendedTitleId = v; }
+void AppletLauncher::setAppRunning(bool v) { m_appRunning = v; }
+void AppletLauncher::setAppHasForeground(bool v) { m_appHasForeground = v; }
+void AppletLauncher::setSuspendedTitleId(uint64_t v) { m_suspendedTitleId = v; }
 
 void AppletLauncher::setStartupStatus(uint64_t suspendedTitleId, bool appRunning) {
     m_suspendedTitleId = suspendedTitleId;
-    m_appRunning       = appRunning;
+    m_appRunning = appRunning;
     m_appHasForeground = false;
     DebugLog::log("[launcher] startup status: suspended=0x%016lX running=%d",
                   suspendedTitleId, appRunning);
@@ -31,41 +31,49 @@ void AppletLauncher::setStartupStatus(uint64_t suspendedTitleId, bool appRunning
 
 void AppletLauncher::launchAlbum() {
     DebugLog::log("[launcher] requesting Album launch via daemon");
-    Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchAlbum);
+    Result rc = switchu::menu::smi_cmd::sendSimple(
+        switchu::smi::SystemMessage::LaunchAlbum
+    );
     DebugLog::log("[launcher] Album rc=0x%X", rc);
     if (R_SUCCEEDED(rc)) {
         if (m_cb.playSfxModalHide) m_cb.playSfxModalHide();
-        if (m_cb.requestExit)      m_cb.requestExit();
+        if (m_cb.requestExit) m_cb.requestExit();
     }
 }
 
 void AppletLauncher::launchMiiEditor() {
     DebugLog::log("[launcher] requesting Mii Editor launch via daemon");
-    Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchMiiEditor);
+    Result rc = switchu::menu::smi_cmd::sendSimple(
+        switchu::smi::SystemMessage::LaunchMiiEditor
+    );
     DebugLog::log("[launcher] Mii Editor rc=0x%X", rc);
     if (R_SUCCEEDED(rc)) {
         if (m_cb.playSfxModalHide) m_cb.playSfxModalHide();
-        if (m_cb.requestExit)      m_cb.requestExit();
+        if (m_cb.requestExit) m_cb.requestExit();
     }
 }
 
 void AppletLauncher::launchControllerPairing() {
     DebugLog::log("[launcher] requesting Controller pairing via daemon");
-    Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchControllers);
+    Result rc = switchu::menu::smi_cmd::sendSimple(
+        switchu::smi::SystemMessage::LaunchControllers
+    );
     DebugLog::log("[launcher] Controller pairing rc=0x%X", rc);
     if (R_SUCCEEDED(rc)) {
         if (m_cb.playSfxModalHide) m_cb.playSfxModalHide();
-        if (m_cb.requestExit)      m_cb.requestExit();
+        if (m_cb.requestExit) m_cb.requestExit();
     }
 }
 
 void AppletLauncher::launchNetConnect() {
     DebugLog::log("[launcher] requesting NetConnect launch via daemon");
-    Result rc = switchu::menu::smi_cmd::sendSimple(switchu::smi::SystemMessage::LaunchNetConnect);
+    Result rc = switchu::menu::smi_cmd::sendSimple(
+        switchu::smi::SystemMessage::LaunchNetConnect
+    );
     DebugLog::log("[launcher] NetConnect rc=0x%X", rc);
     if (R_SUCCEEDED(rc)) {
         if (m_cb.playSfxModalHide) m_cb.playSfxModalHide();
-        if (m_cb.requestExit)      m_cb.requestExit();
+        if (m_cb.requestExit) m_cb.requestExit();
     }
 }
 
@@ -75,7 +83,7 @@ void AppletLauncher::launchUserPage(AccountUid uid) {
     DebugLog::log("[launcher] User Page rc=0x%X", rc);
     if (R_SUCCEEDED(rc)) {
         if (m_cb.playSfxModalHide) m_cb.playSfxModalHide();
-        if (m_cb.requestExit)      m_cb.requestExit();
+        if (m_cb.requestExit) m_cb.requestExit();
     }
 }
 
@@ -105,14 +113,21 @@ void AppletLauncher::launchApplication(uint64_t titleId, AccountUid uid) {
     if (m_cb.requestExit) m_cb.requestExit();
 }
 
-void AppletLauncher::resumeApplication() {
+Result AppletLauncher::resumeApplication() {
     if (m_suspendedTitleId == 0) {
         DebugLog::log("[launcher] no app suspended!");
-        return;
+        return 1;
     }
-    DebugLog::log("[launcher] resume, closing menu");
-    switchu::menu::smi_cmd::resumeApplication();
+
+    DebugLog::log("[launcher] requesting resume");
+    const Result rc = switchu::menu::smi_cmd::resumeApplication();
+    DebugLog::log("[launcher] resume rc=0x%X", rc);
+    if (R_FAILED(rc))
+        return rc;
+
+    DebugLog::log("[launcher] resume accepted, closing menu");
     if (m_cb.requestExit) m_cb.requestExit();
+    return rc;
 }
 
 void AppletLauncher::terminateApplication() {
@@ -120,33 +135,33 @@ void AppletLauncher::terminateApplication() {
         DebugLog::log("[launcher] no app suspended, nothing to terminate");
         return;
     }
-    DebugLog::log("[launcher] requesting terminate 0x%016lX", (uint64_t)m_suspendedTitleId);
+    DebugLog::log("[launcher] requesting terminate 0x%016lX",
+                  static_cast<uint64_t>(m_suspendedTitleId));
     switchu::menu::smi_cmd::terminateApplication();
 }
 
-void AppletLauncher::checkRunningApplication() {
-}
+void AppletLauncher::checkRunningApplication() {}
 
 #else
 
-bool AppletLauncher::isAppRunning() const            { return false; }
-bool AppletLauncher::isAppSuspended(uint64_t) const  { return false; }
-uint64_t AppletLauncher::suspendedTitleId() const    { return 0; }
-void AppletLauncher::setAppRunning(bool)             {}
-void AppletLauncher::setAppHasForeground(bool)       {}
-void AppletLauncher::setSuspendedTitleId(uint64_t)   {}
+bool AppletLauncher::isAppRunning() const { return false; }
+bool AppletLauncher::isAppSuspended(uint64_t) const { return false; }
+uint64_t AppletLauncher::suspendedTitleId() const { return 0; }
+void AppletLauncher::setAppRunning(bool) {}
+void AppletLauncher::setAppHasForeground(bool) {}
+void AppletLauncher::setSuspendedTitleId(uint64_t) {}
 
-void AppletLauncher::launchAlbum()             {}
-void AppletLauncher::launchMiiEditor()         {}
+void AppletLauncher::launchAlbum() {}
+void AppletLauncher::launchMiiEditor() {}
 void AppletLauncher::launchControllerPairing() {}
-void AppletLauncher::launchNetConnect()        {}
+void AppletLauncher::launchNetConnect() {}
 void AppletLauncher::launchUserPage(AccountUid) {}
-void AppletLauncher::enterSleep()              {}
-void AppletLauncher::shutdown()                {}
-void AppletLauncher::reboot()                  {}
+void AppletLauncher::enterSleep() {}
+void AppletLauncher::shutdown() {}
+void AppletLauncher::reboot() {}
 void AppletLauncher::launchApplication(uint64_t, AccountUid) {}
-void AppletLauncher::resumeApplication()       {}
-void AppletLauncher::terminateApplication()    {}
+Result AppletLauncher::resumeApplication() { return 0; }
+void AppletLauncher::terminateApplication() {}
 void AppletLauncher::checkRunningApplication() {}
 
 #endif
