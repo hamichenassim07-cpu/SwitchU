@@ -849,7 +849,7 @@ void LockScreenView::onUpdate(float dt) {
             }
         }
 
-        const HidNpadStyleTag style = hidGetNpadStyleSet(HidNpadIdType_No1);
+        const auto style = hidGetNpadStyleSet(HidNpadIdType_No1);
         m_controllerStatus = style != 0 ? "Manette connectée"
                                         : "Aucune manette détectée";
     }
