@@ -62,6 +62,13 @@ public:
 
 #ifdef SWITCHU_MENU
     void setStartupStatus(uint64_t suspendedTitleId, bool appRunning);
+
+    // V6.5.1: HOME opens Switch U's HOME directly, while boot/wakeup keeps
+    // the lockscreen. The daemon already passes MainMenu for a physical HOME
+    // press and StartupBoot for boot/wakeup.
+    void setStartupMode(switchu::smi::MenuStartMode mode) {
+        m_skipStartupLock = (mode == switchu::smi::MenuStartMode::MainMenu);
+    }
 #endif
 
     bool onCreate() override;
