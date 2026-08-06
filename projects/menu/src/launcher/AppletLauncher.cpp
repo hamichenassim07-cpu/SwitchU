@@ -1,16 +1,28 @@
 #include "AppletLauncher.hpp"
 #include "core/DebugLog.hpp"
+#include <nxui/Application.hpp>
 #ifdef SWITCHU_MENU
 #include "smi_commands.hpp"
 #include <switchu/smi_protocol.hpp>
 #endif
 #include <switch.h>
+#include <chrono>
 
 void AppletLauncher::init(Callbacks cbs) {
     m_cb = std::move(cbs);
 }
 
 #ifdef SWITCHU_MENU
+
+std::atomic<uint64_t> AppletLauncher::s_lastApplicationStateChangeMs{0};
+
+namespace {
+uint64_t launcherMonotonicMs() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+}
+
 bool AppletLauncher::isAppRunning() const { return m_appRunning; }
 bool AppletLauncher::isAppSuspended(uint64_t titleId) const {
     return m_suspendedTitleId != 0 && m_suspendedTitleId == titleId;
@@ -19,7 +31,18 @@ uint64_t AppletLauncher::suspendedTitleId() const { return m_suspendedTitleId; }
 
 void AppletLauncher::setAppRunning(bool v) { m_appRunning = v; }
 void AppletLauncher::setAppHasForeground(bool v) { m_appHasForeground = v; }
-void AppletLauncher::setSuspendedTitleId(uint64_t v) { m_suspendedTitleId = v; }
+void AppletLauncher::setSuspendedTitleId(uint64_t v) {
+    m_suspendedTitleId = v;
+    s_lastApplicationStateChangeMs.store(launcherMonotonicMs());
+}
+
+bool AppletLauncher::consumeRecentApplicationStateChange(uint64_t maxAgeMs) {
+    const uint64_t stamp = s_lastApplicationStateChangeMs.exchange(0);
+    if (stamp == 0)
+        return false;
+    const uint64_t now = launcherMonotonicMs();
+    return now >= stamp && (now - stamp) <= maxAgeMs;
+}
 
 void AppletLauncher::setStartupStatus(uint64_t suspendedTitleId, bool appRunning) {
     m_suspendedTitleId = suspendedTitleId;
@@ -126,6 +149,10 @@ Result AppletLauncher::resumeApplication() {
         return rc;
 
     DebugLog::log("[launcher] resume accepted, closing menu");
+    if (auto* application = nxui::Application::current()) {
+        DebugLog::log("[launcher] waiting for GPU before menu exit");
+        application->gpu().waitIdle();
+    }
     if (m_cb.requestExit) m_cb.requestExit();
     return rc;
 }
