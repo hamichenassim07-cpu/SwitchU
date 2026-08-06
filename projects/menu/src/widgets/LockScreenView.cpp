@@ -158,8 +158,11 @@ void buildClockStrings(bool use12Hour, ClockStrings& out) {
     out.minute = buffer;
 
     // Brutal, alarm-clock-style blink: no interpolation or fading.
-    // The separator changes state exactly once per second.
-    out.separatorVisible = (local->tm_sec % 2) == 0;
+    // V6.2 is slightly faster than one second per state.
+    const auto blinkMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+    out.separatorVisible = ((blinkMs / 800) % 2) == 0;
 
     static constexpr const char* days[] = {
         "dimanche", "lundi", "mardi", "mercredi",
@@ -329,32 +332,13 @@ void drawGradientText(nxui::Renderer& ren,
     for (const auto& glyph : glyphs)
         totalWidth += font->measure(glyph).x * scale;
 
-    // A local translucent backing protects the sentence from very bright
-    // per-game backgrounds without hiding the artwork.
-    const nxui::Rect backing = {
-        center.x - totalWidth * 0.5f - 24.f,
-        center.y - 8.f,
-        totalWidth + 48.f,
-        49.f
-    };
-    ren.drawRoundedRect(backing,
-                        nxui::Color(0.002f, 0.004f, 0.018f, 0.20f * alpha),
-                        24.f);
-
+    // V6.2: clean text only. No black backing and no drop shadow.
     float cursorX = center.x - totalWidth * 0.5f;
     const float denom = std::max(1.f, static_cast<float>(glyphs.size() - 1));
     for (std::size_t i = 0; i < glyphs.size(); ++i) {
         const float t = static_cast<float>(i) / denom;
-        const nxui::Color shadow(0.001f, 0.002f, 0.010f, 0.82f * alpha);
-        ren.drawText(glyphs[i], {cursorX + 2.2f, center.y + 2.5f},
-                     font, shadow, scale);
-        ren.drawText(glyphs[i], {cursorX - 1.0f, center.y + 0.2f},
-                     font, shadow.withAlpha(0.50f * alpha), scale);
-
         const nxui::Color color = lockGradient(t).withAlpha(0.99f * alpha);
         ren.drawText(glyphs[i], {cursorX, center.y}, font, color, scale);
-        ren.drawText(glyphs[i], {cursorX + 0.65f, center.y}, font,
-                     color.withAlpha(0.62f * alpha), scale);
         cursorX += font->measure(glyphs[i]).x * scale;
     }
 }
@@ -410,12 +394,12 @@ void drawBattery(nxui::Renderer& ren,
 
     if (font) {
         char buffer[16] = {};
-        std::snprintf(buffer, sizeof(buffer), "%u %%", static_cast<unsigned>(percentage));
+        std::snprintf(buffer, sizeof(buffer), "%u%%", static_cast<unsigned>(percentage));
         drawReadableText(ren, buffer,
-                         {origin.x + 96.f, origin.y - 2.f},
+                         {origin.x + 88.f, origin.y + 1.5f},
                          font,
                          nxui::Color(0.97f, 0.985f, 1.f, 0.97f),
-                         0.86f, alpha, 0.45f);
+                         0.94f, alpha, 0.45f);
     }
 }
 
@@ -498,14 +482,12 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
 LockScreenView::LockScreenView() {
     setRect({0.f, 0.f, 1280.f, 720.f});
 
-    for (nxui::GlassPanel* panel : {&m_profilePanel, &m_sessionPanel}) {
-        panel->setForceLiquidGlass(true);
-        panel->setBlurEnabled(false);
-        panel->setBackingEnabled(true);
-        panel->setBackingColor({0.008f, 0.010f, 0.032f, 1.f});
-        panel->setMaterialTextureEnabled(true);
-        panel->setMaterialTextureIntensity(0.36f);
-    }
+    m_profilePanel.setForceLiquidGlass(true);
+    m_profilePanel.setBlurEnabled(false);
+    m_profilePanel.setBackingEnabled(true);
+    m_profilePanel.setBackingColor({0.008f, 0.010f, 0.032f, 1.f});
+    m_profilePanel.setMaterialTextureEnabled(true);
+    m_profilePanel.setMaterialTextureIntensity(0.36f);
 }
 
 void LockScreenView::setFonts(nxui::Font* normal,
@@ -589,13 +571,11 @@ void LockScreenView::applyThemeToWidgets() {
     const nxui::Color border = {0.50f, 0.34f, 1.00f, 0.42f};
     const nxui::Color highlight = {0.90f, 0.96f, 1.00f, 0.14f};
 
-    for (nxui::GlassPanel* panel : {&m_profilePanel, &m_sessionPanel}) {
-        panel->setBaseColor(base);
-        panel->setBorderColor(border);
-        panel->setHighlightColor(highlight);
-        panel->setBorderWidth(1.80f);
-        panel->setCornerRadius(25.f);
-    }
+    m_profilePanel.setBaseColor(base);
+    m_profilePanel.setBorderColor(border);
+    m_profilePanel.setHighlightColor(highlight);
+    m_profilePanel.setBorderWidth(1.80f);
+    m_profilePanel.setCornerRadius(25.f);
 }
 
 void LockScreenView::resetBackgroundAsset() {
@@ -750,24 +730,9 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     ren.drawRect(screen, nxui::Color(0.002f, 0.004f, 0.014f,
                                      0.17f * m_viewOpacity));
 
-    // Local contrast zones: they are deliberately wide and soft rather than
-    // visible cards, so white text remains readable on bright artwork.
-    ren.drawGradientRect({18.f, 10.f, 360.f, 236.f},
-                         nxui::Color(0.001f, 0.003f, 0.014f, 0.46f * contentAlpha),
-                         nxui::Color(0.001f, 0.003f, 0.014f, 0.07f * contentAlpha));
-
     // The full central composition moves upward, while the cover itself is
     // placed a few pixels below the exact ring centre as requested.
     const nxui::Vec2 center = {650.f, 396.f + lift * 0.10f};
-    if (m_hasGame) {
-        drawArc(ren, center, 250.f, 0.f, 2.f * kPi,
-                nxui::Color(0.18f, 0.40f, 0.96f, 0.11f * contentAlpha),
-                1.3f, 120);
-        drawArc(ren, center, 289.f, 0.30f, 5.35f,
-                nxui::Color(0.50f, 0.20f, 1.00f, 0.08f * contentAlpha),
-                1.0f, 116);
-    }
-
     // Clock: fixed-position pieces prevent the minutes from moving when the
     // colon instantly disappears and reappears every second.
     ClockStrings clock;
@@ -810,7 +775,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                 m_batteryPercent, m_batteryCharging,
                 0.72f + 0.28f * breathe, contentAlpha);
 
-    // Larger adaptive greeting with local shadow/backing.
+    // Larger adaptive greeting, now drawn without backing or shadow.
     float greetingScale = 1.30f;
     if (m_fontMedium) {
         const float maxWidth = 640.f;
@@ -824,7 +789,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
 
     if (m_hasGame) {
         // Larger and heavier suspended-game badge.
-        const nxui::Rect statusRect = {542.f, 147.f + lift * 0.08f, 216.f, 48.f};
+        const nxui::Rect statusRect = {528.f, 141.f + lift * 0.08f, 244.f, 54.f};
         ren.drawRoundedRect(statusRect,
                             nxui::Color(0.012f, 0.020f, 0.074f,
                                         0.58f * contentAlpha), 24.f);
@@ -834,11 +799,11 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                    24.f, 1.55f);
         if (m_fontSmall) {
             const std::string label = "JEU SUSPENDU";
-            const float scale = 1.03f;
+            const float scale = 1.12f;
             const nxui::Vec2 size = m_fontSmall->measure(label);
             drawReadableText(ren, label,
                              {statusRect.x + (statusRect.width - size.x * scale) * 0.5f,
-                              statusRect.y + 11.f},
+                              statusRect.y + 12.f},
                              m_fontSmall,
                              nxui::Color(0.91f, 0.94f, 1.f, 0.96f),
                              scale, contentAlpha, 0.55f);
@@ -849,8 +814,8 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         m_progress.setOpacity(contentAlpha);
         m_progress.render(ren);
 
-        // The cover is intentionally 9 px below the ring centre.
-        const nxui::Rect cover = {558.f, 313.f + lift * 0.10f, 184.f, 184.f};
+        // The cover is now almost perfectly centred inside the three segments.
+        const nxui::Rect cover = {558.f, 306.f + lift * 0.10f, 184.f, 184.f};
         ren.drawRoundedRect(cover.expanded(13.f),
                             nxui::Color(0.08f, 0.30f, 0.86f,
                                         (0.09f + 0.04f * breathe) * contentAlpha),
@@ -874,7 +839,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
 
     // Right-hand cards are substantially higher than in V6 and the border
     // is only a fraction thicker, as requested.
-    const nxui::Rect profileRect = {952.f, 194.f + lift * 0.06f, 292.f, 158.f};
+    const nxui::Rect profileRect = {938.f, 204.f + lift * 0.06f, 306.f, 166.f};
     m_profilePanel.setRect(profileRect);
     m_profilePanel.setOpacity(contentAlpha);
     m_profilePanel.render(ren);
@@ -892,15 +857,15 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
 
     const nxui::Rect avatarRect = {
         profileRect.x + 25.f,
-        profileRect.y + 68.f,
-        66.f,
-        66.f
+        profileRect.y + 72.f,
+        70.f,
+        70.f
     };
     if (m_profileAvatarTexture.valid()) {
-        ren.drawTextureRounded(&m_profileAvatarTexture, avatarRect, 33.f,
+        ren.drawTextureRounded(&m_profileAvatarTexture, avatarRect, 35.f,
                                nxui::Color::white().withAlpha(contentAlpha));
     } else {
-        ren.drawCircle({avatarRect.x + 33.f, avatarRect.y + 33.f}, 33.f,
+        ren.drawCircle({avatarRect.x + 35.f, avatarRect.y + 35.f}, 35.f,
                        lockGradient(0.14f).withAlpha(0.90f * contentAlpha), 42);
         if (m_fontMedium && !m_profileName.empty()) {
             const std::string initial = splitUtf8(m_profileName).front();
@@ -924,56 +889,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                          0.90f, contentAlpha, 0.55f);
     }
 
-    if (m_hasGame) {
-        const nxui::Rect sessionRect = {952.f, 382.f + lift * 0.06f, 292.f, 166.f};
-        m_sessionPanel.setRect(sessionRect);
-        m_sessionPanel.setOpacity(contentAlpha);
-        m_sessionPanel.render(ren);
-
-        if (m_fontSmall) {
-            drawReadableText(ren, "SESSION EN COURS",
-                             {sessionRect.x + 24.f, sessionRect.y + 15.f},
-                             m_fontSmall,
-                             nxui::Color(0.90f, 0.92f, 1.f, 0.95f),
-                             1.02f, contentAlpha, 0.55f);
-        }
-        ren.drawRect({sessionRect.x + 24.f, sessionRect.y + 52.f,
-                      sessionRect.width - 48.f, 1.f},
-                     nxui::Color(0.78f, 0.84f, 1.f, 0.20f * contentAlpha));
-
-        const nxui::Rect miniCover = {
-            sessionRect.x + 24.f,
-            sessionRect.y + 68.f,
-            72.f,
-            72.f
-        };
-        ren.drawRoundedRect(miniCover,
-                            nxui::Color(0.025f, 0.030f, 0.090f,
-                                        0.92f * contentAlpha), 14.f);
-        if (m_gameTexture && m_gameTexture->valid()) {
-            ren.drawTextureRounded(m_gameTexture, miniCover.shrunk(3.f), 12.f,
-                                   nxui::Color::white().withAlpha(contentAlpha));
-        }
-        ren.drawRoundedRectOutline(miniCover,
-                                   nxui::Color(0.58f, 0.72f, 1.f,
-                                               0.46f * contentAlpha),
-                                   14.f, 1.35f);
-
-        if (m_fontNormal) {
-            const float titleScale = 0.78f;
-            const float maxTitleWidth = sessionRect.right() -
-                                        (sessionRect.x + 112.f) - 18.f;
-            const std::string shownTitle = truncateUtf8ToWidth(
-                m_gameTitle, m_fontNormal, titleScale, maxTitleWidth
-            );
-            drawReadableText(ren, shownTitle,
-                             {sessionRect.x + 112.f, sessionRect.y + 91.f},
-                             m_fontNormal,
-                             nxui::Color(0.99f, 0.995f, 1.f, 1.f),
-                             titleScale, contentAlpha, 0.48f);
-        }
-        // The duplicate "Jeu suspendu" subtitle from V6 is intentionally gone.
-    }
+    // V6.2: the redundant SESSION EN COURS card has been removed.
 
     if (m_hasGame) {
         // With a suspended game, the large ring is the progress indicator.
@@ -1019,7 +935,11 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                             0.30f * flash * m_viewOpacity),
                 2.4f, 128);
 
-        if (m_unlockProgress > 0.10f && m_unlockProgress < 0.88f) {
+        // The suspended-game transition deliberately avoids the offscreen
+        // wave effect. On real hardware it could leave pixel artefacts while
+        // the application was taking the foreground back.
+        if (!m_hasGame &&
+            m_unlockProgress > 0.10f && m_unlockProgress < 0.88f) {
             ren.captureToOffscreen();
             ren.applyWave(m_pulse,
                           0.005f + 0.010f * flash,
