@@ -81,6 +81,27 @@ std::string truncateUtf8(const std::string& text, std::size_t limit) {
     return out;
 }
 
+std::string truncateUtf8ToWidth(const std::string& text,
+                                nxui::Font* font,
+                                float scale,
+                                float maxWidth) {
+    if (!font || text.empty() || maxWidth <= 0.f)
+        return {};
+    if (font->measure(text).x * scale <= maxWidth)
+        return text;
+
+    const auto glyphs = splitUtf8(text);
+    const std::string ellipsis = "…";
+    std::string out;
+    for (const auto& glyph : glyphs) {
+        const std::string candidate = out + glyph + ellipsis;
+        if (font->measure(candidate).x * scale > maxWidth)
+            break;
+        out += glyph;
+    }
+    return out.empty() ? ellipsis : out + ellipsis;
+}
+
 std::string utf8Codepoint(std::uint32_t cp) {
     std::string out;
     if (cp <= 0x7F) {
@@ -101,29 +122,44 @@ std::string utf8Codepoint(std::uint32_t cp) {
     return out;
 }
 
-void buildClockStrings(bool use12Hour,
-                       std::string& timeText,
-                       std::string& dateText) {
+struct ClockStrings {
+    std::string hour;
+    std::string minute;
+    std::string suffix;
+    std::string date;
+    bool separatorVisible = true;
+};
+
+void buildClockStrings(bool use12Hour, ClockStrings& out) {
     const std::time_t now = std::time(nullptr);
     const std::tm* local = std::localtime(&now);
     if (!local) {
-        timeText = "--:--";
-        dateText = "Date indisponible";
+        out.hour = "--";
+        out.minute = "--";
+        out.suffix.clear();
+        out.date = "Date indisponible";
+        out.separatorVisible = true;
         return;
     }
 
     char buffer[96] = {};
+    int hour = local->tm_hour;
     if (use12Hour) {
-        int hour = local->tm_hour % 12;
+        hour %= 12;
         if (hour == 0) hour = 12;
-        std::snprintf(buffer, sizeof(buffer), "%d:%02d %s",
-                      hour, local->tm_min,
-                      local->tm_hour >= 12 ? "PM" : "AM");
+        out.suffix = local->tm_hour >= 12 ? "PM" : "AM";
     } else {
-        std::snprintf(buffer, sizeof(buffer), "%02d:%02d",
-                      local->tm_hour, local->tm_min);
+        out.suffix.clear();
     }
-    timeText = buffer;
+
+    std::snprintf(buffer, sizeof(buffer), use12Hour ? "%d" : "%02d", hour);
+    out.hour = buffer;
+    std::snprintf(buffer, sizeof(buffer), "%02d", local->tm_min);
+    out.minute = buffer;
+
+    // Brutal, alarm-clock-style blink: no interpolation or fading.
+    // The separator changes state exactly once per second.
+    out.separatorVisible = (local->tm_sec % 2) == 0;
 
     static constexpr const char* days[] = {
         "dimanche", "lundi", "mardi", "mercredi",
@@ -137,7 +173,7 @@ void buildClockStrings(bool use12Hour,
     const int month = std::clamp(local->tm_mon, 0, 11);
     std::snprintf(buffer, sizeof(buffer), "%s %d %s",
                   days[weekday], local->tm_mday, months[month]);
-    dateText = buffer;
+    out.date = buffer;
 }
 
 void drawArc(nxui::Renderer& ren,
@@ -257,6 +293,28 @@ void drawTextureCover(nxui::Renderer& ren,
     ren.drawTexture(texture, dest, nxui::Color::white().withAlpha(alpha));
 }
 
+void drawReadableText(nxui::Renderer& ren,
+                      const std::string& text,
+                      const nxui::Vec2& pos,
+                      nxui::Font* font,
+                      const nxui::Color& color,
+                      float scale,
+                      float alpha,
+                      float weight = 0.f) {
+    if (!font || text.empty())
+        return;
+
+    const nxui::Color shadow(0.002f, 0.003f, 0.012f, 0.78f * alpha);
+    ren.drawText(text, {pos.x + 2.2f, pos.y + 2.4f}, font, shadow, scale);
+    ren.drawText(text, {pos.x - 1.0f, pos.y + 0.4f}, font,
+                 shadow.withAlpha(0.46f * alpha), scale);
+    ren.drawText(text, pos, font, color.withAlpha(color.a * alpha), scale);
+    if (weight > 0.f) {
+        ren.drawText(text, {pos.x + weight, pos.y}, font,
+                     color.withAlpha(color.a * 0.78f * alpha), scale);
+    }
+}
+
 void drawGradientText(nxui::Renderer& ren,
                       const std::string& text,
                       nxui::Font* font,
@@ -271,12 +329,32 @@ void drawGradientText(nxui::Renderer& ren,
     for (const auto& glyph : glyphs)
         totalWidth += font->measure(glyph).x * scale;
 
+    // A local translucent backing protects the sentence from very bright
+    // per-game backgrounds without hiding the artwork.
+    const nxui::Rect backing = {
+        center.x - totalWidth * 0.5f - 24.f,
+        center.y - 8.f,
+        totalWidth + 48.f,
+        49.f
+    };
+    ren.drawRoundedRect(backing,
+                        nxui::Color(0.002f, 0.004f, 0.018f, 0.20f * alpha),
+                        24.f);
+
     float cursorX = center.x - totalWidth * 0.5f;
     const float denom = std::max(1.f, static_cast<float>(glyphs.size() - 1));
     for (std::size_t i = 0; i < glyphs.size(); ++i) {
         const float t = static_cast<float>(i) / denom;
-        const nxui::Color color = lockGradient(t).withAlpha(0.98f * alpha);
+        const nxui::Color shadow(0.001f, 0.002f, 0.010f, 0.82f * alpha);
+        ren.drawText(glyphs[i], {cursorX + 2.2f, center.y + 2.5f},
+                     font, shadow, scale);
+        ren.drawText(glyphs[i], {cursorX - 1.0f, center.y + 0.2f},
+                     font, shadow.withAlpha(0.50f * alpha), scale);
+
+        const nxui::Color color = lockGradient(t).withAlpha(0.99f * alpha);
         ren.drawText(glyphs[i], {cursorX, center.y}, font, color, scale);
+        ren.drawText(glyphs[i], {cursorX + 0.65f, center.y}, font,
+                     color.withAlpha(0.62f * alpha), scale);
         cursorX += font->measure(glyphs[i]).x * scale;
     }
 }
@@ -289,40 +367,129 @@ void drawBattery(nxui::Renderer& ren,
                  float pulse,
                  float alpha) {
     const float level = std::clamp(static_cast<float>(percentage) / 100.f, 0.f, 1.f);
-    const nxui::Rect body = {origin.x, origin.y, 43.f, 21.f};
-    const nxui::Color edge = nxui::Color(0.96f, 0.98f, 1.f, 0.88f * alpha);
+    const nxui::Rect body = {origin.x, origin.y, 52.f, 25.f};
+    const nxui::Color edge(0.97f, 0.985f, 1.f, 0.92f * alpha);
 
-    ren.drawRoundedRectOutline(body, edge, 5.f, 1.5f);
-    ren.drawRoundedRect({body.right() + 2.f, body.y + 6.f, 4.f, 9.f},
-                        edge.withAlpha(0.74f * alpha), 1.8f);
+    ren.drawRoundedRectOutline(body, edge, 6.f, 1.9f);
+    ren.drawRoundedRect({body.right() + 2.5f, body.y + 7.f, 5.f, 11.f},
+                        edge.withAlpha(0.80f * alpha), 2.f);
 
-    nxui::Rect fill = body.shrunk(3.f);
+    nxui::Rect fill = body.shrunk(3.5f);
     fill.width *= level;
     if (fill.width > 0.5f) {
-        nxui::Color fillColor = percentage <= 20
-            ? nxui::Color(1.f, 0.26f, 0.24f, 0.94f * alpha)
-            : nxui::Color(0.94f, 0.97f, 1.f,
-                          (charging ? 0.72f + 0.28f * pulse : 0.94f) * alpha);
+        const nxui::Color fillColor = percentage <= 20
+            ? nxui::Color(1.f, 0.26f, 0.24f, 0.96f * alpha)
+            : nxui::Color(0.95f, 0.98f, 1.f,
+                          (charging ? 0.78f + 0.22f * pulse : 0.96f) * alpha);
         ren.drawRoundedRect(fill, fillColor,
-                            std::min(3.5f, fill.width * 0.5f));
+                            std::min(4.f, fill.width * 0.5f));
+    }
+
+    // Stable reserved space for the charging bolt keeps the percentage from
+    // jumping horizontally when the cable is connected or removed.
+    const nxui::Rect bolt = {origin.x + 67.f, origin.y - 1.f, 21.f, 28.f};
+    if (charging) {
+        const nxui::Color glow(0.40f, 1.f, 0.70f,
+                               (0.18f + 0.08f * pulse) * alpha);
+        ren.drawCircle({bolt.x + bolt.width * 0.5f,
+                        bolt.y + bolt.height * 0.5f},
+                       18.f, glow, 28);
+
+        const nxui::Color green(0.42f, 1.f, 0.68f, alpha);
+        const nxui::Vec2 p0{bolt.x + 12.f, bolt.y + 1.f};
+        const nxui::Vec2 p1{bolt.x + 4.f, bolt.y + 15.f};
+        const nxui::Vec2 p2{bolt.x + 10.f, bolt.y + 15.f};
+        const nxui::Vec2 p3{bolt.x + 7.f, bolt.y + 27.f};
+        const nxui::Vec2 p4{bolt.x + 18.f, bolt.y + 11.f};
+        const nxui::Vec2 p5{bolt.x + 12.f, bolt.y + 11.f};
+        ren.drawTriangle(p0, p1, p5, green);
+        ren.drawTriangle(p1, p2, p5, green);
+        ren.drawTriangle(p2, p3, p4, green);
+        ren.drawTriangle(p2, p4, p5, green);
     }
 
     if (font) {
         char buffer[16] = {};
         std::snprintf(buffer, sizeof(buffer), "%u %%", static_cast<unsigned>(percentage));
-        ren.drawText(buffer, {origin.x + 58.f, origin.y - 2.f}, font,
-                     nxui::Color(0.96f, 0.98f, 1.f, 0.94f * alpha), 0.78f);
+        drawReadableText(ren, buffer,
+                         {origin.x + 96.f, origin.y - 2.f},
+                         font,
+                         nxui::Color(0.97f, 0.985f, 1.f, 0.97f),
+                         0.86f, alpha, 0.45f);
     }
+}
 
-    if (charging) {
-        const float x = origin.x + 47.f;
-        const float y = origin.y + 2.f;
-        ren.drawLine({x + 4.f, y}, {x, y + 8.f},
-                     nxui::Color(0.42f, 1.f, 0.68f, alpha), 2.f);
-        ren.drawLine({x, y + 8.f}, {x + 5.f, y + 8.f},
-                     nxui::Color(0.42f, 1.f, 0.68f, alpha), 2.f);
-        ren.drawLine({x + 5.f, y + 8.f}, {x + 1.f, y + 17.f},
-                     nxui::Color(0.42f, 1.f, 0.68f, alpha), 2.f);
+void drawNoGameUnlockPill(nxui::Renderer& ren,
+                          nxui::Font* textFont,
+                          nxui::Font* iconFont,
+                          int progress,
+                          float flash,
+                          float pulse,
+                          float alpha,
+                          float lift) {
+    if (!textFont || !iconFont)
+        return;
+
+    const float breathe = 0.5f + 0.5f * std::sin(pulse * 2.05f);
+    const nxui::Rect pill = {414.f, 582.f + lift, 472.f, 104.f};
+    ren.drawRoundedRect(pill,
+                        nxui::Color(0.010f, 0.014f, 0.052f, 0.72f * alpha),
+                        35.f);
+    ren.drawRoundedRectOutline(pill,
+                               nxui::Color(0.48f, 0.34f, 1.f,
+                                           (0.48f + 0.08f * breathe) * alpha),
+                               35.f, 1.8f);
+
+    const std::string instruction = "Appuie trois fois sur";
+    const std::string aGlyph = utf8Codepoint(0xE0E0);
+    const float textScale = 0.82f;
+    const float glyphScale = 1.24f;
+    const nxui::Vec2 textSize = textFont->measure(instruction);
+    const nxui::Vec2 glyphSize = iconFont->measure(aGlyph);
+    const float gap = 14.f;
+    const float totalW = textSize.x * textScale + gap + glyphSize.x * glyphScale;
+    const float startX = pill.x + (pill.width - totalW) * 0.5f;
+    const float y = pill.y + 14.f;
+
+    drawReadableText(ren, instruction, {startX, y}, textFont,
+                     nxui::Color(0.98f, 0.99f, 1.f, 0.98f),
+                     textScale, alpha, 0.35f);
+    const float glyphX = startX + textSize.x * textScale + gap;
+    ren.drawCircle({glyphX + glyphSize.x * glyphScale * 0.5f,
+                    y + glyphSize.y * glyphScale * 0.46f},
+                   25.f + 2.f * breathe,
+                   nxui::Color(0.46f, 0.70f, 1.f,
+                               (0.07f + 0.04f * breathe) * alpha), 32);
+    ren.drawText(aGlyph, {glyphX, y - 3.f}, iconFont,
+                 nxui::Color(0.99f, 1.f, 1.f, alpha), glyphScale);
+
+    const float dotY = pill.y + 77.f;
+    const float spacing = 31.f;
+    for (int i = 0; i < 3; ++i) {
+        const float x = pill.x + pill.width * 0.5f + (i - 1) * spacing;
+        const bool active = i < progress;
+        const bool next = i == progress && progress < 3;
+        const float localFlash = active && i == progress - 1
+            ? std::clamp(flash, 0.f, 1.f)
+            : 0.f;
+
+        if (active) {
+            const nxui::Color c = lockGradient(static_cast<float>(i) / 2.f);
+            ren.drawCircle({x, dotY}, 17.f + 3.f * localFlash,
+                           c.withAlpha((0.10f + 0.08f * localFlash) * alpha), 28);
+            ren.drawCircle({x, dotY}, 8.2f + 0.9f * localFlash,
+                           c.withAlpha(0.98f * alpha), 24);
+        } else {
+            const float nextScale = next ? (1.f + 0.18f * breathe) : 1.f;
+            if (next) {
+                ren.drawCircle({x, dotY}, 15.f + 2.f * breathe,
+                               nxui::Color(0.45f, 0.58f, 1.f,
+                                           (0.055f + 0.045f * breathe) * alpha), 28);
+            }
+            ren.drawCircle({x, dotY}, 6.8f * nextScale,
+                           nxui::Color(0.58f, 0.64f, 0.84f,
+                                       (0.34f + (next ? 0.14f * breathe : 0.f)) * alpha), 22);
+        }
     }
 }
 
@@ -426,7 +593,7 @@ void LockScreenView::applyThemeToWidgets() {
         panel->setBaseColor(base);
         panel->setBorderColor(border);
         panel->setHighlightColor(highlight);
-        panel->setBorderWidth(1.35f);
+        panel->setBorderWidth(1.80f);
         panel->setCornerRadius(25.f);
     }
 }
@@ -574,86 +741,116 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                    (0.08f + 0.025f * breathe) * contentAlpha), 96);
     }
 
-    // The artwork remains visible, but the UI always keeps enough contrast.
+    // Global veil stays light enough to preserve the personalised background.
     ren.drawGradientRect(
         screen,
-        nxui::Color(0.004f, 0.008f, 0.025f, 0.42f * m_viewOpacity),
-        nxui::Color(0.004f, 0.006f, 0.020f, 0.78f * m_viewOpacity)
+        nxui::Color(0.004f, 0.008f, 0.025f, 0.38f * m_viewOpacity),
+        nxui::Color(0.004f, 0.006f, 0.020f, 0.72f * m_viewOpacity)
     );
     ren.drawRect(screen, nxui::Color(0.002f, 0.004f, 0.014f,
-                                     0.20f * m_viewOpacity));
+                                     0.17f * m_viewOpacity));
 
-    // Large quiet orbital lines behind the central application.
-    const nxui::Vec2 center = {650.f, 395.f + lift * 0.10f};
+    // Local contrast zones: they are deliberately wide and soft rather than
+    // visible cards, so white text remains readable on bright artwork.
+    ren.drawGradientRect({18.f, 10.f, 360.f, 236.f},
+                         nxui::Color(0.001f, 0.003f, 0.014f, 0.46f * contentAlpha),
+                         nxui::Color(0.001f, 0.003f, 0.014f, 0.07f * contentAlpha));
+
+    // The full central composition moves upward, while the cover itself is
+    // placed a few pixels below the exact ring centre as requested.
+    const nxui::Vec2 center = {650.f, 396.f + lift * 0.10f};
     if (m_hasGame) {
-        drawArc(ren, center, 245.f, 0.f, 2.f * kPi,
-                nxui::Color(0.18f, 0.40f, 0.96f, 0.12f * contentAlpha),
-                1.3f, 112);
-        drawArc(ren, center, 285.f, 0.30f, 5.35f,
-                nxui::Color(0.50f, 0.20f, 1.00f, 0.09f * contentAlpha),
-                1.0f, 108);
+        drawArc(ren, center, 250.f, 0.f, 2.f * kPi,
+                nxui::Color(0.18f, 0.40f, 0.96f, 0.11f * contentAlpha),
+                1.3f, 120);
+        drawArc(ren, center, 289.f, 0.30f, 5.35f,
+                nxui::Color(0.50f, 0.20f, 1.00f, 0.08f * contentAlpha),
+                1.0f, 116);
     }
 
-    // Clock, date and battery — deliberately free of a card, like the concept.
-    std::string timeText;
-    std::string dateText;
-    buildClockStrings(m_use12Hour, timeText, dateText);
-
+    // Clock: fixed-position pieces prevent the minutes from moving when the
+    // colon instantly disappears and reappears every second.
+    ClockStrings clock;
+    buildClockStrings(m_use12Hour, clock);
     if (m_fontLarge) {
-        ren.drawText(timeText, {48.f, 34.f + lift * 0.04f}, m_fontLarge,
-                     nxui::Color(0.f, 0.f, 0.f, 0.28f * contentAlpha), 1.18f);
-        ren.drawText(timeText, {44.f, 30.f + lift * 0.04f}, m_fontLarge,
-                     nxui::Color(0.98f, 0.99f, 1.f, contentAlpha), 1.18f);
+        const float scale = 1.22f;
+        const float x = 44.f;
+        const float y = 24.f + lift * 0.04f;
+        const nxui::Color white(0.985f, 0.992f, 1.f, 1.f);
+        const float hourW = m_fontLarge->measure(clock.hour).x * scale;
+        const float colonW = m_fontLarge->measure(":").x * scale;
+
+        drawReadableText(ren, clock.hour, {x, y}, m_fontLarge,
+                         white, scale, contentAlpha, 0.65f);
+        if (clock.separatorVisible) {
+            drawReadableText(ren, ":", {x + hourW + 1.f, y}, m_fontLarge,
+                             white, scale, contentAlpha, 0.65f);
+        }
+        const float minuteX = x + hourW + colonW + 2.f;
+        drawReadableText(ren, clock.minute, {minuteX, y}, m_fontLarge,
+                         white, scale, contentAlpha, 0.65f);
+
+        if (!clock.suffix.empty() && m_fontMedium) {
+            const float minuteW = m_fontLarge->measure(clock.minute).x * scale;
+            drawReadableText(ren, clock.suffix,
+                             {minuteX + minuteW + 13.f, y + 39.f},
+                             m_fontMedium,
+                             nxui::Color(0.93f, 0.95f, 1.f, 0.94f),
+                             0.68f, contentAlpha, 0.35f);
+        }
     }
     if (m_fontMedium) {
-        ren.drawText(dateText, {50.f, 145.f + lift * 0.04f}, m_fontMedium,
-                     nxui::Color(0.94f, 0.96f, 1.f, 0.94f * contentAlpha), 0.72f);
+        drawReadableText(ren, clock.date,
+                         {48.f, 124.f + lift * 0.04f},
+                         m_fontMedium,
+                         nxui::Color(0.95f, 0.97f, 1.f, 0.97f),
+                         0.82f, contentAlpha, 0.45f);
     }
-    drawBattery(ren, m_fontNormal, {54.f, 195.f + lift * 0.04f},
+    drawBattery(ren, m_fontNormal, {52.f, 166.f + lift * 0.04f},
                 m_batteryPercent, m_batteryCharging,
                 0.72f + 0.28f * breathe, contentAlpha);
 
-    // Adaptive greeting centered over the application.
-    float greetingScale = 1.20f;
+    // Larger adaptive greeting with local shadow/backing.
+    float greetingScale = 1.30f;
     if (m_fontMedium) {
-        const float maxWidth = 610.f;
+        const float maxWidth = 640.f;
         const float measured = m_fontMedium->measure(m_greeting).x;
         if (measured > 0.f)
-            greetingScale = std::clamp(maxWidth / measured, 0.82f, 1.20f);
+            greetingScale = std::clamp(maxWidth / measured, 0.90f, 1.30f);
     }
     drawGradientText(ren, m_greeting, m_fontMedium,
-                     {650.f, 66.f + lift * 0.03f},
+                     {650.f, 55.f + lift * 0.03f},
                      greetingScale, contentAlpha);
 
     if (m_hasGame) {
-        // "JEU SUSPENDU" label.
-        const nxui::Rect statusRect = {555.f, 178.f + lift * 0.08f, 190.f, 42.f};
+        // Larger and heavier suspended-game badge.
+        const nxui::Rect statusRect = {542.f, 147.f + lift * 0.08f, 216.f, 48.f};
         ren.drawRoundedRect(statusRect,
-                            nxui::Color(0.018f, 0.026f, 0.090f,
-                                        0.48f * contentAlpha), 21.f);
+                            nxui::Color(0.012f, 0.020f, 0.074f,
+                                        0.58f * contentAlpha), 24.f);
         ren.drawRoundedRectOutline(statusRect,
-                                   nxui::Color(0.34f, 0.50f, 1.00f,
-                                               0.30f * contentAlpha),
-                                   21.f, 1.2f);
+                                   nxui::Color(0.42f, 0.50f, 1.00f,
+                                               0.43f * contentAlpha),
+                                   24.f, 1.55f);
         if (m_fontSmall) {
             const std::string label = "JEU SUSPENDU";
+            const float scale = 1.03f;
             const nxui::Vec2 size = m_fontSmall->measure(label);
-            ren.drawText(label,
-                         {statusRect.x + (statusRect.width - size.x * 0.88f) * 0.5f,
-                          statusRect.y + 9.f},
-                         m_fontSmall,
-                         nxui::Color(0.86f, 0.90f, 1.f, 0.82f * contentAlpha),
-                         0.88f);
+            drawReadableText(ren, label,
+                             {statusRect.x + (statusRect.width - size.x * scale) * 0.5f,
+                              statusRect.y + 11.f},
+                             m_fontSmall,
+                             nxui::Color(0.91f, 0.94f, 1.f, 0.96f),
+                             scale, contentAlpha, 0.55f);
         }
 
-        // Three large press segments around the cover.
-        m_progress.setRect({418.f, 218.f + lift * 0.10f, 464.f, 392.f});
+        // Whole ring block is higher than V6.
+        m_progress.setRect({414.f, 194.f + lift * 0.10f, 472.f, 404.f});
         m_progress.setOpacity(contentAlpha);
         m_progress.render(ren);
 
-        // Central cover. The application can be known before its texture has
-        // finished streaming, so a clean placeholder is provided.
-        const nxui::Rect cover = {558.f, 305.f + lift * 0.10f, 184.f, 184.f};
+        // The cover is intentionally 9 px below the ring centre.
+        const nxui::Rect cover = {558.f, 313.f + lift * 0.10f, 184.f, 184.f};
         ren.drawRoundedRect(cover.expanded(13.f),
                             nxui::Color(0.08f, 0.30f, 0.86f,
                                         (0.09f + 0.04f * breathe) * contentAlpha),
@@ -670,31 +867,32 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                  nxui::Color(0.26f, 0.08f, 0.46f, 0.78f * contentAlpha));
         }
         ren.drawRoundedRectOutline(cover,
-                                   nxui::Color(0.72f, 0.86f, 1.f,
-                                               0.56f * contentAlpha),
-                                   28.f, 1.6f);
+                                   nxui::Color(0.74f, 0.88f, 1.f,
+                                               0.62f * contentAlpha),
+                                   28.f, 1.8f);
     }
 
-    // Profile card.
-    const nxui::Rect profileRect = {952.f, 252.f + lift * 0.06f, 292.f, 164.f};
+    // Right-hand cards are substantially higher than in V6 and the border
+    // is only a fraction thicker, as requested.
+    const nxui::Rect profileRect = {952.f, 194.f + lift * 0.06f, 292.f, 158.f};
     m_profilePanel.setRect(profileRect);
     m_profilePanel.setOpacity(contentAlpha);
     m_profilePanel.render(ren);
 
     if (m_fontSmall) {
-        ren.drawText("PROFIL ACTIF",
-                     {profileRect.x + 24.f, profileRect.y + 17.f},
-                     m_fontSmall,
-                     nxui::Color(0.85f, 0.88f, 0.98f, 0.82f * contentAlpha),
-                     0.92f);
+        drawReadableText(ren, "PROFIL ACTIF",
+                         {profileRect.x + 24.f, profileRect.y + 16.f},
+                         m_fontSmall,
+                         nxui::Color(0.90f, 0.92f, 1.f, 0.95f),
+                         1.02f, contentAlpha, 0.55f);
     }
-    ren.drawRect({profileRect.x + 24.f, profileRect.y + 54.f,
+    ren.drawRect({profileRect.x + 24.f, profileRect.y + 53.f,
                   profileRect.width - 48.f, 1.f},
-                 nxui::Color(0.78f, 0.84f, 1.f, 0.22f * contentAlpha));
+                 nxui::Color(0.78f, 0.84f, 1.f, 0.20f * contentAlpha));
 
     const nxui::Rect avatarRect = {
         profileRect.x + 25.f,
-        profileRect.y + 72.f,
+        profileRect.y + 68.f,
         66.f,
         66.f
     };
@@ -707,42 +905,45 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         if (m_fontMedium && !m_profileName.empty()) {
             const std::string initial = splitUtf8(m_profileName).front();
             const nxui::Vec2 size = m_fontMedium->measure(initial);
-            ren.drawText(initial,
-                         {avatarRect.x + (avatarRect.width - size.x * 0.90f) * 0.5f,
-                          avatarRect.y + 15.f},
-                         m_fontMedium,
-                         nxui::Color(1.f, 1.f, 1.f, contentAlpha), 0.90f);
+            drawReadableText(ren, initial,
+                             {avatarRect.x + (avatarRect.width - size.x * 0.90f) * 0.5f,
+                              avatarRect.y + 15.f},
+                             m_fontMedium,
+                             nxui::Color(1.f, 1.f, 1.f, 1.f),
+                             0.90f, contentAlpha, 0.45f);
         }
     }
     if (m_fontMedium) {
-        ren.drawText(truncateUtf8(m_profileName, 14),
-                     {profileRect.x + 113.f, profileRect.y + 89.f},
-                     m_fontMedium,
-                     nxui::Color(0.98f, 0.99f, 1.f, 0.98f * contentAlpha),
-                     0.84f);
+        const std::string shownName = truncateUtf8ToWidth(
+            m_profileName, m_fontMedium, 0.90f, 142.f
+        );
+        drawReadableText(ren, shownName,
+                         {profileRect.x + 111.f, profileRect.y + 84.f},
+                         m_fontMedium,
+                         nxui::Color(0.99f, 0.995f, 1.f, 1.f),
+                         0.90f, contentAlpha, 0.55f);
     }
 
-    // Session card only exists when an application is actually suspended.
     if (m_hasGame) {
-        const nxui::Rect sessionRect = {952.f, 458.f + lift * 0.06f, 292.f, 174.f};
+        const nxui::Rect sessionRect = {952.f, 382.f + lift * 0.06f, 292.f, 166.f};
         m_sessionPanel.setRect(sessionRect);
         m_sessionPanel.setOpacity(contentAlpha);
         m_sessionPanel.render(ren);
 
         if (m_fontSmall) {
-            ren.drawText("SESSION EN COURS",
-                         {sessionRect.x + 24.f, sessionRect.y + 16.f},
-                         m_fontSmall,
-                         nxui::Color(0.85f, 0.88f, 0.98f, 0.82f * contentAlpha),
-                         0.92f);
+            drawReadableText(ren, "SESSION EN COURS",
+                             {sessionRect.x + 24.f, sessionRect.y + 15.f},
+                             m_fontSmall,
+                             nxui::Color(0.90f, 0.92f, 1.f, 0.95f),
+                             1.02f, contentAlpha, 0.55f);
         }
-        ren.drawRect({sessionRect.x + 24.f, sessionRect.y + 54.f,
+        ren.drawRect({sessionRect.x + 24.f, sessionRect.y + 52.f,
                       sessionRect.width - 48.f, 1.f},
-                     nxui::Color(0.78f, 0.84f, 1.f, 0.22f * contentAlpha));
+                     nxui::Color(0.78f, 0.84f, 1.f, 0.20f * contentAlpha));
 
         const nxui::Rect miniCover = {
             sessionRect.x + 24.f,
-            sessionRect.y + 73.f,
+            sessionRect.y + 68.f,
             72.f,
             72.f
         };
@@ -755,51 +956,58 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         }
         ren.drawRoundedRectOutline(miniCover,
                                    nxui::Color(0.58f, 0.72f, 1.f,
-                                               0.42f * contentAlpha),
-                                   14.f, 1.2f);
+                                               0.46f * contentAlpha),
+                                   14.f, 1.35f);
 
         if (m_fontNormal) {
-            ren.drawText(truncateUtf8(m_gameTitle, 19),
-                         {sessionRect.x + 114.f, sessionRect.y + 80.f},
-                         m_fontNormal,
-                         nxui::Color(0.98f, 0.99f, 1.f, 0.96f * contentAlpha),
-                         0.72f);
+            const float titleScale = 0.78f;
+            const float maxTitleWidth = sessionRect.right() -
+                                        (sessionRect.x + 112.f) - 18.f;
+            const std::string shownTitle = truncateUtf8ToWidth(
+                m_gameTitle, m_fontNormal, titleScale, maxTitleWidth
+            );
+            drawReadableText(ren, shownTitle,
+                             {sessionRect.x + 112.f, sessionRect.y + 91.f},
+                             m_fontNormal,
+                             nxui::Color(0.99f, 0.995f, 1.f, 1.f),
+                             titleScale, contentAlpha, 0.48f);
         }
-        if (m_fontSmall) {
-            ren.drawText("Jeu suspendu",
-                         {sessionRect.x + 114.f, sessionRect.y + 119.f},
-                         m_fontSmall,
-                         nxui::Color(0.72f, 0.76f, 0.90f, 0.72f * contentAlpha),
-                         0.86f);
-        }
+        // The duplicate "Jeu suspendu" subtitle from V6 is intentionally gone.
     }
 
-    // Bottom instruction. The ring is now the progress indicator, so the old
-    // three dots are intentionally removed.
-    if (m_fontMedium && m_fontIcons) {
-        const std::string instruction = "Appuie trois fois sur";
-        const std::string aGlyph = utf8Codepoint(0xE0E0);
-        const float textScale = 0.78f;
-        const float glyphScale = 1.22f;
-        const nxui::Vec2 textSize = m_fontMedium->measure(instruction);
-        const nxui::Vec2 glyphSize = m_fontIcons->measure(aGlyph);
-        const float gap = 15.f;
-        const float totalW = textSize.x * textScale + gap + glyphSize.x * glyphScale;
-        const float startX = 650.f - totalW * 0.5f;
-        const float y = 650.f + lift;
+    if (m_hasGame) {
+        // With a suspended game, the large ring is the progress indicator.
+        if (m_fontMedium && m_fontIcons) {
+            const std::string instruction = "Appuie trois fois sur";
+            const std::string aGlyph = utf8Codepoint(0xE0E0);
+            const float textScale = 0.82f;
+            const float glyphScale = 1.24f;
+            const nxui::Vec2 textSize = m_fontMedium->measure(instruction);
+            const nxui::Vec2 glyphSize = m_fontIcons->measure(aGlyph);
+            const float gap = 15.f;
+            const float totalW = textSize.x * textScale + gap + glyphSize.x * glyphScale;
+            const float startX = 650.f - totalW * 0.5f;
+            const float y = 638.f + lift;
 
-        ren.drawText(instruction, {startX, y}, m_fontMedium,
-                     nxui::Color(0.97f, 0.98f, 1.f, 0.95f * contentAlpha),
-                     textScale);
-        const float glyphX = startX + textSize.x * textScale + gap;
-        ren.drawCircle({glyphX + glyphSize.x * glyphScale * 0.5f,
-                        y + glyphSize.y * glyphScale * 0.47f},
-                       25.f + 2.f * breathe,
-                       nxui::Color(0.48f, 0.72f, 1.f,
-                                   (0.05f + 0.035f * breathe) * contentAlpha), 32);
-        ren.drawText(aGlyph, {glyphX, y - 3.f}, m_fontIcons,
-                     nxui::Color(0.98f, 0.99f, 1.f, contentAlpha),
-                     glyphScale);
+            drawReadableText(ren, instruction, {startX, y}, m_fontMedium,
+                             nxui::Color(0.98f, 0.99f, 1.f, 0.98f),
+                             textScale, contentAlpha, 0.38f);
+            const float glyphX = startX + textSize.x * textScale + gap;
+            ren.drawCircle({glyphX + glyphSize.x * glyphScale * 0.5f,
+                            y + glyphSize.y * glyphScale * 0.47f},
+                           25.f + 2.f * breathe,
+                           nxui::Color(0.48f, 0.72f, 1.f,
+                                       (0.05f + 0.035f * breathe) * contentAlpha), 32);
+            ren.drawText(aGlyph, {glyphX, y - 3.f}, m_fontIcons,
+                         nxui::Color(0.99f, 1.f, 1.f, contentAlpha),
+                         glyphScale);
+        }
+    } else {
+        // No suspended application: restore the V5-style breathing capsule
+        // and three small press dots.
+        drawNoGameUnlockPill(ren, m_fontMedium, m_fontIcons,
+                             m_pressCount, m_pressFlash, m_pulse,
+                             contentAlpha, lift);
     }
 
     if (m_unlocking) {
@@ -818,7 +1026,6 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                           22.f);
         }
 
-        // Brief white veil at the strongest point of the transition.
         const float veil = 0.08f * smoothStep(flash);
         ren.drawRect(screen, nxui::Color(0.88f, 0.95f, 1.f,
                                          veil * m_viewOpacity));
