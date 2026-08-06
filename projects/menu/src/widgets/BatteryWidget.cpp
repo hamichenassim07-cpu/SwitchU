@@ -7,12 +7,12 @@
 
 namespace {
 
-// V6.4 HOME battery: still larger than stock, but recalibrated so the
+// V6.5 HOME battery: still larger than stock, but recalibrated so the
 // percentage never touches the terminal or the battery body.
-constexpr float kBatteryWidth = 54.f;
-constexpr float kBatteryHeight = 26.f;
-constexpr float kTerminalExtent = 8.f;
-constexpr float kTextGap = 8.f;
+constexpr float kBatteryWidth = 50.f;
+constexpr float kBatteryHeight = 24.f;
+constexpr float kTerminalExtent = 7.f;
+constexpr float kTextGap = 7.f;
 constexpr float kPercentageScale = 0.98f;
 
 } // namespace
@@ -69,11 +69,11 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Rect body = {bx, by, kBatteryWidth, kBatteryHeight};
     const nxui::Color edge = m_textColor.withAlpha(0.94f * op);
 
-    ren.drawRoundedRectOutline(body, edge, 6.2f, 1.9f);
-    ren.drawRoundedRect({body.right() + 2.5f, body.y + 7.f, 5.f, 12.f},
-                        edge.withAlpha(0.82f * op), 2.f);
+    ren.drawRoundedRectOutline(body, edge, 5.8f, 1.65f);
+    ren.drawRoundedRect({body.right() + 2.2f, body.y + 6.5f, 4.5f, 11.f},
+                        edge.withAlpha(0.82f * op), 1.8f);
 
-    nxui::Rect fill = body.shrunk(3.7f);
+    nxui::Rect fill = body.shrunk(3.4f);
     fill.width *= level;
     if (fill.width > 0.5f) {
         // The charge state is now carried entirely by the fill. It stays
