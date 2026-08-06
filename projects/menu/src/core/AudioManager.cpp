@@ -2,6 +2,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 
 AudioManager::~AudioManager() { shutdown(); }
 
@@ -16,6 +17,7 @@ bool AudioManager::initialize() {
     }
     Mix_AllocateChannels(8);
     m_initialized = true;
+    s_active.store(this);
     setVolume(m_volume);
     return true;
 }
@@ -29,6 +31,9 @@ void AudioManager::shutdown() {
     Mix_HaltChannel(-1);
     Mix_CloseAudio();
     m_initialized = false;
+    s_lockscreenVisible.store(false);
+    if (s_active.load() == this)
+        s_active.store(nullptr);
     m_playing.store(false);
     m_scene = MusicScene::None;
     m_pendingScene = MusicScene::None;
@@ -48,6 +53,15 @@ void AudioManager::shutdown() {
 }
 
 void AudioManager::loadTrack(const std::string& path) {
+    // The old preset scanner loads every MP3. Route the reserved lockscreen
+    // filename to its own scene here so it can never enter the HOME playlist,
+    // even when WiiUMenuApp.cpp has not been patched by an installer.
+    const std::string filename = std::filesystem::path(path).filename().string();
+    if (filename == "lockscreen.mp3") {
+        loadLockscreenTrack(path);
+        return;
+    }
+
     Mix_Music* music = Mix_LoadMUS(path.c_str());
     if (!music) {
         std::fprintf(stderr, "[Audio] Failed to load %s: %s\n", path.c_str(), Mix_GetError());
@@ -90,6 +104,8 @@ void AudioManager::clearTracks() {
 }
 
 std::atomic<AudioManager*> AudioManager::s_instance{nullptr};
+std::atomic<AudioManager*> AudioManager::s_active{nullptr};
+std::atomic<bool> AudioManager::s_lockscreenVisible{false};
 
 void AudioManager::onTrackFinished() {
     AudioManager* inst = s_instance.load();
@@ -181,7 +197,13 @@ void AudioManager::requestScene(MusicScene scene, int fadeOutMs, int fadeInMs) {
 }
 
 void AudioManager::play() {
-    playHome(0);
+    // WiiUMenuApp starts audio asynchronously. If the lockscreen is already
+    // visible by the time loading completes, enter its dedicated scene rather
+    // than briefly starting HOME music over it.
+    if (s_lockscreenVisible.load() && hasLockscreenTrack())
+        playLockscreen(0);
+    else
+        playHome(0);
 }
 
 void AudioManager::playHome(int fadeMs) {
