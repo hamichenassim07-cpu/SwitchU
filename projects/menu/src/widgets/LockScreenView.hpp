@@ -88,6 +88,7 @@ private:
     bool m_profileAttempted = false;
 
     float m_connectionPollTimer = 0.f;
+    float m_animationTime = 0.f;
     std::string m_audioStatus = "Haut-parleurs de la console";
     std::string m_controllerStatus = "État indisponible";
 
