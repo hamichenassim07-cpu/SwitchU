@@ -7,6 +7,8 @@
 
 namespace {
 
+constexpr float kPi = 3.14159265358979323846f;
+
 struct RingSegment {
     float startAngle;
     float endAngle;
@@ -20,23 +22,23 @@ nxui::Vec2 pointOnCircle(const nxui::Vec2& center, float radius, float angle) {
     };
 }
 
-// Draws a genuine filled annular sector. Unlike the former implementation,
-// this does not build the arc from many neighbouring line strokes. Adjacent
-// triangles share the exact same vertices, so the body reads as one continuous
-// shape and cannot expose black gaps between short line segments.
-void drawFilledArc(nxui::Renderer& ren,
-                   const nxui::Vec2& center,
-                   float radius,
-                   float startAngle,
-                   float endAngle,
-                   const nxui::Color& color,
-                   float thickness,
-                   int sections,
-                   bool roundedCaps) {
+// V6.3: a segment is built as one non-overlapping mesh. The semicircular
+// endings meet the annular body on the same radial edge instead of placing a
+// transparent circle on top of it. This removes the brighter half-moons that
+// were visible at the ends in V6.2.
+void drawContinuousArc(nxui::Renderer& ren,
+                       const nxui::Vec2& center,
+                       float radius,
+                       float startAngle,
+                       float endAngle,
+                       const nxui::Color& color,
+                       float thickness,
+                       int sections,
+                       bool roundedEnds = true) {
     if (radius <= 0.f || thickness <= 0.f || endAngle <= startAngle)
         return;
 
-    sections = std::max(18, sections);
+    sections = std::max(20, sections);
     const float half = thickness * 0.5f;
     const float innerRadius = std::max(0.5f, radius - half);
     const float outerRadius = radius + half;
@@ -56,13 +58,37 @@ void drawFilledArc(nxui::Renderer& ren,
         ren.drawTriangle(inner0, inner1, outer1, color);
     }
 
-    if (roundedCaps) {
-        const float capRadius = thickness * 0.5f;
-        ren.drawCircle(pointOnCircle(center, radius, startAngle),
-                       capRadius, color, 36);
-        ren.drawCircle(pointOnCircle(center, radius, endAngle),
-                       capRadius, color, 36);
-    }
+    if (!roundedEnds)
+        return;
+
+    constexpr int kCapSections = 22;
+    auto drawCap = [&](float angle, bool startCap) {
+        const nxui::Vec2 capCenter = pointOnCircle(center, radius, angle);
+        const nxui::Vec2 radial{std::cos(angle), std::sin(angle)};
+        const nxui::Vec2 tangent{-std::sin(angle), std::cos(angle)};
+
+        // Outer radial edge -> inner radial edge. At the start the cap grows
+        // against the arc direction; at the end it grows with it.
+        for (int i = 0; i < kCapSections; ++i) {
+            const float u0 = static_cast<float>(i) / kCapSections;
+            const float u1 = static_cast<float>(i + 1) / kCapSections;
+            const float p0 = startCap ? -kPi * u0 : kPi * u0;
+            const float p1 = startCap ? -kPi * u1 : kPi * u1;
+
+            const nxui::Vec2 edge0{
+                capCenter.x + half * (std::cos(p0) * radial.x + std::sin(p0) * tangent.x),
+                capCenter.y + half * (std::cos(p0) * radial.y + std::sin(p0) * tangent.y)
+            };
+            const nxui::Vec2 edge1{
+                capCenter.x + half * (std::cos(p1) * radial.x + std::sin(p1) * tangent.x),
+                capCenter.y + half * (std::cos(p1) * radial.y + std::sin(p1) * tangent.y)
+            };
+            ren.drawTriangle(capCenter, edge0, edge1, color);
+        }
+    };
+
+    drawCap(startAngle, true);
+    drawCap(endAngle, false);
 }
 
 } // namespace
@@ -77,8 +103,8 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
         r.x + r.width * 0.5f,
         r.y + r.height * 0.5f
     };
-    const float radius = std::min(r.width, r.height) * 0.394f;
-    const float breathe = 0.5f + 0.5f * std::sin(m_pulse * 1.70f);
+    const float radius = std::min(r.width, r.height) * 0.405f;
+    const float breathe = 0.5f + 0.5f * std::sin(m_pulse * 1.62f);
 
     const std::array<RingSegment, 3> segments = {{
         {3.70f, 5.72f, nxui::Color(0.05f, 0.88f, 1.00f, 1.f)},
@@ -96,32 +122,61 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
 
         const nxui::Color track = m_theme
             ? m_theme->pageIndicator.withAlpha(
-                  (0.18f + (next ? 0.055f * breathe : 0.f)) * alpha)
+                  (0.17f + (next ? 0.060f * breathe : 0.f)) * alpha)
             : nxui::Color(0.22f, 0.27f, 0.48f,
-                          (0.18f + (next ? 0.055f * breathe : 0.f)) * alpha);
+                          (0.17f + (next ? 0.060f * breathe : 0.f)) * alpha);
 
-        // Slightly thicker than V6.1, but still restrained.
-        drawFilledArc(ren, center, radius,
-                      segment.startAngle, segment.endAngle,
-                      track, 26.f, 96, true);
+        drawContinuousArc(ren, center, radius,
+                          segment.startAngle, segment.endAngle,
+                          track, 27.f, 108);
 
         if (!active)
             continue;
 
-        const float flashBoost = 1.f + localFlash * 0.08f;
+        const float flashBoost = 1.f + localFlash * 0.07f;
 
-        // One soft bloom behind one solid body. No highlight stroke and no
-        // stack of several neighbouring outlines.
-        drawFilledArc(ren, center, radius,
-                      segment.startAngle, segment.endAngle,
-                      segment.color.withAlpha(
-                          (0.075f + 0.040f * localFlash) * alpha),
-                      45.f * flashBoost, 96, true);
+        // Broad, very soft bloom. It remains subtle enough not to turn the
+        // lockscreen into a harsh neon interface.
+        drawContinuousArc(ren, center, radius,
+                          segment.startAngle, segment.endAngle,
+                          segment.color.withAlpha(
+                              (0.040f + 0.030f * breathe + 0.045f * localFlash) * alpha),
+                          57.f * flashBoost, 112);
+        drawContinuousArc(ren, center, radius,
+                          segment.startAngle, segment.endAngle,
+                          segment.color.withAlpha(
+                              (0.090f + 0.030f * localFlash) * alpha),
+                          43.f * flashBoost, 116);
 
-        drawFilledArc(ren, center, radius,
-                      segment.startAngle, segment.endAngle,
-                      segment.color.withAlpha(
-                          (0.94f + 0.06f * breathe) * alpha),
-                      33.f * flashBoost, 112, true);
+        // Main body.
+        drawContinuousArc(ren, center, radius,
+                          segment.startAngle, segment.endAngle,
+                          segment.color.withAlpha(
+                              (0.90f + 0.08f * breathe) * alpha),
+                          34.f * flashBoost, 128);
+
+        // A thin inner reflection adds depth instead of a flat colour block.
+        drawContinuousArc(ren, center, radius - 8.0f,
+                          segment.startAngle + 0.035f,
+                          segment.endAngle - 0.035f,
+                          nxui::Color(0.92f, 0.98f, 1.f,
+                                      (0.12f + 0.08f * breathe + 0.12f * localFlash) * alpha),
+                          3.2f, 104, false);
+
+        // Short moving sheen on the most recently activated segment.
+        if (i == m_progress - 1) {
+            const float span = segment.endAngle - segment.startAngle;
+            const float phase = std::fmod(m_pulse * 0.28f, 1.f);
+            const float sheenStart = segment.startAngle + span * (0.08f + 0.70f * phase);
+            const float sheenEnd = std::min(segment.endAngle - 0.04f,
+                                            sheenStart + span * 0.17f);
+            if (sheenEnd > sheenStart) {
+                drawContinuousArc(ren, center, radius - 4.5f,
+                                  sheenStart, sheenEnd,
+                                  nxui::Color(1.f, 1.f, 1.f,
+                                              (0.10f + 0.12f * localFlash) * alpha),
+                                  5.0f, 30, false);
+            }
+        }
     }
 }
