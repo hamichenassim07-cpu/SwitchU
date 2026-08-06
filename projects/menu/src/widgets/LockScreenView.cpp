@@ -1,4 +1,12 @@
 #include "LockScreenView.hpp"
+#include "launcher/AppListLoader.hpp"
+#include "bluetooth/BluetoothManager.hpp"
+#include "core/AudioManager.hpp"
+#include "core/DebugLog.hpp"
+#include <nxui/Application.hpp>
+#ifdef SWITCHU_MENU
+#include "smi_commands.hpp"
+#endif
 
 #include <nxui/core/Renderer.hpp>
 
@@ -14,6 +22,9 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <utility>
+
+std::atomic<bool> LockScreenView::s_visiblyActive{false};
 
 namespace {
 
@@ -351,55 +362,44 @@ void drawBattery(nxui::Renderer& ren,
                  float pulse,
                  float alpha) {
     const float level = std::clamp(static_cast<float>(percentage) / 100.f, 0.f, 1.f);
-    const nxui::Rect body = {origin.x, origin.y, 52.f, 25.f};
-    const nxui::Color edge(0.97f, 0.985f, 1.f, 0.92f * alpha);
+    const nxui::Rect body = {origin.x, origin.y, 58.f, 28.f};
+    const nxui::Color edge(0.97f, 0.985f, 1.f, 0.94f * alpha);
 
-    ren.drawRoundedRectOutline(body, edge, 6.f, 1.9f);
-    ren.drawRoundedRect({body.right() + 2.5f, body.y + 7.f, 5.f, 11.f},
-                        edge.withAlpha(0.80f * alpha), 2.f);
+    ren.drawRoundedRectOutline(body, edge, 6.5f, 2.0f);
+    ren.drawRoundedRect({body.right() + 2.5f, body.y + 7.5f, 5.5f, 13.f},
+                        edge.withAlpha(0.82f * alpha), 2.2f);
 
-    nxui::Rect fill = body.shrunk(3.5f);
+    nxui::Rect fill = body.shrunk(3.8f);
     fill.width *= level;
     if (fill.width > 0.5f) {
-        const nxui::Color fillColor = percentage <= 20
-            ? nxui::Color(1.f, 0.26f, 0.24f, 0.96f * alpha)
-            : nxui::Color(0.95f, 0.98f, 1.f,
-                          (charging ? 0.78f + 0.22f * pulse : 0.96f) * alpha);
+        nxui::Color fillColor;
+        if (charging) {
+            // No bolt in V6.3. The level itself becomes green and pulses.
+            fillColor = nxui::Color(0.22f, 1.00f, 0.48f,
+                                    (0.52f + 0.46f * pulse) * alpha);
+        } else if (percentage <= 20) {
+            fillColor = nxui::Color(1.f, 0.26f, 0.24f, 0.96f * alpha);
+        } else {
+            fillColor = nxui::Color(0.95f, 0.98f, 1.f, 0.96f * alpha);
+        }
         ren.drawRoundedRect(fill, fillColor,
-                            std::min(4.f, fill.width * 0.5f));
-    }
-
-    // Stable reserved space for the charging bolt keeps the percentage from
-    // jumping horizontally when the cable is connected or removed.
-    const nxui::Rect bolt = {origin.x + 67.f, origin.y - 1.f, 21.f, 28.f};
-    if (charging) {
-        const nxui::Color glow(0.40f, 1.f, 0.70f,
-                               (0.18f + 0.08f * pulse) * alpha);
-        ren.drawCircle({bolt.x + bolt.width * 0.5f,
-                        bolt.y + bolt.height * 0.5f},
-                       18.f, glow, 28);
-
-        const nxui::Color green(0.42f, 1.f, 0.68f, alpha);
-        const nxui::Vec2 p0{bolt.x + 12.f, bolt.y + 1.f};
-        const nxui::Vec2 p1{bolt.x + 4.f, bolt.y + 15.f};
-        const nxui::Vec2 p2{bolt.x + 10.f, bolt.y + 15.f};
-        const nxui::Vec2 p3{bolt.x + 7.f, bolt.y + 27.f};
-        const nxui::Vec2 p4{bolt.x + 18.f, bolt.y + 11.f};
-        const nxui::Vec2 p5{bolt.x + 12.f, bolt.y + 11.f};
-        ren.drawTriangle(p0, p1, p5, green);
-        ren.drawTriangle(p1, p2, p5, green);
-        ren.drawTriangle(p2, p3, p4, green);
-        ren.drawTriangle(p2, p4, p5, green);
+                            std::min(4.3f, fill.width * 0.5f));
+        if (charging) {
+            ren.drawRoundedRect(fill.expanded(1.1f),
+                                nxui::Color(0.22f, 1.f, 0.48f,
+                                            (0.025f + 0.055f * pulse) * alpha),
+                                std::min(5.f, fill.width * 0.5f));
+        }
     }
 
     if (font) {
         char buffer[16] = {};
         std::snprintf(buffer, sizeof(buffer), "%u%%", static_cast<unsigned>(percentage));
         drawReadableText(ren, buffer,
-                         {origin.x + 88.f, origin.y + 1.5f},
+                         {body.right() + 5.f, origin.y + 2.4f},
                          font,
-                         nxui::Color(0.97f, 0.985f, 1.f, 0.97f),
-                         0.94f, alpha, 0.45f);
+                         nxui::Color(0.97f, 0.985f, 1.f, 0.98f),
+                         1.00f, alpha, 0.45f);
     }
 }
 
@@ -480,6 +480,7 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
 } // namespace
 
 LockScreenView::LockScreenView() {
+    DebugLog::log("[lockscreen] Switch U V6.3 safety view created");
     setRect({0.f, 0.f, 1280.f, 720.f});
 
     m_profilePanel.setForceLiquidGlass(true);
@@ -488,6 +489,13 @@ LockScreenView::LockScreenView() {
     m_profilePanel.setBackingColor({0.008f, 0.010f, 0.032f, 1.f});
     m_profilePanel.setMaterialTextureEnabled(true);
     m_profilePanel.setMaterialTextureIntensity(0.36f);
+
+    m_connectionPanel.setForceLiquidGlass(true);
+    m_connectionPanel.setBlurEnabled(false);
+    m_connectionPanel.setBackingEnabled(true);
+    m_connectionPanel.setBackingColor({0.008f, 0.010f, 0.032f, 1.f});
+    m_connectionPanel.setMaterialTextureEnabled(true);
+    m_connectionPanel.setMaterialTextureIntensity(0.30f);
 }
 
 void LockScreenView::setFonts(nxui::Font* normal,
@@ -513,7 +521,18 @@ void LockScreenView::setSuspendedGame(nxui::Texture* texture,
                                       std::uint64_t titleId,
                                       bool gameCard) {
     const bool titleChanged = m_gameTitleId != titleId;
-    m_gameTexture = texture;
+    // Keep the old pointer only for source compatibility. V6.3 never renders
+    // it: the lockscreen owns an independently decoded texture instead.
+    (void)texture;
+    m_gameTexture = nullptr;
+    const bool alreadyOwnsThisTitle =
+        m_ownedGameTexture.valid() && m_ownedGameTextureTitleId == titleId;
+    m_ownedGameTextureAttempted = alreadyOwnsThisTitle;
+    m_deferredGameAssetReset = false;
+    m_resumeHandoffPrepared = false;
+    m_resumeBlackFrameRendered = false;
+    m_resumeHandoffSent = false;
+    m_unlockAudioStarted = false;
     m_gameTitle = title;
     m_gameTitleId = titleId;
     m_gameIsCard = gameCard;
@@ -524,12 +543,19 @@ void LockScreenView::setSuspendedGame(nxui::Texture* texture,
 }
 
 void LockScreenView::clearSuspendedGame() {
+    // Do not free GPU-backed assets in the same update that hides the
+    // lockscreen. The previous submitted frame may still reference them.
+    // They are released at the beginning of the next clean reveal instead.
     m_gameTexture = nullptr;
     m_gameTitle.clear();
     m_gameTitleId = 0;
     m_gameIsCard = false;
     m_hasGame = false;
-    resetBackgroundAsset();
+    m_deferredGameAssetReset = true;
+    m_resumeHandoffPrepared = false;
+    m_resumeBlackFrameRendered = false;
+    m_resumeHandoffSent = false;
+    m_unlockAudioStarted = false;
 }
 
 void LockScreenView::setGreeting(const std::string& greeting) {
@@ -547,10 +573,14 @@ void LockScreenView::setBatteryStatus(std::uint32_t percentage, bool charging) {
 }
 
 void LockScreenView::setProgress(int progress, float flash) {
+    const int previous = m_pressCount;
     m_pressCount = std::clamp(progress, 0, 3);
     m_pressFlash = clamp01(flash);
     m_progress.setProgress(m_pressCount);
     m_progress.setFlash(m_pressFlash);
+
+    if (m_pressCount != previous)
+        DebugLog::log("[lockscreen] press %d", m_pressCount);
 }
 
 void LockScreenView::setTransition(float opacity,
@@ -564,6 +594,84 @@ void LockScreenView::setTransition(float opacity,
     m_pulse = pulse;
     m_unlocking = unlocking;
     m_progress.setPulse(pulse);
+    s_visiblyActive.store(
+        m_unlocking || (m_viewOpacity > 0.05f && m_reveal > 0.02f));
+
+    if (m_deferredGameAssetReset && !m_unlocking && m_reveal <= 0.001f) {
+        if (auto* application = nxui::Application::current())
+            application->gpu().waitIdle();
+        m_ownedGameTexture = nxui::Texture{};
+        m_ownedGameTextureTitleId = 0;
+        m_ownedGameTextureAttempted = false;
+        resetBackgroundAsset();
+        m_deferredGameAssetReset = false;
+    }
+
+    const bool lockscreenVisible =
+        !m_unlocking && m_viewOpacity > 0.05f && m_reveal > 0.02f;
+    AudioManager::setLockscreenVisible(lockscreenVisible);
+    AudioManager* audio = AudioManager::active();
+    if (audio)
+        audio->update();
+    if (lockscreenVisible && !m_musicSceneEntered && audio) {
+        m_musicSceneEntered = true;
+        m_unlockAudioStarted = false;
+        audio->playLockscreen(480);
+    }
+
+    if (m_unlocking && !m_unlockAudioStarted) {
+        m_unlockAudioStarted = true;
+        DebugLog::log("[lockscreen] unlock begin suspended=%d", m_hasGame ? 1 : 0);
+        if (audio) {
+            if (m_hasGame)
+                audio->fadeOutForGame(420);
+            else
+                audio->playHome(420);
+        }
+    }
+
+#ifdef SWITCHU_MENU
+    // Safe direct handoff. The existing WiiUMenuApp code continues to own the
+    // three-press animation, but the view takes over before its old final
+    // clear/reload block. First render one completely black frame. On the next
+    // update, wait for that frame, queue resume, then stop the app loop.
+    if (m_unlocking && m_hasGame && !m_resumeHandoffSent) {
+        if (m_unlockProgress >= 0.78f && !m_resumeHandoffPrepared) {
+            m_resumeHandoffPrepared = true;
+            DebugLog::log("[lockscreen] suspended handoff prepared; game texture disabled");
+        }
+
+        if (m_resumeHandoffPrepared && m_resumeBlackFrameRendered) {
+            if (auto* application = nxui::Application::current()) {
+                DebugLog::log("[lockscreen] black frame submitted; waiting for GPU");
+                application->gpu().waitIdle();
+                DebugLog::log("[lockscreen] gpu idle; queueing resume");
+
+                if (audio)
+                    audio->stop();
+
+                const Result rc = switchu::menu::smi_cmd::resumeApplication();
+                DebugLog::log("[lockscreen] resume command rc=0x%X", rc);
+                if (R_SUCCEEDED(rc)) {
+                    m_resumeHandoffSent = true;
+                    DebugLog::log("[lockscreen] menu exit requested after resume queue");
+                    application->requestExit();
+                } else {
+                    m_resumeHandoffPrepared = false;
+                    m_resumeBlackFrameRendered = false;
+                    if (audio)
+                        audio->playLockscreen(220);
+                }
+            }
+        }
+    }
+#endif
+
+    if (!m_unlocking && m_viewOpacity <= 0.001f) {
+        AudioManager::setLockscreenVisible(false);
+        m_musicSceneEntered = false;
+        m_unlockAudioStarted = false;
+    }
 }
 
 void LockScreenView::applyThemeToWidgets() {
@@ -576,15 +684,28 @@ void LockScreenView::applyThemeToWidgets() {
     m_profilePanel.setHighlightColor(highlight);
     m_profilePanel.setBorderWidth(1.80f);
     m_profilePanel.setCornerRadius(25.f);
+
+    m_connectionPanel.setBaseColor(base);
+    m_connectionPanel.setBorderColor(border.withAlpha(0.36f));
+    m_connectionPanel.setHighlightColor(highlight);
+    m_connectionPanel.setBorderWidth(1.65f);
+    m_connectionPanel.setCornerRadius(25.f);
 }
 
 void LockScreenView::resetBackgroundAsset() {
+    // Repeated HOME notifications may rebuild the lockscreen while its last
+    // frame is still in flight. Never destroy a texture until those commands
+    // have completed.
+    if (auto* application = nxui::Application::current())
+        application->gpu().waitIdle();
     m_backgroundTexture = nxui::Texture{};
     m_backgroundPath.clear();
     m_backgroundAttempted = false;
 }
 
 void LockScreenView::resetProfileAsset() {
+    if (auto* application = nxui::Application::current())
+        application->gpu().waitIdle();
     m_profileAvatarTexture = nxui::Texture{};
     m_profileName.clear();
     m_profileAttempted = false;
@@ -687,13 +808,61 @@ void LockScreenView::ensureProfile(nxui::Renderer& ren) {
 void LockScreenView::ensureDynamicAssets(nxui::Renderer& ren) {
     ensureBackground(ren);
     ensureProfile(ren);
+
+    if (m_hasGame && m_gameTitleId != 0 && !m_ownedGameTextureAttempted) {
+        m_ownedGameTextureAttempted = true;
+        const std::vector<std::uint8_t> iconData =
+            AppListLoader::loadIconData(m_gameTitleId);
+        if (!iconData.empty()) {
+            nxui::Texture independentTexture;
+            if (independentTexture.loadFromMemory(ren.gpu(), ren,
+                                                   iconData.data(), iconData.size(), 320)) {
+                // The upload is complete, then the old owned texture can be
+                // replaced without racing the previous submitted frame.
+                ren.gpu().waitIdle();
+                m_ownedGameTexture = std::move(independentTexture);
+                m_ownedGameTextureTitleId = m_gameTitleId;
+                DebugLog::log("[lockscreen] independent game texture ready title=0x%016lX",
+                              static_cast<unsigned long>(m_gameTitleId));
+            } else {
+                DebugLog::log("[lockscreen] independent game texture upload failed; using gradient fallback");
+            }
+        } else {
+            DebugLog::log("[lockscreen] independent game icon unavailable; using gradient fallback");
+        }
+    }
 }
 
 void LockScreenView::onUpdate(float dt) {
     m_progress.update(dt);
+    m_connectionPollTimer -= dt;
+    if (m_connectionPollTimer <= 0.f) {
+        m_connectionPollTimer = 1.f;
+
+        m_audioStatus = "Haut-parleurs de la console";
+        if (bluetooth::IsAvailable()) {
+            const BtmAudioDevice device = bluetooth::GetConnectedAudioDevice();
+            if (bluetooth::IsDeviceValid(device)) {
+                const std::string name = bluetooth::DeviceName(device);
+                if (!name.empty())
+                    m_audioStatus = name;
+            }
+        }
+
+        const HidNpadStyleTag style = hidGetNpadStyleSet(HidNpadIdType_No1);
+        m_controllerStatus = style != 0 ? "Manette connectée"
+                                        : "Aucune manette détectée";
+    }
 }
 
 void LockScreenView::onRender(nxui::Renderer& ren) {
+    if (m_resumeHandoffPrepared && m_hasGame) {
+        ren.drawRect({0.f, 0.f, 1280.f, 720.f},
+                     nxui::Color(0.f, 0.f, 0.f, 1.f));
+        m_resumeBlackFrameRendered = true;
+        return;
+    }
+
     const float contentAlpha = m_viewOpacity * easeOutCubic(m_reveal);
     if (contentAlpha <= 0.001f)
         return;
@@ -788,44 +957,35 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                      greetingScale, contentAlpha);
 
     if (m_hasGame) {
-        // Larger and heavier suspended-game badge.
-        const nxui::Rect statusRect = {528.f, 141.f + lift * 0.08f, 244.f, 54.f};
-        ren.drawRoundedRect(statusRect,
-                            nxui::Color(0.012f, 0.020f, 0.074f,
-                                        0.58f * contentAlpha), 24.f);
-        ren.drawRoundedRectOutline(statusRect,
-                                   nxui::Color(0.42f, 0.50f, 1.00f,
-                                               0.43f * contentAlpha),
-                                   24.f, 1.55f);
-        if (m_fontSmall) {
-            const std::string label = "JEU SUSPENDU";
-            const float scale = 1.12f;
-            const nxui::Vec2 size = m_fontSmall->measure(label);
-            drawReadableText(ren, label,
-                             {statusRect.x + (statusRect.width - size.x * scale) * 0.5f,
-                              statusRect.y + 12.f},
-                             m_fontSmall,
-                             nxui::Color(0.91f, 0.94f, 1.f, 0.96f),
-                             scale, contentAlpha, 0.55f);
-        }
-
-        // Whole ring block is higher than V6.
-        m_progress.setRect({414.f, 194.f + lift * 0.10f, 472.f, 404.f});
+        // V6.3: the top of the ring is completely free. The whole central
+        // composition is larger and the status is moved below it.
+        m_progress.setRect({394.f, 145.f + lift * 0.10f, 512.f, 438.f});
         m_progress.setOpacity(contentAlpha);
         m_progress.render(ren);
 
-        // The cover is now almost perfectly centred inside the three segments.
-        const nxui::Rect cover = {558.f, 306.f + lift * 0.10f, 184.f, 184.f};
-        ren.drawRoundedRect(cover.expanded(13.f),
+        const nxui::Rect cover = {545.f, 265.f + lift * 0.10f, 210.f, 210.f};
+        ren.drawRoundedRect(cover.expanded(18.f),
                             nxui::Color(0.08f, 0.30f, 0.86f,
-                                        (0.09f + 0.04f * breathe) * contentAlpha),
+                                        (0.075f + 0.065f * breathe) * contentAlpha),
+                            39.f);
+        ren.drawRoundedRect(cover.expanded(8.f),
+                            nxui::Color(0.54f, 0.20f, 1.00f,
+                                        (0.035f + 0.035f * slowPulse) * contentAlpha),
                             34.f);
         ren.drawRoundedRect(cover,
                             nxui::Color(0.018f, 0.022f, 0.070f,
-                                        0.96f * contentAlpha), 28.f);
-        if (m_gameTexture && m_gameTexture->valid()) {
-            ren.drawTextureRounded(m_gameTexture, cover.shrunk(6.f), 23.f,
-                                   nxui::Color::white().withAlpha(contentAlpha));
+                                        0.96f * contentAlpha), 30.f);
+
+        const nxui::Texture* gameTexture =
+            (m_ownedGameTexture.valid() &&
+             m_ownedGameTextureTitleId == m_gameTitleId)
+                ? &m_ownedGameTexture
+                : nullptr;
+        const float gameTextureAlpha = contentAlpha *
+            std::clamp(1.f - m_unlockProgress * 4.5f, 0.f, 1.f);
+        if (gameTexture && gameTexture->valid() && gameTextureAlpha > 0.001f) {
+            ren.drawTextureRounded(gameTexture, cover.shrunk(6.f), 25.f,
+                                   nxui::Color::white().withAlpha(gameTextureAlpha));
         } else {
             ren.drawGradientRect(cover.shrunk(7.f),
                                  nxui::Color(0.16f, 0.28f, 0.62f, 0.76f * contentAlpha),
@@ -833,8 +993,40 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         }
         ren.drawRoundedRectOutline(cover,
                                    nxui::Color(0.74f, 0.88f, 1.f,
-                                               0.62f * contentAlpha),
-                                   28.f, 1.8f);
+                                               0.66f * contentAlpha),
+                                   30.f, 1.9f);
+
+        const nxui::Rect statusRect = {548.f, 516.f + lift * 0.12f, 204.f, 42.f};
+        ren.drawRoundedRect(statusRect,
+                            nxui::Color(0.025f, 0.035f, 0.105f,
+                                        0.46f * contentAlpha), 21.f);
+        ren.drawRoundedRectOutline(statusRect,
+                                   nxui::Color(0.42f, 0.50f, 1.00f,
+                                               0.36f * contentAlpha),
+                                   21.f, 1.35f);
+        if (m_fontSmall) {
+            const std::string label = "JEU SUSPENDU";
+            const float scale = 0.96f;
+            const nxui::Vec2 size = m_fontSmall->measure(label);
+            drawReadableText(ren, label,
+                             {statusRect.x + (statusRect.width - size.x * scale) * 0.5f,
+                              statusRect.y + 9.f},
+                             m_fontSmall,
+                             nxui::Color(0.91f, 0.94f, 1.f, 0.95f),
+                             scale, contentAlpha, 0.42f);
+        }
+
+        if (m_fontMedium && !m_gameTitle.empty()) {
+            const std::string shownTitle = truncateUtf8ToWidth(
+                m_gameTitle, m_fontMedium, 0.78f, 460.f);
+            const nxui::Vec2 titleSize = m_fontMedium->measure(shownTitle);
+            drawReadableText(ren, shownTitle,
+                             {650.f - titleSize.x * 0.78f * 0.5f,
+                              565.f + lift * 0.15f},
+                             m_fontMedium,
+                             nxui::Color(0.985f, 0.992f, 1.f, 0.98f),
+                             0.78f, contentAlpha, 0.48f);
+        }
     }
 
     // Right-hand cards are substantially higher than in V6 and the border
@@ -889,7 +1081,51 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                          0.90f, contentAlpha, 0.55f);
     }
 
-    // V6.2: the redundant SESSION EN COURS card has been removed.
+    // Contextual replacement for the old redundant SESSION EN COURS card.
+    const nxui::Rect connectionRect = {938.f, 392.f + lift * 0.07f, 306.f, 190.f};
+    m_connectionPanel.setRect(connectionRect);
+    m_connectionPanel.setOpacity(contentAlpha);
+    m_connectionPanel.render(ren);
+
+    if (m_fontSmall) {
+        drawReadableText(ren, "CONNEXIONS",
+                         {connectionRect.x + 24.f, connectionRect.y + 16.f},
+                         m_fontSmall,
+                         nxui::Color(0.90f, 0.92f, 1.f, 0.95f),
+                         1.02f, contentAlpha, 0.52f);
+    }
+    ren.drawRect({connectionRect.x + 24.f, connectionRect.y + 53.f,
+                  connectionRect.width - 48.f, 1.f},
+                 nxui::Color(0.78f, 0.84f, 1.f, 0.18f * contentAlpha));
+
+    if (m_fontSmall && m_fontNormal) {
+        drawReadableText(ren, "AUDIO",
+                         {connectionRect.x + 24.f, connectionRect.y + 70.f},
+                         m_fontSmall,
+                         nxui::Color(0.58f, 0.72f, 1.f, 0.88f),
+                         0.78f, contentAlpha, 0.35f);
+        const std::string shownAudio = truncateUtf8ToWidth(
+            m_audioStatus, m_fontNormal, 0.72f, connectionRect.width - 48.f);
+        drawReadableText(ren, shownAudio,
+                         {connectionRect.x + 24.f, connectionRect.y + 94.f},
+                         m_fontNormal,
+                         nxui::Color(0.98f, 0.99f, 1.f, 0.98f),
+                         0.72f, contentAlpha, 0.38f);
+
+        drawReadableText(ren, "MANETTE",
+                         {connectionRect.x + 24.f, connectionRect.y + 126.f},
+                         m_fontSmall,
+                         nxui::Color(0.58f, 0.72f, 1.f, 0.88f),
+                         0.78f, contentAlpha, 0.35f);
+        const std::string shownController = truncateUtf8ToWidth(
+            m_controllerStatus, m_fontNormal, 0.72f, connectionRect.width - 48.f);
+        drawReadableText(ren, shownController,
+                         {connectionRect.x + 24.f, connectionRect.y + 150.f},
+                         m_fontNormal,
+                         nxui::Color(0.98f, 0.99f, 1.f, 0.98f),
+                         0.72f, contentAlpha, 0.38f);
+    }
+
 
     if (m_hasGame) {
         // With a suspended game, the large ring is the progress indicator.
@@ -903,7 +1139,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
             const float gap = 15.f;
             const float totalW = textSize.x * textScale + gap + glyphSize.x * glyphScale;
             const float startX = 650.f - totalW * 0.5f;
-            const float y = 638.f + lift;
+            const float y = 646.f + lift;
 
             drawReadableText(ren, instruction, {startX, y}, m_fontMedium,
                              nxui::Color(0.98f, 0.99f, 1.f, 0.98f),
