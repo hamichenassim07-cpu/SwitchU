@@ -25,5 +25,8 @@ void main() {
         result += texture(tex, fragUV + offsetV) * weights[i];
         result += texture(tex, fragUV - offsetV) * weights[i];
     }
-    outColor = vec4(result.rgb * fragColor.rgb, 1.0);
+
+    // Preserve transparency for isolated post-process layers such as the
+    // lockscreen ring glow. Opaque backdrop captures still remain opaque.
+    outColor = vec4(result.rgb * fragColor.rgb, result.a * fragColor.a);
 }
