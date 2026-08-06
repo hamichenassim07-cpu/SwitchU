@@ -2,7 +2,7 @@
 #include <nxui/widgets/GlassWidget.hpp>
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Types.hpp>
-
+#include <cstdint>
 
 class BatteryWidget : public nxui::GlassWidget {
 public:
@@ -18,9 +18,9 @@ protected:
 
 private:
     nxui::Font* m_font = nullptr;
-    float m_level   = -1.f;
-    bool  m_charging = false;
-    float m_timer    = 0.f;
+    float m_level = -1.f;
+    bool m_charging = false;
+    float m_timer = 0.f;
     float m_chargeAnim = 0.f;
     nxui::Color m_textColor {1.f, 1.f, 1.f, 1.f};
 };
