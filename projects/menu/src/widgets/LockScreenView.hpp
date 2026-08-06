@@ -9,6 +9,7 @@
 #include "LockPressIndicator.hpp"
 
 #include <cstdint>
+#include <atomic>
 #include <string>
 
 class LockScreenView : public nxui::Widget {
@@ -30,6 +31,7 @@ public:
                           bool gameCard);
     void clearSuspendedGame();
     bool hasSuspendedGame() const { return m_hasGame; }
+    static bool isVisiblyActive() { return s_visiblyActive.load(); }
 
     void setGreeting(const std::string& greeting);
     void setBatteryStatus(std::uint32_t percentage, bool charging);
@@ -45,6 +47,8 @@ protected:
     void onRender(nxui::Renderer& ren) override;
 
 private:
+    static std::atomic<bool> s_visiblyActive;
+
     void applyThemeToWidgets();
     void ensureDynamicAssets(nxui::Renderer& ren);
     void ensureBackground(nxui::Renderer& ren);
@@ -60,9 +64,14 @@ private:
     const nxui::Theme* m_theme = nullptr;
 
     nxui::GlassPanel m_profilePanel;
+    nxui::GlassPanel m_connectionPanel;
     LockPressIndicator m_progress;
 
     nxui::Texture* m_gameTexture = nullptr;
+    nxui::Texture m_ownedGameTexture;
+    std::uint64_t m_ownedGameTextureTitleId = 0;
+    bool m_ownedGameTextureAttempted = false;
+    bool m_deferredGameAssetReset = false;
     nxui::Texture* m_gameCardTexture = nullptr;
     std::string m_gameTitle;
     std::uint64_t m_gameTitleId = 0;
@@ -78,6 +87,10 @@ private:
     std::string m_profileNameHint;
     bool m_profileAttempted = false;
 
+    float m_connectionPollTimer = 0.f;
+    std::string m_audioStatus = "Haut-parleurs de la console";
+    std::string m_controllerStatus = "État indisponible";
+
     std::string m_greeting = "Bon retour.";
     bool m_use12Hour = false;
     std::uint32_t m_batteryPercent = 100;
@@ -89,4 +102,10 @@ private:
     float m_unlockProgress = 0.f;
     float m_pulse = 0.f;
     bool m_unlocking = false;
+
+    bool m_musicSceneEntered = false;
+    bool m_unlockAudioStarted = false;
+    bool m_resumeHandoffPrepared = false;
+    bool m_resumeBlackFrameRendered = false;
+    bool m_resumeHandoffSent = false;
 };
