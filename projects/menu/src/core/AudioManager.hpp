@@ -30,13 +30,24 @@ public:
     void shutdown();
 
     void loadTrack(const std::string& path);
+    void loadLockscreenTrack(const std::string& path);
     void clearTracks();
+
+    // Existing HOME music entry point.
     void play();
+    void playHome(int fadeMs = 0);
+    void playLockscreen(int fadeMs = 480);
+    void fadeOutForGame(int fadeMs = 520);
+    void update();
     void stop();
     void nextTrack();
+
     void setVolume(float vol);
     float volume() const { return m_volume; }
-    bool  isPlaying() const { return m_playing; }
+    void setLockscreenVolume(float vol);
+    float lockscreenVolume() const { return m_lockscreenVolume; }
+    bool hasLockscreenTrack() const { return m_lockscreenTrack != nullptr; }
+    bool isPlaying() const { return m_playing; }
 
     void loadSfx(Sfx id, const std::string& path);
     void clearSfx();
@@ -47,15 +58,31 @@ public:
     float sfxVolume() const { return m_sfxVolume; }
 
 private:
+    enum class MusicScene {
+        None,
+        Home,
+        Lockscreen,
+    };
+
     static std::atomic<AudioManager*> s_instance;
     static void onTrackFinished();
 
+    void requestScene(MusicScene scene, int fadeOutMs, int fadeInMs);
+    void startSceneLocked(MusicScene scene, int fadeInMs);
+
     std::mutex m_trackMutex;
     std::vector<Mix_Music*> m_tracks;
+    Mix_Music* m_lockscreenTrack = nullptr;
     int   m_current = 0;
     float m_volume  = 0.5f;
+    float m_lockscreenVolume = 0.35f;
     std::atomic<bool> m_playing{false};
     bool  m_initialized = false;
+
+    MusicScene m_scene = MusicScene::None;
+    MusicScene m_pendingScene = MusicScene::None;
+    bool m_sceneTransitionPending = false;
+    int m_pendingFadeInMs = 0;
 
     std::mutex m_sfxMutex;
     std::unordered_map<int, Mix_Chunk*> m_sfx;
