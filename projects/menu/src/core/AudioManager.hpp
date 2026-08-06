@@ -48,6 +48,15 @@ public:
     float lockscreenVolume() const { return m_lockscreenVolume; }
     bool hasLockscreenTrack() const { return m_lockscreenTrack != nullptr; }
     bool isPlaying() const { return m_playing; }
+    static AudioManager* active() { return s_active.load(); }
+
+    // The lockscreen can appear before the asynchronous audio loader has
+    // finished. Keeping this process-wide intent prevents the later legacy
+    // play() call from replacing the lockscreen scene with HOME music.
+    static void setLockscreenVisible(bool visible) {
+        s_lockscreenVisible.store(visible);
+    }
+    static bool lockscreenVisible() { return s_lockscreenVisible.load(); }
 
     void loadSfx(Sfx id, const std::string& path);
     void clearSfx();
@@ -65,6 +74,8 @@ private:
     };
 
     static std::atomic<AudioManager*> s_instance;
+    static std::atomic<AudioManager*> s_active;
+    static std::atomic<bool> s_lockscreenVisible;
     static void onTrackFinished();
 
     void requestScene(MusicScene scene, int fadeOutMs, int fadeInMs);
