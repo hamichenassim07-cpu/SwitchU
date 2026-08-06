@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 
 namespace {
 
@@ -91,6 +92,62 @@ void drawContinuousArc(nxui::Renderer& ren,
     drawCap(endAngle, false);
 }
 
+#ifdef NXUI_BACKEND_DEKO3D
+void writeOrthoProjection(nxui::Renderer& ren, float width, float height) {
+    nxui::VsUniforms vs{};
+    vs.projection[0] = 2.f / width;
+    vs.projection[5] = -2.f / height;
+    vs.projection[10] = -1.f;
+    vs.projection[12] = -1.f;
+    vs.projection[13] = 1.f;
+    vs.projection[15] = 1.f;
+
+    auto& gpu = ren.gpu();
+    const int slot = gpu.slot();
+    std::memcpy(gpu.vsUboCpuAddr(slot), &vs, sizeof(vs));
+    gpu.cmdBuf().bindUniformBuffer(DkStage_Vertex, 0,
+                                   gpu.vsUboGpuAddr(slot),
+                                   nxui::GpuDevice::VS_UBO_SIZE);
+}
+
+bool beginRingGlowTarget(nxui::Renderer& ren) {
+    auto& gpu = ren.gpu();
+    if (!gpu.offscreenReady())
+        return false;
+
+    ren.flush();
+    auto cmd = gpu.cmdBuf();
+    dk::ImageView colorTarget{gpu.offscreenImage(0)};
+    cmd.bindRenderTargets(&colorTarget);
+
+    constexpr uint32_t offW = nxui::GpuDevice::FB_WIDTH / 2;
+    constexpr uint32_t offH = nxui::GpuDevice::FB_HEIGHT / 2;
+    cmd.setViewports(0, DkViewport{0.f, 0.f, (float)offW, (float)offH, 0.f, 1.f});
+    cmd.setScissors(0, DkScissor{0, 0, offW, offH});
+    cmd.clearColor(0, DkColorMask_RGBA, 0.f, 0.f, 0.f, 0.f);
+    writeOrthoProjection(ren, (float)offW, (float)offH);
+    ren.useShader(nxui::ShaderProgram::Basic);
+    return true;
+}
+
+void endRingGlowTarget(nxui::Renderer& ren) {
+    ren.flush();
+    auto& gpu = ren.gpu();
+    auto cmd = gpu.cmdBuf();
+    cmd.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+
+    const int slot = gpu.slot();
+    dk::ImageView colorTarget{gpu.fbImage(slot)};
+    dk::ImageView dsTarget{gpu.dsImage()};
+    cmd.bindRenderTargets(&colorTarget, &dsTarget);
+    cmd.setViewports(0, DkViewport{0.f, 0.f,
+        (float)gpu.width(), (float)gpu.height(), 0.f, 1.f});
+    cmd.setScissors(0, DkScissor{0, 0,
+        (uint32_t)gpu.width(), (uint32_t)gpu.height()});
+    writeOrthoProjection(ren, (float)gpu.width(), (float)gpu.height());
+}
+#endif
+
 } // namespace
 
 void LockPressIndicator::onRender(nxui::Renderer& ren) {
@@ -111,6 +168,64 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
         {1.82f, 3.08f, nxui::Color(0.30f, 0.42f, 1.00f, 1.f)},
         {0.06f, 1.32f, nxui::Color(1.00f, 0.22f, 0.86f, 1.f)},
     }};
+
+    float strongestFlash = 0.f;
+    bool hasActiveSegment = false;
+    for (int i = 0; i < 3; ++i) {
+        if (i < m_progress) {
+            hasActiveSegment = true;
+            if (i == m_progress - 1)
+                strongestFlash = std::clamp(m_flash, 0.f, 1.f);
+        }
+    }
+
+    bool usedRealBlur = false;
+#ifdef NXUI_BACKEND_DEKO3D
+    // V6.5 real post-process glow. The validated ring geometry is rendered
+    // once into a transparent half-resolution target, blurred horizontally
+    // and vertically by the existing nxui pipeline, then recomposited behind
+    // the untouched sharp ring. Only the light changes; the ring shape does not.
+    if (hasActiveSegment && beginRingGlowTarget(ren)) {
+        const nxui::Vec2 glowCenter{center.x * 0.5f, center.y * 0.5f};
+        const float glowRadius = radius * 0.5f;
+
+        for (int i = 0; i < 3; ++i) {
+            if (i >= m_progress)
+                continue;
+
+            const float localFlash = i == m_progress - 1
+                ? strongestFlash
+                : 0.f;
+            const auto& segment = segments[static_cast<std::size_t>(i)];
+            const float sourceThickness = (38.f + 7.f * localFlash) * 0.5f;
+
+            drawContinuousArc(
+                ren, glowCenter, glowRadius,
+                segment.startAngle, segment.endAngle,
+                segment.color.withAlpha(
+                    (0.72f + 0.12f * breathe + 0.14f * localFlash) * alpha),
+                sourceThickness, 112);
+
+            drawContinuousArc(
+                ren, glowCenter, glowRadius - 2.2f,
+                segment.startAngle + 0.025f,
+                segment.endAngle - 0.025f,
+                nxui::Color(0.92f, 0.98f, 1.f,
+                            (0.22f + 0.20f * localFlash) * alpha),
+                5.0f, 96, false);
+        }
+
+        endRingGlowTarget(ren);
+        ren.applyBlur(2.65f, 2);
+        const float compositeAlpha = std::clamp(
+            0.56f + 0.10f * breathe + 0.22f * strongestFlash,
+            0.f, 0.92f);
+        ren.drawOffscreen(0,
+                          {0.f, 0.f, (float)ren.width(), (float)ren.height()},
+                          nxui::Color::white().withAlpha(compositeAlpha * alpha));
+        usedRealBlur = true;
+    }
+#endif
 
     for (int i = 0; i < 3; ++i) {
         const bool active = i < m_progress;
@@ -135,48 +250,43 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
 
         const float flashBoost = 1.f + localFlash * 0.07f;
 
-        // V6.4 only changes the light surrounding the validated ring shape.
-        // Three low-alpha meshes create a smoother falloff without touching
-        // the main 34 px body or the segment geometry.
-        drawContinuousArc(ren, center, radius,
-                          segment.startAngle, segment.endAngle,
-                          segment.color.withAlpha(
-                              (0.014f + 0.010f * breathe +
-                               0.020f * localFlash) * alpha),
-                          72.f * flashBoost, 112);
-        drawContinuousArc(ren, center, radius,
-                          segment.startAngle, segment.endAngle,
-                          segment.color.withAlpha(
-                              (0.032f + 0.014f * breathe +
-                               0.030f * localFlash) * alpha),
-                          56.f * flashBoost, 116);
-        drawContinuousArc(ren, center, radius,
-                          segment.startAngle, segment.endAngle,
-                          segment.color.withAlpha(
-                              (0.072f + 0.020f * breathe +
-                               0.040f * localFlash) * alpha),
-                          43.f * flashBoost, 120);
+        // Portable fallback when offscreen post-processing is unavailable.
+        if (!usedRealBlur) {
+            drawContinuousArc(ren, center, radius,
+                              segment.startAngle, segment.endAngle,
+                              segment.color.withAlpha(
+                                  (0.045f + 0.022f * breathe +
+                                   0.050f * localFlash) * alpha),
+                              52.f * flashBoost, 116);
+            drawContinuousArc(ren, center, radius,
+                              segment.startAngle, segment.endAngle,
+                              segment.color.withAlpha(
+                                  (0.090f + 0.028f * breathe +
+                                   0.060f * localFlash) * alpha),
+                              42.f * flashBoost, 120);
+        }
 
-        // Main body.
+        // Main body: unchanged geometry and dimensions from the validated ring.
         drawContinuousArc(ren, center, radius,
                           segment.startAngle, segment.endAngle,
                           segment.color.withAlpha(
                               (0.90f + 0.08f * breathe) * alpha),
                           34.f * flashBoost, 128);
 
-        // A thin inner reflection adds depth instead of a flat colour block.
+        // Thin inner reflection retained for material depth.
         drawContinuousArc(ren, center, radius - 8.0f,
                           segment.startAngle + 0.035f,
                           segment.endAngle - 0.035f,
                           nxui::Color(0.92f, 0.98f, 1.f,
-                                      (0.12f + 0.08f * breathe + 0.12f * localFlash) * alpha),
+                                      (0.12f + 0.08f * breathe +
+                                       0.12f * localFlash) * alpha),
                           3.2f, 104, false);
 
-        // Short moving sheen on the most recently activated segment.
         if (i == m_progress - 1) {
             const float span = segment.endAngle - segment.startAngle;
             const float phase = std::fmod(m_pulse * 0.28f, 1.f);
-            const float sheenStart = segment.startAngle + span * (0.08f + 0.70f * phase);
+            const float sheenStart = segment.startAngle +
+                span * (0.08f + 0.70f * phase);
             const float sheenEnd = std::min(segment.endAngle - 0.04f,
                                             sheenStart + span * 0.17f);
             if (sheenEnd > sheenStart) {
