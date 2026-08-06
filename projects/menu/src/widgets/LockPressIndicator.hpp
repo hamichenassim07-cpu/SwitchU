@@ -3,8 +3,8 @@
 #include <nxui/widgets/Widget.hpp>
 #include <nxui/Theme.hpp>
 
-// V6: the three presses are displayed as three large luminous segments
-// around the suspended application's cover.
+// V6.1: the three presses are displayed as three thicker, cleaner
+// luminous segments around the suspended application's cover.
 class LockPressIndicator : public nxui::Widget {
 public:
     void setTheme(const nxui::Theme* theme) { m_theme = theme; }
