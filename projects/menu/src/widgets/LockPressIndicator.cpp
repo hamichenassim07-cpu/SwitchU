@@ -135,18 +135,27 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
 
         const float flashBoost = 1.f + localFlash * 0.07f;
 
-        // Broad, very soft bloom. It remains subtle enough not to turn the
-        // lockscreen into a harsh neon interface.
+        // V6.4 only changes the light surrounding the validated ring shape.
+        // Three low-alpha meshes create a smoother falloff without touching
+        // the main 34 px body or the segment geometry.
         drawContinuousArc(ren, center, radius,
                           segment.startAngle, segment.endAngle,
                           segment.color.withAlpha(
-                              (0.040f + 0.030f * breathe + 0.045f * localFlash) * alpha),
-                          57.f * flashBoost, 112);
+                              (0.014f + 0.010f * breathe +
+                               0.020f * localFlash) * alpha),
+                          72.f * flashBoost, 112);
         drawContinuousArc(ren, center, radius,
                           segment.startAngle, segment.endAngle,
                           segment.color.withAlpha(
-                              (0.090f + 0.030f * localFlash) * alpha),
-                          43.f * flashBoost, 116);
+                              (0.032f + 0.014f * breathe +
+                               0.030f * localFlash) * alpha),
+                          56.f * flashBoost, 116);
+        drawContinuousArc(ren, center, radius,
+                          segment.startAngle, segment.endAngle,
+                          segment.color.withAlpha(
+                              (0.072f + 0.020f * breathe +
+                               0.040f * localFlash) * alpha),
+                          43.f * flashBoost, 120);
 
         // Main body.
         drawContinuousArc(ren, center, radius,
@@ -174,7 +183,7 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
                 drawContinuousArc(ren, center, radius - 4.5f,
                                   sheenStart, sheenEnd,
                                   nxui::Color(1.f, 1.f, 1.f,
-                                              (0.10f + 0.12f * localFlash) * alpha),
+                                              (0.08f + 0.15f * localFlash) * alpha),
                                   5.0f, 30, false);
             }
         }
