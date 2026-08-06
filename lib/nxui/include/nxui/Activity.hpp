@@ -18,9 +18,9 @@ class Renderer;
 /// the tree each frame.
 ///
 /// The Activity also owns a FocusManager that provides:
-///  - Debounced D-pad → spatial navigate()
+///  - Debounced D-pad -> spatial navigate()
 ///  - Action dispatch with parent-chain bubbling
-///  - A-button → activate() on focused widget
+///  - A-button -> activate() on focused widget
 /// Override focusRoot() to redirect focus when overlays are active.
 class Activity {
 public:

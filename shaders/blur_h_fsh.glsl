@@ -26,5 +26,9 @@ void main() {
         result += texture(tex, fragUV + offsetH) * weights[i];
         result += texture(tex, fragUV - offsetH) * weights[i];
     }
-    outColor = vec4(result.rgb * fragColor.rgb, 1.0);
+
+    // V6.5: preserve the blurred alpha. The previous hard-coded 1.0 was fine
+    // for an opaque captured backdrop, but turned a transparent ring target
+    // into an opaque black full-screen layer when recomposited.
+    outColor = vec4(result.rgb * fragColor.rgb, result.a * fragColor.a);
 }
