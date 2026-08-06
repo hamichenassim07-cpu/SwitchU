@@ -7,8 +7,6 @@
 
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
-
 struct RingSegment {
     float startAngle;
     float endAngle;
@@ -22,6 +20,9 @@ nxui::Vec2 pointOnCircle(const nxui::Vec2& center, float radius, float angle) {
     };
 }
 
+// nxui does not expose a native stroked path, so the arc is approximated
+// with many very short line sections. V6.1 uses significantly more sections
+// than V6: the joins become nearly invisible on the real 720p display.
 void drawArc(nxui::Renderer& ren,
              const nxui::Vec2& center,
              float radius,
@@ -29,15 +30,15 @@ void drawArc(nxui::Renderer& ren,
              float endAngle,
              const nxui::Color& color,
              float thickness,
-             int segments,
+             int sections,
              bool roundedCaps) {
     if (radius <= 0.f || thickness <= 0.f)
         return;
 
-    segments = std::max(8, segments);
+    sections = std::max(24, sections);
     nxui::Vec2 previous = pointOnCircle(center, radius, startAngle);
-    for (int i = 1; i <= segments; ++i) {
-        const float t = static_cast<float>(i) / static_cast<float>(segments);
+    for (int i = 1; i <= sections; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(sections);
         const float angle = startAngle + (endAngle - startAngle) * t;
         const nxui::Vec2 current = pointOnCircle(center, radius, angle);
         ren.drawLine(previous, current, color, thickness);
@@ -46,8 +47,8 @@ void drawArc(nxui::Renderer& ren,
 
     if (roundedCaps) {
         const float capRadius = thickness * 0.50f;
-        ren.drawCircle(pointOnCircle(center, radius, startAngle), capRadius, color, 24);
-        ren.drawCircle(pointOnCircle(center, radius, endAngle), capRadius, color, 24);
+        ren.drawCircle(pointOnCircle(center, radius, startAngle), capRadius, color, 28);
+        ren.drawCircle(pointOnCircle(center, radius, endAngle), capRadius, color, 28);
     }
 }
 
@@ -63,10 +64,11 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
         r.x + r.width * 0.5f,
         r.y + r.height * 0.5f
     };
-    const float radius = std::min(r.width, r.height) * 0.395f;
+    const float radius = std::min(r.width, r.height) * 0.394f;
     const float breathe = 0.5f + 0.5f * std::sin(m_pulse * 1.70f);
 
-    // Order of activation: cyan top, blue-violet left, pink right.
+    // Activation order: cyan at the top, blue-violet on the left,
+    // then pink on the right.
     const std::array<RingSegment, 3> segments = {{
         {3.70f, 5.72f, nxui::Color(0.05f, 0.88f, 1.00f, 1.f)},
         {1.82f, 3.08f, nxui::Color(0.30f, 0.42f, 1.00f, 1.f)},
@@ -79,48 +81,44 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
         const float localFlash = active && i == m_progress - 1
             ? std::clamp(m_flash, 0.f, 1.f)
             : 0.f;
-
         const RingSegment& segment = segments[static_cast<std::size_t>(i)];
 
-        // Inactive track: still readable, but clearly unfilled.
+        // Slightly thicker inactive track than V6.
         const nxui::Color track = m_theme
-            ? m_theme->pageIndicator.withAlpha((0.14f + (next ? 0.05f * breathe : 0.f)) * alpha)
+            ? m_theme->pageIndicator.withAlpha((0.17f + (next ? 0.045f * breathe : 0.f)) * alpha)
             : nxui::Color(0.22f, 0.27f, 0.48f,
-                          (0.14f + (next ? 0.05f * breathe : 0.f)) * alpha);
+                          (0.17f + (next ? 0.045f * breathe : 0.f)) * alpha);
         drawArc(ren, center, radius,
                 segment.startAngle, segment.endAngle,
-                track, 20.f, 54, true);
+                track, 24.f, 128, true);
 
         if (!active)
             continue;
 
-        const float flashBoost = 1.f + localFlash * 0.22f;
-        const float activeAlpha = (0.90f + 0.10f * breathe) * alpha;
-        const nxui::Color activeColor = segment.color.withAlpha(activeAlpha);
+        const float flashBoost = 1.f + localFlash * 0.10f;
+        const nxui::Color activeColor = segment.color.withAlpha(
+            (0.92f + 0.08f * breathe) * alpha
+        );
 
-        // Wide soft bloom.
+        // One controlled bloom only. V6 used several wide strokes, which
+        // made the construction look visibly stacked.
         drawArc(ren, center, radius,
                 segment.startAngle, segment.endAngle,
-                segment.color.withAlpha((0.055f + 0.055f * localFlash) * alpha),
-                58.f * flashBoost, 54, true);
-        drawArc(ren, center, radius,
-                segment.startAngle, segment.endAngle,
-                segment.color.withAlpha((0.11f + 0.08f * localFlash) * alpha),
-                40.f * flashBoost, 54, true);
+                segment.color.withAlpha((0.085f + 0.045f * localFlash) * alpha),
+                49.f * flashBoost, 120, true);
 
-        // Main luminous body and highlight.
+        // Main body: thicker, cleaner, and sampled with many more sections.
         drawArc(ren, center, radius,
                 segment.startAngle, segment.endAngle,
-                activeColor, 25.f * flashBoost, 60, true);
-        drawArc(ren, center, radius - 2.5f,
-                segment.startAngle + 0.015f, segment.endAngle - 0.015f,
-                nxui::Color(0.88f, 0.98f, 1.f,
-                            (0.30f + 0.18f * localFlash) * alpha),
-                5.2f, 58, true);
+                activeColor, 31.f * flashBoost, 144, true);
+
+        // Narrow inner reflection, kept subtle so it does not read as a
+        // second stacked ring.
+        drawArc(ren, center, radius - 2.2f,
+                segment.startAngle + 0.018f,
+                segment.endAngle - 0.018f,
+                nxui::Color(0.90f, 0.98f, 1.f,
+                            (0.20f + 0.12f * localFlash) * alpha),
+                3.4f, 136, true);
     }
-
-    // A very subtle circular guide keeps the central composition coherent.
-    drawArc(ren, center, radius - 54.f, 0.f, 2.f * kPi,
-            nxui::Color(0.28f, 0.46f, 0.92f, 0.11f * alpha),
-            1.5f, 96, false);
 }
