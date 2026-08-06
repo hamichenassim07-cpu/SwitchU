@@ -1,63 +1,68 @@
 #pragma once
-#include <nxui/core/GpuDevice.hpp>
-#include <nxui/core/Renderer.hpp>
-#include <nxui/core/Input.hpp>
+#include <nxui/widgets/Box.hpp>
+#include <nxui/focus/FocusManager.hpp>
 #include <memory>
 
 namespace nxui {
 
-class Activity;
+class Application;
+class Renderer;
 
-/// Top-level application object.
-/// Owns the GPU device, Renderer, and Input, runs the main loop,
-/// and delegates lifecycle events to the attached Activity.
-class Application {
+/// Abstract base for an application screen / activity.
+/// Attach to an Application via setActivity() -- the Application
+/// manages GPU, Renderer, Input and the main loop.
+///
+/// Every Activity owns a rootBox (a full-screen Box with COLUMN axis)
+/// which is the root of the widget tree. Add UI elements as children
+/// of rootBox(). The framework automatically updates and renders
+/// the tree each frame.
+///
+/// The Activity also owns a FocusManager that provides:
+///  - Debounced D-pad -> spatial navigate()
+///  - Action dispatch with parent-chain bubbling
+///  - A-button -> activate() on focused widget
+/// Override focusRoot() to redirect focus when overlays are active.
+class Activity {
 public:
-    Application() = default;
-    ~Application();
+    virtual ~Activity() = default;
 
-    void setActivity(std::unique_ptr<Activity> activity);
-    void requestActivity(std::unique_ptr<Activity> activity);
+    /// Called once after GPU / Renderer / Input are ready.
+    virtual bool onCreate() { return true; }
 
-    bool initialize();
-    void run();
-    void shutdown();
+    /// Called before GPU / Renderer shutdown.
+    virtual void onDestroy() {}
 
-    GpuDevice& gpu()       { return m_gpu; }
-    Renderer&  renderer()  { return *m_renderer; }
-    Input&     input()     { return m_input; }
+    /// Called each frame. Input has already been updated.
+    virtual void onUpdate(float dt) {}
 
-    // V6.3: stop rendering immediately when a foreground handoff is queued.
-    // This prevents one last HOME frame from being submitted after the menu
-    // has already asked the daemon to resume the suspended application.
-    void requestExit() {
-        m_renderEnabled = false;
-        m_running = false;
-    }
-    bool isRunning() const { return m_running; }
+    /// Called each frame between beginFrame / endFrame.
+    /// The rootBox is rendered before this, so anything drawn here
+    /// appears on top of the widget tree (useful for overlays).
+    virtual void onRender(Renderer& ren) {}
 
-    void setRenderEnabled(bool e) { m_renderEnabled = e; }
-    bool renderEnabled() const    { return m_renderEnabled; }
+    /// Access the parent Application (set by Application::setActivity).
+    Application& app() { return *m_app; }
+    const Application& app() const { return *m_app; }
 
-    // Used by the lockscreen's safe handoff without keeping a fragile pointer
-    // to WiiUMenuApp. There is only one nxui Application in the menu process.
-    static Application* current() { return s_current; }
+    /// The root layout box. Add all UI elements as children of this box.
+    /// Automatically updated and rendered each frame by the framework.
+    Box& rootBox() { return *m_rootBox; }
+    const Box& rootBox() const { return *m_rootBox; }
+
+    /// The focus manager for the activity.
+    FocusManager& focusManager() { return m_focusManager; }
+    const FocusManager& focusManager() const { return m_focusManager; }
+
+    /// The widget subtree used for focus navigation this frame.
+    /// Override to redirect to an overlay when it is active.
+    /// Return nullptr to block all input dispatch for this frame.
+    virtual Widget* focusRoot() { return m_rootBox.get(); }
 
 private:
-    void dispatchInput();
-    bool applyPendingActivity();
-
-    static Application* s_current;
-
-    GpuDevice  m_gpu;
-    std::unique_ptr<Renderer> m_renderer;
-    Input      m_input;
-
-    std::unique_ptr<Activity> m_activity;
-    std::unique_ptr<Activity> m_pendingActivity;
-    bool m_running = true;
-    bool m_renderEnabled = true;
-    int  m_navDebounce = 0;
+    friend class Application;
+    Application* m_app = nullptr;
+    std::shared_ptr<Box> m_rootBox = std::make_shared<Box>(Axis::COLUMN);
+    FocusManager m_focusManager;
 };
 
 } // namespace nxui
