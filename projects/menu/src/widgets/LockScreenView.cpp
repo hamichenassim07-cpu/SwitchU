@@ -84,6 +84,90 @@ nxui::Color animatedLockGradient(float t, float phase) {
     return mixColor(pink, cyan, (sample - 0.68f) / 0.32f);
 }
 
+
+nxui::Color cardStageColor(float progress) {
+    const nxui::Color idle(0.08f, 0.46f, 0.92f, 1.f);
+    const nxui::Color first(0.04f, 0.84f, 1.00f, 1.f);
+    const nxui::Color second(0.18f, 0.30f, 1.00f, 1.f);
+    const nxui::Color third(1.00f, 0.12f, 0.68f, 1.f);
+
+    progress = std::clamp(progress, 0.f, 3.f);
+    if (progress <= 1.f)
+        return mixColor(idle, first, progress);
+    if (progress <= 2.f)
+        return mixColor(first, second, progress - 1.f);
+    return mixColor(second, third, progress - 2.f);
+}
+
+nxui::Vec2 rotateLocalPoint(const nxui::Vec2& center,
+                            float localX,
+                            float localY,
+                            float angle) {
+    const float cs = std::cos(angle);
+    const float sn = std::sin(angle);
+    return {
+        center.x + localX * cs - localY * sn,
+        center.y + localX * sn + localY * cs
+    };
+}
+
+void appendRoundedCorner(std::vector<nxui::Vec2>& points,
+                         const nxui::Vec2& center,
+                         float cornerX,
+                         float cornerY,
+                         float radius,
+                         float startAngle,
+                         float endAngle,
+                         float rotation,
+                         bool includeStart) {
+    constexpr int kCornerSegments = 7;
+    const int startIndex = includeStart ? 0 : 1;
+    for (int i = startIndex; i <= kCornerSegments; ++i) {
+        const float t = static_cast<float>(i) / kCornerSegments;
+        const float a = startAngle + (endAngle - startAngle) * t;
+        const float localX = cornerX + std::cos(a) * radius;
+        const float localY = cornerY + std::sin(a) * radius;
+        points.push_back(rotateLocalPoint(center, localX, localY, rotation));
+    }
+}
+
+void drawRotatedRoundedRect(nxui::Renderer& ren,
+                            const nxui::Vec2& center,
+                            float width,
+                            float height,
+                            float radius,
+                            float rotation,
+                            const nxui::Color& color) {
+    if (width <= 1.f || height <= 1.f || color.a <= 0.001f)
+        return;
+
+    const float halfW = width * 0.5f;
+    const float halfH = height * 0.5f;
+    radius = std::clamp(radius, 0.f, std::min(halfW, halfH));
+
+    std::vector<nxui::Vec2> points;
+    points.reserve(32);
+    appendRoundedCorner(points, center,
+                        halfW - radius, -halfH + radius,
+                        radius, -kPi * 0.5f, 0.f,
+                        rotation, true);
+    appendRoundedCorner(points, center,
+                        halfW - radius, halfH - radius,
+                        radius, 0.f, kPi * 0.5f,
+                        rotation, false);
+    appendRoundedCorner(points, center,
+                        -halfW + radius, halfH - radius,
+                        radius, kPi * 0.5f, kPi,
+                        rotation, false);
+    appendRoundedCorner(points, center,
+                        -halfW + radius, -halfH + radius,
+                        radius, kPi, kPi * 1.5f,
+                        rotation, false);
+
+    for (std::size_t i = 0; i < points.size(); ++i)
+        ren.drawTriangle(center, points[i], points[(i + 1) % points.size()], color);
+}
+
 std::vector<std::string> splitUtf8(const std::string& text) {
     std::vector<std::string> glyphs;
     for (std::size_t i = 0; i < text.size();) {
@@ -712,7 +796,7 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
 } // namespace
 
 LockScreenView::LockScreenView() {
-    DebugLog::log("[lockscreen] Switch U V6.6 view created");
+    DebugLog::log("[lockscreen] Switch U V7.0 pseudo-3D view created");
     setRect({0.f, 0.f, 1280.f, 720.f});
 
     // Compact blurred identity card in the lower-left corner.
@@ -745,6 +829,18 @@ LockScreenView::LockScreenView() {
     m_storagePanel.setPanelOpacity(0.90f);
     m_storagePanel.setMaterialTextureEnabled(true);
     m_storagePanel.setMaterialTextureIntensity(0.08f);
+
+    // The floating game card uses a compact real-blur glass plate under the
+    // pseudo-3D layers. The rotating highlights remain lightweight 2D meshes.
+    m_gamePanel.setForceLiquidGlass(false);
+    m_gamePanel.setLiquidGlassEnabled(false);
+    m_gamePanel.setBlurEnabled(true);
+    m_gamePanel.setBlurRadius(1.70f);
+    m_gamePanel.setBlurPasses(1);
+    m_gamePanel.setBackingEnabled(false);
+    m_gamePanel.setPanelOpacity(0.90f);
+    m_gamePanel.setMaterialTextureEnabled(true);
+    m_gamePanel.setMaterialTextureIntensity(0.12f);
 }
 
 void LockScreenView::setFonts(nxui::Font* normal,
@@ -945,6 +1041,12 @@ void LockScreenView::applyThemeToWidgets() {
     m_storagePanel.setHighlightColor(highlight);
     m_storagePanel.setBorderWidth(1.15f);
     m_storagePanel.setCornerRadius(24.f);
+
+    m_gamePanel.setBaseColor({0.018f, 0.028f, 0.085f, 0.22f});
+    m_gamePanel.setBorderColor({0.62f, 0.76f, 1.00f, 0.20f});
+    m_gamePanel.setHighlightColor({0.96f, 0.99f, 1.00f, 0.16f});
+    m_gamePanel.setBorderWidth(1.45f);
+    m_gamePanel.setCornerRadius(44.f);
 }
 
 void LockScreenView::resetBackgroundAsset() {
@@ -1109,6 +1211,15 @@ void LockScreenView::onUpdate(float dt) {
     m_animationTime += dt;
     m_progress.update(dt);
 
+    // Colour changes remain immediate enough to read on each press, but the
+    // interpolation prevents the glass edge from snapping between stages.
+    const float visualTarget = static_cast<float>(m_pressCount);
+    const float visualSpeed = visualTarget > m_visualPressProgress ? 15.f : 11.f;
+    const float visualBlend = 1.f - std::exp(-visualSpeed * std::max(0.f, dt));
+    m_visualPressProgress += (visualTarget - m_visualPressProgress) * visualBlend;
+    m_visualPressProgress = std::clamp(m_visualPressProgress, 0.f, 3.f);
+    m_progress.setVisualProgress(m_visualPressProgress);
+
     // Softer, rapid press feedback. The target follows the existing press
     // pulse, while exponential smoothing removes the abrupt cut on both ends.
     const float pressShadeTarget = smoothStep(m_pressFlash);
@@ -1248,8 +1359,8 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                  0.105f * m_pressShade * contentAlpha));
     }
 
-    // The full central composition moves upward, while the cover itself is
-    // placed a few pixels below the exact ring centre as requested.
+    // The central scene still follows the existing unlock lift. The new card
+    // adds its own calm floating motion while the surrounding UI remains fixed.
     const nxui::Vec2 center = {650.f, 330.f + lift * 0.10f};
     // Clock: fixed-position pieces prevent the minutes from moving when the
     // colon instantly disappears and reappears every second.
@@ -1309,51 +1420,156 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                      greetingScale, contentAlpha, m_animationTime);
 
     if (m_hasGame) {
-        // V6.3: the top of the ring is completely free. The whole central
-        // composition is larger and the status is moved below it.
-        // Final balance pass: the ring is more compact and slightly higher,
-        // while the application cover gains visual importance.
-        m_progress.setRect({410.f, 130.f + lift * 0.10f, 480.f, 400.f});
+        // V7.0 Floating Glass Icon. The old ring is replaced by a larger card
+        // whose depth is suggested by layered glass, a moving shadow, parallax,
+        // slow vertical floating and a very small in-plane rotation.
+        const float floatY = std::sin(m_animationTime * (2.f * kPi / 3.85f)) * 5.4f;
+        const float floatX = std::sin(m_animationTime * (2.f * kPi / 6.20f) + 0.8f) * 2.2f;
+        const float idleRotation =
+            std::sin(m_animationTime * (2.f * kPi / 5.10f) + 0.35f) *
+            (0.95f * kPi / 180.f);
+        const float pressKick = smoothStep(m_pressFlash);
+        const float pressDirection = (m_pressCount % 2 == 0) ? -1.f : 1.f;
+        const float rotation = idleRotation +
+            pressDirection * pressKick * (0.42f * kPi / 180.f);
+        const float launchEase = easeOutCubic(m_unlockProgress);
+        const float cardScale =
+            (1.f - 0.020f * pressKick) * (1.f + 0.075f * launchEase);
+        const float frameSize = 318.f * cardScale;
+        const float iconSize = 282.f * cardScale;
+        const float frameRadius = 44.f * cardScale;
+        const nxui::Vec2 cardCenter = {
+            650.f + floatX,
+            333.f + floatY + lift * 0.10f
+        };
+        const nxui::Color stageColor = cardStageColor(m_visualPressProgress);
+
+        // Dynamic shadow: it expands and softens as the card rises, which is
+        // the main depth cue of the pseudo-3D effect.
+        const float heightPhase = 0.5f + 0.5f *
+            std::sin(m_animationTime * (2.f * kPi / 3.85f));
+        const nxui::Vec2 shadowCenter = {
+            cardCenter.x + 8.f - floatX * 0.34f,
+            cardCenter.y + 14.f + heightPhase * 2.5f
+        };
+        drawRotatedRoundedRect(
+            ren, shadowCenter,
+            frameSize + 24.f + 5.f * heightPhase,
+            frameSize + 20.f + 4.f * heightPhase,
+            frameRadius + 13.f,
+            rotation * 0.48f,
+            nxui::Color(0.001f, 0.002f, 0.010f,
+                        (0.105f - 0.025f * heightPhase) * contentAlpha));
+        drawRotatedRoundedRect(
+            ren, {shadowCenter.x, shadowCenter.y - 2.f},
+            frameSize + 10.f,
+            frameSize + 10.f,
+            frameRadius + 7.f,
+            rotation * 0.62f,
+            stageColor.withAlpha((0.024f + 0.022f * breathe) * contentAlpha));
+
+        const nxui::Rect frameRect = {
+            cardCenter.x - frameSize * 0.5f,
+            cardCenter.y - frameSize * 0.5f,
+            frameSize,
+            frameSize
+        };
+
+        // Real background blur remains axis-aligned and very subtle. The
+        // rotated material layers above it provide the visible 3D illusion.
+        m_gamePanel.setRect(frameRect);
+        m_gamePanel.setOpacity(contentAlpha);
+        m_gamePanel.render(ren);
+
+        // Reuse the validated post-process glow pipeline, now around the card.
+        m_progress.setRect(frameRect.expanded(2.f));
         m_progress.setOpacity(contentAlpha);
         m_progress.render(ren);
 
-        const nxui::Rect cover = {539.f, 219.f + lift * 0.10f, 222.f, 222.f};
-        // No coloured frame around the icon: only a quiet neutral backplate,
-        // leaving the separate blue ring to carry the progress language.
-        ren.drawRoundedRect(cover.expanded(5.f),
-                            nxui::Color(0.002f, 0.005f, 0.020f,
-                                        0.50f * contentAlpha), 34.f);
-        ren.drawRoundedRect(cover,
-                            nxui::Color(0.018f, 0.022f, 0.070f,
-                                        0.96f * contentAlpha), 30.f);
+        // Dark depth, coloured glass body and upper reflection. The icon covers
+        // their centre, leaving a thick glass edge instead of a black frame.
+        const nxui::Vec2 depthCenter = {
+            cardCenter.x + 4.5f + std::sin(rotation) * 35.f,
+            cardCenter.y + 8.5f
+        };
+        drawRotatedRoundedRect(
+            ren, depthCenter,
+            frameSize - 2.f, frameSize - 2.f,
+            frameRadius, rotation,
+            nxui::Color(0.002f, 0.004f, 0.018f, 0.58f * contentAlpha));
+        drawRotatedRoundedRect(
+            ren, cardCenter,
+            frameSize - 5.f, frameSize - 5.f,
+            frameRadius - 1.f, rotation,
+            stageColor.withAlpha((0.125f + 0.055f * breathe +
+                                  0.070f * pressKick) * contentAlpha));
+        drawRotatedRoundedRect(
+            ren, {cardCenter.x - 1.2f, cardCenter.y - 4.2f},
+            frameSize - 12.f, frameSize - 12.f,
+            frameRadius - 5.f, rotation,
+            nxui::Color(0.96f, 0.99f, 1.f,
+                        (0.052f + 0.038f * slowPulse) * contentAlpha));
+        drawRotatedRoundedRect(
+            ren, cardCenter,
+            iconSize + 12.f, iconSize + 12.f,
+            35.f * cardScale, rotation,
+            nxui::Color(0.005f, 0.008f, 0.030f, 0.56f * contentAlpha));
+
+        // The image moves a fraction less than the outer frame. This small
+        // parallax mismatch is intentional and reads as thickness at rest.
+        const float parallaxX = -floatX * 0.24f - std::sin(rotation) * 62.f;
+        const float parallaxY = -floatY * 0.09f + std::cos(rotation) * 0.7f;
+        const nxui::Rect cover = {
+            cardCenter.x - iconSize * 0.5f + parallaxX,
+            cardCenter.y - iconSize * 0.5f + parallaxY,
+            iconSize,
+            iconSize
+        };
+        ren.drawRoundedRect(
+            cover.expanded(3.5f),
+            nxui::Color(0.002f, 0.005f, 0.020f, 0.48f * contentAlpha),
+            34.f * cardScale);
 
         const nxui::Texture* gameTexture =
             (m_ownedGameTexture.valid() &&
              m_ownedGameTextureTitleId == m_gameTitleId)
                 ? &m_ownedGameTexture
                 : nullptr;
-        const float gameTextureAlpha = contentAlpha *
-            std::clamp(1.f - m_unlockProgress * 4.5f, 0.f, 1.f);
+
+        // Keep the icon visible during most of the short unlock transition so
+        // the fuchsia third state and launch motion can actually be perceived.
+        const float unlockFade = 1.f - smoothStep(
+            clamp01((m_unlockProgress - 0.56f) / 0.20f));
+        const float gameTextureAlpha = contentAlpha * unlockFade;
         if (gameTexture && gameTexture->valid() && gameTextureAlpha > 0.001f) {
-            ren.drawTextureRounded(gameTexture, cover.shrunk(6.f), 25.f,
+            ren.drawTextureRounded(gameTexture, cover.shrunk(5.f),
+                                   29.f * cardScale,
                                    nxui::Color::white().withAlpha(gameTextureAlpha));
         } else {
-            ren.drawGradientRect(cover.shrunk(7.f),
-                                 nxui::Color(0.16f, 0.28f, 0.62f, 0.76f * contentAlpha),
-                                 nxui::Color(0.26f, 0.08f, 0.46f, 0.78f * contentAlpha));
+            ren.drawGradientRect(
+                cover.shrunk(6.f),
+                stageColor.withAlpha(0.72f * contentAlpha),
+                nxui::Color(0.12f, 0.04f, 0.28f, 0.82f * contentAlpha));
         }
-        ren.drawRoundedRectOutline(cover,
-                                   nxui::Color(0.94f, 0.97f, 1.f,
-                                               0.18f * contentAlpha),
-                                   30.f, 1.2f);
 
-        // The cover and ring already communicate that the application is
-        // suspended. V6.5 removes the redundant status label and lets the
-        // game title occupy the clean central gap below the cover.
+        // Very light front-glass sheen. It follows the icon rather than the
+        // background and therefore reinforces the card/material reading.
+        ren.drawGradientRect(
+            {cover.x + 10.f, cover.y + 10.f,
+             cover.width - 20.f, cover.height * 0.25f},
+            nxui::Color(1.f, 1.f, 1.f, 0.085f * contentAlpha),
+            nxui::Color(1.f, 1.f, 1.f, 0.005f * contentAlpha));
+        ren.drawRoundedRectOutline(
+            cover,
+            nxui::Color(0.95f, 0.98f, 1.f,
+                        (0.18f + 0.10f * pressKick) * contentAlpha),
+            34.f * cardScale,
+            1.35f);
+
         if (m_fontMedium && !m_gameTitle.empty()) {
             constexpr float titleScale = 0.84f;
             const nxui::Rect titleClip = {
-                410.f, 526.f + lift * 0.14f, 480.f, 42.f
+                390.f, 520.f + lift * 0.14f, 520.f, 42.f
             };
             drawAutoScrollText(
                 ren, m_gameTitle, titleClip, m_fontMedium,
@@ -1514,7 +1730,8 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     }
 
     if (m_hasGame) {
-        // With a suspended game, the large ring is the progress indicator.
+        // With a suspended game, the floating glass edge carries the progress
+        // colour while this line keeps the three-press instruction explicit.
         if (m_fontMedium && m_fontIcons) {
             const std::string instruction = "Appuie trois fois sur";
             const std::string aGlyph = utf8Codepoint(0xE0E0);

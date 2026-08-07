@@ -67,6 +67,7 @@ private:
     nxui::GlassPanel m_profilePanel;
     nxui::GlassPanel m_connectionPanel;
     nxui::GlassPanel m_storagePanel;
+    nxui::GlassPanel m_gamePanel;
     LockPressIndicator m_progress;
 
     nxui::Texture* m_gameTexture = nullptr;
@@ -105,6 +106,7 @@ private:
     int m_pressCount = 0;
     float m_pressFlash = 0.f;
     float m_pressShade = 0.f;
+    float m_visualPressProgress = 0.f;
     float m_viewOpacity = 1.f;
     float m_reveal = 1.f;
     float m_unlockProgress = 0.f;
