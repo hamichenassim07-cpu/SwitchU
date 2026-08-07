@@ -54,6 +54,14 @@ enum class MenuStartMode : uint32_t {
     StartupBoot    = 1,
 };
 
+// Destination a restaurer APRES le lockscreen.
+// Home = rester/revenir sur Switch U HOME.
+// Game = reprendre l'application suspendue.
+enum class LockReturnTarget : uint8_t {
+    Home = 0,
+    Game = 1,
+};
+
 struct CommandHeader {
     uint32_t magic;
     uint32_t message;
@@ -75,7 +83,8 @@ struct SystemStatus {
     uint64_t  suspended_app_id;
     uint8_t   selected_user[16];
     bool      app_running;
-    uint8_t   _pad[7];
+    LockReturnTarget lock_return_target;
+    uint8_t   _pad[6];
 };
 static_assert(sizeof(SystemStatus) == 32);
 

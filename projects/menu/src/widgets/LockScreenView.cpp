@@ -4,11 +4,8 @@
 #include "core/AudioManager.hpp"
 #include "core/DebugLog.hpp"
 #include <nxui/Application.hpp>
-#ifdef SWITCHU_MENU
-#include "smi_commands.hpp"
-#endif
-
 #include <nxui/core/Renderer.hpp>
+#include <nxui/widgets/True3DCard.hpp>
 
 #include <switch.h>
 
@@ -82,6 +79,21 @@ nxui::Color animatedLockGradient(float t, float phase) {
     if (sample < 0.68f)
         return mixColor(violet, pink, (sample - 0.34f) / 0.34f);
     return mixColor(pink, cyan, (sample - 0.68f) / 0.32f);
+}
+
+
+nxui::Color cardStageColor(float progress) {
+    const nxui::Color idle(0.08f, 0.46f, 0.92f, 1.f);
+    const nxui::Color first(0.04f, 0.84f, 1.00f, 1.f);
+    const nxui::Color second(0.18f, 0.30f, 1.00f, 1.f);
+    const nxui::Color third(1.00f, 0.12f, 0.68f, 1.f);
+
+    progress = std::clamp(progress, 0.f, 3.f);
+    if (progress <= 1.f)
+        return mixColor(idle, first, progress);
+    if (progress <= 2.f)
+        return mixColor(first, second, progress - 1.f);
+    return mixColor(second, third, progress - 2.f);
 }
 
 std::vector<std::string> splitUtf8(const std::string& text) {
@@ -202,9 +214,8 @@ void buildClockStrings(bool use12Hour, ClockStrings& out) {
     };
     const int weekday = std::clamp(local->tm_wday, 0, 6);
     const int month = std::clamp(local->tm_mon, 0, 11);
-    std::snprintf(buffer, sizeof(buffer), "%s %d %s %04d",
-                  days[weekday], local->tm_mday, months[month],
-                  local->tm_year + 1900);
+    std::snprintf(buffer, sizeof(buffer), "%s %d %s",
+                  days[weekday], local->tm_mday, months[month]);
     out.date = buffer;
 }
 
@@ -364,6 +375,72 @@ void drawReadableText(nxui::Renderer& ren,
         ren.drawText(text, {pos.x + weight, pos.y}, font,
                      color.withAlpha(color.a * 0.78f * alpha), scale);
     }
+}
+
+
+void drawAutoScrollText(nxui::Renderer& ren,
+                        const std::string& text,
+                        const nxui::Rect& clip,
+                        nxui::Font* font,
+                        const nxui::Color& color,
+                        float scale,
+                        float alpha,
+                        float animationTime,
+                        float phase = 0.f,
+                        bool centerWhenFits = false,
+                        float weight = 0.f) {
+    if (!font || text.empty() || clip.width <= 1.f || clip.height <= 1.f)
+        return;
+
+    const float textWidth = font->measure(text).x * scale;
+    float x = clip.x;
+    if (textWidth <= clip.width) {
+        if (centerWhenFits)
+            x = clip.x + (clip.width - textWidth) * 0.5f;
+        drawReadableText(ren, text, {x, clip.y}, font, color,
+                         scale, alpha, weight);
+        return;
+    }
+
+    // Calm marquee: pause at the beginning, scroll to the end, pause,
+    // then return quickly. It is only enabled when the text really overflows.
+    const float overflow = textWidth - clip.width;
+    const float startPause = 1.65f;
+    const float travelDuration = std::max(1.20f, overflow / 42.f);
+    const float endPause = 0.90f;
+    const float returnDuration = 0.48f;
+    const float cycle = startPause + travelDuration + endPause + returnDuration;
+    float t = std::fmod(std::max(0.f, animationTime + phase), cycle);
+    float offset = 0.f;
+
+    if (t < startPause) {
+        offset = 0.f;
+    } else if (t < startPause + travelDuration) {
+        const float u = (t - startPause) / travelDuration;
+        offset = overflow * smoothStep(u);
+    } else if (t < startPause + travelDuration + endPause) {
+        offset = overflow;
+    } else {
+        const float u = (t - startPause - travelDuration - endPause) /
+                        returnDuration;
+        offset = overflow * (1.f - smoothStep(u));
+    }
+
+    ren.pushClipRect(clip);
+    drawReadableText(ren, text, {clip.x - offset, clip.y}, font, color,
+                     scale, alpha, weight);
+    ren.popClipRect();
+}
+
+std::string formatStorageAmount(std::uint64_t bytes) {
+    constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+    const double value = static_cast<double>(bytes) / kGiB;
+    char buffer[48] = {};
+    if (value < 100.0)
+        std::snprintf(buffer, sizeof(buffer), "%.1f Go", value);
+    else
+        std::snprintf(buffer, sizeof(buffer), "%.0f Go", value);
+    return buffer;
 }
 
 void drawGradientText(nxui::Renderer& ren,
@@ -595,26 +672,22 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
         glyphX + glyphSize.x * baseGlyphScale * 0.5f,
         y + glyphSize.y * baseGlyphScale * 0.46f
     };
-    const float colorT = progress > 0
-        ? static_cast<float>(progress - 1) / 2.f
-        : 0.f;
-    const nxui::Color pressColor = lockGradient(colorT);
+    // The A glyph uses a compact neutral-white glow so it no longer competes
+    // with the blue progress accents.
     ren.drawCircle(glyphCenter,
-                   27.f + 9.f * pressKick + 2.f * breathe,
-                   pressColor.withAlpha(
-                       (0.065f + 0.16f * pressKick +
-                        0.03f * breathe) * alpha), 34);
+                   21.f + 5.f * pressKick + 1.2f * breathe,
+                   nxui::Color(1.f, 1.f, 1.f,
+                       (0.045f + 0.11f * pressKick +
+                        0.018f * breathe) * alpha), 32);
     ren.drawCircle(glyphCenter,
-                   21.f + 3.f * pressKick,
-                   nxui::Color(0.70f, 0.86f, 1.f,
-                               (0.04f + 0.09f * pressKick) * alpha), 30);
+                   16.f + 2.f * pressKick,
+                   nxui::Color(0.92f, 0.97f, 1.f,
+                               (0.025f + 0.055f * pressKick) * alpha), 28);
     ren.drawText(aGlyph,
                  {glyphCenter.x - glyphSize.x * glyphScale * 0.5f,
                   glyphCenter.y - glyphSize.y * glyphScale * 0.46f - 3.f},
                  iconFont,
-                 mixColor(nxui::Color(0.99f, 1.f, 1.f, 1.f),
-                          pressColor, 0.28f * pressKick)
-                     .withAlpha(alpha),
+                 nxui::Color(0.995f, 1.f, 1.f, alpha),
                  glyphScale);
 
     const float dotY = pill.y + 77.f;
@@ -650,14 +723,19 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
 } // namespace
 
 LockScreenView::LockScreenView() {
-    DebugLog::log("[lockscreen] Switch U V6.5 view created");
+    DebugLog::log("[lockscreen] Switch U V7.2 true-3D card view created");
     setRect({0.f, 0.f, 1280.f, 720.f});
 
-    // The profile is no longer a full card in V6.5, but the member is kept
-    // for source compatibility with older layouts.
-    m_profilePanel.setForceLiquidGlass(true);
+    // Compact blurred identity card in the lower-left corner.
+    m_profilePanel.setForceLiquidGlass(false);
+    m_profilePanel.setLiquidGlassEnabled(false);
     m_profilePanel.setBlurEnabled(true);
+    m_profilePanel.setBlurRadius(1.45f);
+    m_profilePanel.setBlurPasses(1);
     m_profilePanel.setBackingEnabled(false);
+    m_profilePanel.setPanelOpacity(0.88f);
+    m_profilePanel.setMaterialTextureEnabled(true);
+    m_profilePanel.setMaterialTextureIntensity(0.08f);
 
     m_connectionPanel.setForceLiquidGlass(false);
     m_connectionPanel.setLiquidGlassEnabled(false);
@@ -668,6 +746,16 @@ LockScreenView::LockScreenView() {
     m_connectionPanel.setPanelOpacity(0.94f);
     m_connectionPanel.setMaterialTextureEnabled(true);
     m_connectionPanel.setMaterialTextureIntensity(0.10f);
+
+    m_storagePanel.setForceLiquidGlass(false);
+    m_storagePanel.setLiquidGlassEnabled(false);
+    m_storagePanel.setBlurEnabled(true);
+    m_storagePanel.setBlurRadius(1.55f);
+    m_storagePanel.setBlurPasses(1);
+    m_storagePanel.setBackingEnabled(false);
+    m_storagePanel.setPanelOpacity(0.90f);
+    m_storagePanel.setMaterialTextureEnabled(true);
+    m_storagePanel.setMaterialTextureIntensity(0.08f);
 }
 
 void LockScreenView::setFonts(nxui::Font* normal,
@@ -701,9 +789,6 @@ void LockScreenView::setSuspendedGame(nxui::Texture* texture,
         m_ownedGameTexture.valid() && m_ownedGameTextureTitleId == titleId;
     m_ownedGameTextureAttempted = alreadyOwnsThisTitle;
     m_deferredGameAssetReset = false;
-    m_resumeHandoffPrepared = false;
-    m_resumeBlackFrameRendered = false;
-    m_resumeHandoffSent = false;
     m_unlockAudioStarted = false;
     m_gameTitle = title;
     m_gameTitleId = titleId;
@@ -724,10 +809,8 @@ void LockScreenView::clearSuspendedGame() {
     m_gameIsCard = false;
     m_hasGame = false;
     m_deferredGameAssetReset = true;
-    m_resumeHandoffPrepared = false;
-    m_resumeBlackFrameRendered = false;
-    m_resumeHandoffSent = false;
     m_unlockAudioStarted = false;
+    m_progress.clearProjectedOutline();
 }
 
 void LockScreenView::setGreeting(const std::string& greeting) {
@@ -795,49 +878,16 @@ void LockScreenView::setTransition(float opacity,
         m_unlockAudioStarted = true;
         DebugLog::log("[lockscreen] unlock begin suspended=%d", m_hasGame ? 1 : 0);
         if (audio) {
-            if (m_hasGame)
+            if (m_hasGame && m_returnToGameOnUnlock)
                 audio->fadeOutForGame(420);
             else
                 audio->playHome(420);
         }
     }
 
-#ifdef SWITCHU_MENU
-    // Safe direct handoff. The existing WiiUMenuApp code continues to own the
-    // three-press animation, but the view takes over before its old final
-    // clear/reload block. First render one completely black frame. On the next
-    // update, wait for that frame, queue resume, then stop the app loop.
-    if (m_unlocking && m_hasGame && !m_resumeHandoffSent) {
-        if (m_unlockProgress >= 0.78f && !m_resumeHandoffPrepared) {
-            m_resumeHandoffPrepared = true;
-            DebugLog::log("[lockscreen] suspended handoff prepared; game texture disabled");
-        }
-
-        if (m_resumeHandoffPrepared && m_resumeBlackFrameRendered) {
-            if (auto* application = nxui::Application::current()) {
-                DebugLog::log("[lockscreen] black frame submitted; waiting for GPU");
-                application->gpu().waitIdle();
-                DebugLog::log("[lockscreen] gpu idle; queueing resume");
-
-                if (audio)
-                    audio->stop();
-
-                const Result rc = switchu::menu::smi_cmd::resumeApplication();
-                DebugLog::log("[lockscreen] resume command rc=0x%X", rc);
-                if (R_SUCCEEDED(rc)) {
-                    m_resumeHandoffSent = true;
-                    DebugLog::log("[lockscreen] menu exit requested after resume queue");
-                    application->requestExit();
-                } else {
-                    m_resumeHandoffPrepared = false;
-                    m_resumeBlackFrameRendered = false;
-                    if (audio)
-                        audio->playLockscreen(220);
-                }
-            }
-        }
-    }
-#endif
+    // V7.4: LockScreenView ne decide plus jamais de la destination.
+    // Le controleur WiiUMenuApp possede seul le timer de 1,20 s puis choisit
+    // HOME ou GAME a partir de l'etat memorise par le daemon.
 
     if (!m_unlocking && m_viewOpacity <= 0.001f) {
         AudioManager::setLockscreenVisible(false);
@@ -862,6 +912,13 @@ void LockScreenView::applyThemeToWidgets() {
     m_connectionPanel.setHighlightColor(highlight);
     m_connectionPanel.setBorderWidth(1.20f);
     m_connectionPanel.setCornerRadius(28.f);
+
+    m_storagePanel.setBaseColor(base);
+    m_storagePanel.setBorderColor(border);
+    m_storagePanel.setHighlightColor(highlight);
+    m_storagePanel.setBorderWidth(1.15f);
+    m_storagePanel.setCornerRadius(24.f);
+
 }
 
 void LockScreenView::resetBackgroundAsset() {
@@ -1005,9 +1062,42 @@ void LockScreenView::ensureDynamicAssets(nxui::Renderer& ren) {
     }
 }
 
+void LockScreenView::updateStorageStatus() {
+    s64 total = 0;
+    s64 freeSpace = 0;
+    const Result rc = nsGetStorageSize(NcmStorageId_SdCard,
+                                       &total, &freeSpace);
+    if (R_FAILED(rc) || total <= 0 || freeSpace < 0) {
+        m_storageAvailable = false;
+        m_sdTotalBytes = 0;
+        m_sdFreeBytes = 0;
+        return;
+    }
+
+    m_storageAvailable = true;
+    m_sdTotalBytes = static_cast<std::uint64_t>(total);
+    m_sdFreeBytes = static_cast<std::uint64_t>(freeSpace);
+}
+
 void LockScreenView::onUpdate(float dt) {
     m_animationTime += dt;
     m_progress.update(dt);
+
+    // Colour changes remain immediate enough to read on each press, but the
+    // interpolation prevents the glass edge from snapping between stages.
+    const float visualTarget = static_cast<float>(m_pressCount);
+    const float visualSpeed = visualTarget > m_visualPressProgress ? 15.f : 11.f;
+    const float visualBlend = 1.f - std::exp(-visualSpeed * std::max(0.f, dt));
+    m_visualPressProgress += (visualTarget - m_visualPressProgress) * visualBlend;
+    m_visualPressProgress = std::clamp(m_visualPressProgress, 0.f, 3.f);
+    m_progress.setVisualProgress(m_visualPressProgress);
+
+    m_storagePollTimer -= dt;
+    if (m_storagePollTimer <= 0.f) {
+        m_storagePollTimer = 5.f;
+        updateStorageStatus();
+    }
+
     m_connectionPollTimer -= dt;
     if (m_connectionPollTimer <= 0.f) {
         m_connectionPollTimer = 1.f;
@@ -1044,7 +1134,7 @@ void LockScreenView::onUpdate(float dt) {
 
         const u32 handheldStyle = hidGetNpadStyleSet(HidNpadIdType_Handheld);
         if (handheldStyle != 0) {
-            m_controllerStatus = "Joy-Con attachés";
+            m_controllerStatus = "Mode portable";
         } else {
             static constexpr std::array<HidNpadIdType, 8> ids = {{
                 HidNpadIdType_No1, HidNpadIdType_No2,
@@ -1070,13 +1160,6 @@ void LockScreenView::onUpdate(float dt) {
 }
 
 void LockScreenView::onRender(nxui::Renderer& ren) {
-    if (m_resumeHandoffPrepared && m_hasGame) {
-        ren.drawRect({0.f, 0.f, 1280.f, 720.f},
-                     nxui::Color(0.f, 0.f, 0.f, 1.f));
-        m_resumeBlackFrameRendered = true;
-        return;
-    }
-
     const float contentAlpha = m_viewOpacity * easeOutCubic(m_reveal);
     if (contentAlpha <= 0.001f)
         return;
@@ -1104,17 +1187,13 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                    (0.08f + 0.025f * breathe) * contentAlpha), 96);
     }
 
-    // Global veil stays light enough to preserve the personalised background.
-    ren.drawGradientRect(
-        screen,
-        nxui::Color(0.004f, 0.008f, 0.025f, 0.38f * m_viewOpacity),
-        nxui::Color(0.004f, 0.006f, 0.020f, 0.72f * m_viewOpacity)
-    );
-    ren.drawRect(screen, nxui::Color(0.002f, 0.004f, 0.014f,
-                                     0.17f * m_viewOpacity));
+    // V7.3.1: remove the real permanent full-screen dark veil.
+    // The personalised background must keep its original brightness outside
+    // the dedicated readability area at the top of the lockscreen.
 
-    // A local top veil stabilises the readability of the animated greeting,
-    // clock, battery and profile without hiding the personalised background.
+    // Restore the LOCAL top readability veil from V7.1. This is intentional:
+    // it only sits behind the clock, date, greeting and battery so those
+    // elements stay readable on bright custom backgrounds.
     ren.drawGradientRect(
         {0.f, 0.f, 1280.f, 232.f},
         nxui::Color(0.004f, 0.006f, 0.020f, 0.56f * m_viewOpacity),
@@ -1125,14 +1204,13 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     // suspended game, where it becomes the main decorative background.
     drawFloatingShapes(ren, m_animationTime, contentAlpha, !m_hasGame);
 
-    // The full central composition moves upward, while the cover itself is
-    // placed a few pixels below the exact ring centre as requested.
-    const nxui::Vec2 center = {650.f, 396.f + lift * 0.10f};
+    // The central scene still follows the existing unlock lift. The new card
+    // adds its own calm floating motion while the surrounding UI remains fixed.
+    const nxui::Vec2 center = {650.f, 312.f + lift * 0.10f};
     // Clock: fixed-position pieces prevent the minutes from moving when the
     // colon instantly disappears and reappears every second.
     ClockStrings clock;
     buildClockStrings(m_use12Hour, clock);
-    float clockVisualCenterX = 150.f;
     if (m_fontLarge) {
         const float scale = 1.22f;
         const float x = 44.f;
@@ -1151,7 +1229,6 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         drawReadableText(ren, clock.minute, {minuteX, y}, m_fontLarge,
                          white, scale, contentAlpha, 0.65f);
         const float minuteW = m_fontLarge->measure(clock.minute).x * scale;
-        clockVisualCenterX = x + (hourW + colonW + 2.f + minuteW) * 0.5f;
 
         if (!clock.suffix.empty() && m_fontMedium) {
             drawReadableText(ren, clock.suffix,
@@ -1163,10 +1240,8 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     }
     if (m_fontMedium) {
         const float dateScale = 0.82f;
-        const float dateWidth = m_fontMedium->measure(clock.date).x * dateScale;
-        const float dateX = clockVisualCenterX - dateWidth * 0.5f + 4.f;
         drawReadableText(ren, clock.date,
-                         {dateX, 124.f + lift * 0.04f},
+                         {48.f, 124.f + lift * 0.04f},
                          m_fontMedium,
                          nxui::Color(0.95f, 0.97f, 1.f, 0.97f),
                          dateScale, contentAlpha, 0.45f);
@@ -1190,99 +1265,138 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                      greetingScale, contentAlpha, m_animationTime);
 
     if (m_hasGame) {
-        // V6.3: the top of the ring is completely free. The whole central
-        // composition is larger and the status is moved below it.
-        m_progress.setRect({394.f, 145.f + lift * 0.10f, 512.f, 438.f});
+        // V7.1 true 3D card. The cover and frame are rotated on X/Y/Z,
+        // perspective-projected, and the frame has genuinely extruded sides.
+        const float floatY = std::sin(m_animationTime * (2.f * kPi / 3.85f)) * 5.2f;
+        const float floatX = std::sin(m_animationTime * (2.f * kPi / 6.20f) + 0.8f) * 1.8f;
+        const float pressKick = smoothStep(m_pressFlash);
+        const float pressDirection = (m_pressCount % 2 == 0) ? -1.f : 1.f;
+        const float launchEase = easeOutCubic(m_unlockProgress);
+        const float degrees = kPi / 180.f;
+
+        const float idlePitch =
+            (-1.15f + std::sin(m_animationTime * (2.f * kPi / 4.70f) + 0.15f) * 2.35f) * degrees;
+        const float idleYaw =
+            std::sin(m_animationTime * (2.f * kPi / 5.55f) + 0.72f) * 4.25f * degrees;
+        const float idleRoll =
+            std::sin(m_animationTime * (2.f * kPi / 5.05f) + 0.35f) * 1.60f * degrees;
+
+        const float cardScale =
+            (1.f - 0.015f * pressKick) * (1.f + 0.068f * launchEase);
+        const nxui::Color stageColor = cardStageColor(m_visualPressProgress);
+
+        nxui::True3DCardStyle cardStyle;
+        cardStyle.center = {
+            650.f + floatX,
+            310.f + floatY + lift * 0.10f
+        };
+        cardStyle.width = 304.f * cardScale;
+        cardStyle.height = 304.f * cardScale;
+        cardStyle.depth = 18.f * cardScale;
+        cardStyle.cornerRadius = 40.f * cardScale;
+        cardStyle.frameInset = 17.f * cardScale;
+        cardStyle.pitch = idlePitch - 0.75f * pressKick * degrees;
+        cardStyle.yaw = idleYaw +
+            pressDirection * 1.45f * pressKick * degrees;
+        cardStyle.roll = idleRoll +
+            pressDirection * 0.62f * pressKick * degrees;
+        cardStyle.focalLength = 910.f;
+        cardStyle.textureGrid = 12;
+        cardStyle.opacity = contentAlpha;
+        cardStyle.stageColor = stageColor;
+
+        const nxui::True3DCardGeometry cardGeometry =
+            nxui::True3DCard::calculateGeometry(cardStyle);
+
+        // Reuse the validated blur pipeline, but make its source follow the
+        // projected 3D silhouette exactly. The glow remains behind the card.
+        m_progress.setProjectedOutline(
+            cardGeometry.frontOutline.data(), cardGeometry.outlineCount);
+        m_progress.setRect(cardGeometry.bounds.expanded(20.f));
         m_progress.setOpacity(contentAlpha);
         m_progress.render(ren);
-
-        const nxui::Rect cover = {545.f, 265.f + lift * 0.10f, 210.f, 210.f};
-        ren.drawRoundedRect(cover.expanded(18.f),
-                            nxui::Color(0.08f, 0.30f, 0.86f,
-                                        (0.075f + 0.065f * breathe) * contentAlpha),
-                            39.f);
-        ren.drawRoundedRect(cover.expanded(8.f),
-                            nxui::Color(0.54f, 0.20f, 1.00f,
-                                        (0.035f + 0.035f * slowPulse) * contentAlpha),
-                            34.f);
-        ren.drawRoundedRect(cover,
-                            nxui::Color(0.018f, 0.022f, 0.070f,
-                                        0.96f * contentAlpha), 30.f);
 
         const nxui::Texture* gameTexture =
             (m_ownedGameTexture.valid() &&
              m_ownedGameTextureTitleId == m_gameTitleId)
                 ? &m_ownedGameTexture
                 : nullptr;
-        const float gameTextureAlpha = contentAlpha *
-            std::clamp(1.f - m_unlockProgress * 4.5f, 0.f, 1.f);
-        if (gameTexture && gameTexture->valid() && gameTextureAlpha > 0.001f) {
-            ren.drawTextureRounded(gameTexture, cover.shrunk(6.f), 25.f,
-                                   nxui::Color::white().withAlpha(gameTextureAlpha));
-        } else {
-            ren.drawGradientRect(cover.shrunk(7.f),
-                                 nxui::Color(0.16f, 0.28f, 0.62f, 0.76f * contentAlpha),
-                                 nxui::Color(0.26f, 0.08f, 0.46f, 0.78f * contentAlpha));
-        }
-        ren.drawRoundedRectOutline(cover,
-                                   nxui::Color(0.74f, 0.88f, 1.f,
-                                               0.66f * contentAlpha),
-                                   30.f, 1.9f);
 
-        // The cover and ring already communicate that the application is
-        // suspended. V6.5 removes the redundant status label and lets the
-        // game title occupy the clean central gap below the cover.
+        // Keep the third fuchsia state visible through most of the safe resume
+        // transition, without changing the validated handoff timing.
+        const float unlockFade = 1.f - smoothStep(
+            clamp01((m_unlockProgress - 0.56f) / 0.20f));
+        nxui::True3DCard::draw(
+            ren, gameTexture, cardStyle,
+            nxui::Color::white().withAlpha(unlockFade));
+
         if (m_fontMedium && !m_gameTitle.empty()) {
             constexpr float titleScale = 0.84f;
-            const std::string shownTitle = truncateUtf8ToWidth(
-                m_gameTitle, m_fontMedium, titleScale, 480.f);
-            const nxui::Vec2 titleSize = m_fontMedium->measure(shownTitle);
-            drawReadableText(ren, shownTitle,
-                             {650.f - titleSize.x * titleScale * 0.5f,
-                              550.f + lift * 0.14f},
-                             m_fontMedium,
-                             nxui::Color(0.985f, 0.992f, 1.f, 0.99f),
-                             titleScale, contentAlpha, 0.52f);
+            const nxui::Rect titleClip = {
+                390.f, 500.f + lift * 0.14f, 520.f, 42.f
+            };
+            drawAutoScrollText(
+                ren, m_gameTitle, titleClip, m_fontMedium,
+                nxui::Color(0.985f, 0.992f, 1.f, 0.99f),
+                titleScale, contentAlpha, m_animationTime, 0.f, true, 0.52f);
         }
     }
 
-    // Compact profile identity: no dedicated card, only avatar + name.
-    const nxui::Rect avatarRect = {1054.f, 86.f + lift * 0.04f, 58.f, 58.f};
+    // Larger compact identity card in the lower-left corner, away from the
+    // clock and battery. It balances the right-side system widgets.
+    const nxui::Rect profileRect = {38.f, 594.f + lift * 0.03f, 292.f, 92.f};
+    m_profilePanel.setRect(profileRect);
+    m_profilePanel.setOpacity(contentAlpha);
+    m_profilePanel.render(ren);
+
+    const nxui::Rect avatarRect = {
+        profileRect.x + 16.f, profileRect.y + 14.f, 64.f, 64.f
+    };
     if (m_profileAvatarTexture.valid()) {
-        ren.drawTextureRounded(&m_profileAvatarTexture, avatarRect, 29.f,
+        ren.drawTextureRounded(&m_profileAvatarTexture, avatarRect, 32.f,
                                nxui::Color::white().withAlpha(contentAlpha));
     } else {
-        ren.drawCircle({avatarRect.x + 29.f, avatarRect.y + 29.f}, 29.f,
+        ren.drawCircle({avatarRect.x + 32.f, avatarRect.y + 32.f}, 32.f,
                        animatedLockGradient(0.16f,
                            std::fmod(m_animationTime / 3.6f, 1.f))
-                           .withAlpha(0.88f * contentAlpha), 34);
+                           .withAlpha(0.88f * contentAlpha), 36);
         if (m_fontSmall && !m_profileName.empty()) {
-            const std::string initial = splitUtf8(m_profileName).front();
+            const auto glyphs = splitUtf8(m_profileName);
+            const std::string initial = glyphs.empty() ? "?" : glyphs.front();
             const nxui::Vec2 size = m_fontSmall->measure(initial);
             drawReadableText(ren, initial,
-                             {avatarRect.x + (avatarRect.width - size.x * 1.10f) * 0.5f,
-                              avatarRect.y + 12.f},
+                             {avatarRect.x + (avatarRect.width - size.x * 1.18f) * 0.5f,
+                              avatarRect.y + 13.f},
                              m_fontSmall,
                              nxui::Color(1.f, 1.f, 1.f, 1.f),
-                             1.10f, contentAlpha, 0.30f);
+                             1.18f, contentAlpha, 0.30f);
         }
     }
-    ren.drawCircle({avatarRect.x + 29.f, avatarRect.y + 29.f}, 32.f,
-                   nxui::Color(0.60f, 0.74f, 1.f, 0.08f * contentAlpha), 34);
+    ren.drawCircle({avatarRect.x + 32.f, avatarRect.y + 32.f}, 35.f,
+                   nxui::Color(0.60f, 0.74f, 1.f,
+                               0.075f * contentAlpha), 36);
+
+    if (m_fontSmall) {
+        drawReadableText(ren, "PROFIL ACTUEL",
+                         {profileRect.x + 98.f, profileRect.y + 15.f},
+                         m_fontSmall,
+                         nxui::Color(0.46f, 0.78f, 1.f, 0.94f),
+                         0.84f, contentAlpha, 0.24f);
+    }
     if (m_fontMedium) {
-        const std::string shownName = truncateUtf8ToWidth(
-            m_profileName, m_fontMedium, 0.84f, 132.f
-        );
-        drawReadableText(ren, shownName,
-                         {1128.f, 100.f + lift * 0.04f},
-                         m_fontMedium,
-                         nxui::Color(0.99f, 0.995f, 1.f, 0.98f),
-                         0.84f, contentAlpha, 0.34f);
+        const nxui::Rect nameClip = {
+            profileRect.x + 98.f, profileRect.y + 42.f,
+            profileRect.width - 116.f, 34.f
+        };
+        drawAutoScrollText(
+            ren, m_profileName, nameClip, m_fontMedium,
+            nxui::Color(0.99f, 0.995f, 1.f, 0.98f),
+            0.88f, contentAlpha, m_animationTime, 0.55f, false, 0.34f);
     }
 
     // One larger contextual card. Real blur is enabled on the GlassPanel;
     // the old opaque backing is removed so the personalised background remains visible.
-    const nxui::Rect connectionRect = {930.f, 214.f + lift * 0.06f, 324.f, 244.f};
+    const nxui::Rect connectionRect = {930.f, 178.f + lift * 0.06f, 324.f, 244.f};
     m_connectionPanel.setRect(connectionRect);
     m_connectionPanel.setOpacity(contentAlpha);
     m_connectionPanel.render(ren);
@@ -1304,31 +1418,84 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                          m_fontSmall,
                          nxui::Color(0.46f, 0.78f, 1.f, 0.94f),
                          0.88f, contentAlpha, 0.25f);
-        const std::string shownAudio = truncateUtf8ToWidth(
-            m_audioStatus, m_fontNormal, 0.86f, connectionRect.width - 56.f);
-        drawReadableText(ren, shownAudio,
-                         {connectionRect.x + 28.f, connectionRect.y + 113.f},
-                         m_fontNormal,
-                         nxui::Color(0.99f, 0.995f, 1.f, 0.99f),
-                         0.86f, contentAlpha, 0.30f);
+        drawAutoScrollText(
+            ren, m_audioStatus,
+            {connectionRect.x + 28.f, connectionRect.y + 113.f,
+             connectionRect.width - 56.f, 34.f},
+            m_fontNormal,
+            nxui::Color(0.99f, 0.995f, 1.f, 0.99f),
+            0.86f, contentAlpha, m_animationTime, 0.85f, false, 0.30f);
 
         drawReadableText(ren, "MANETTE",
                          {connectionRect.x + 28.f, connectionRect.y + 157.f},
                          m_fontSmall,
                          nxui::Color(0.46f, 0.78f, 1.f, 0.94f),
                          0.88f, contentAlpha, 0.25f);
-        const std::string shownController = truncateUtf8ToWidth(
-            m_controllerStatus, m_fontNormal, 0.86f, connectionRect.width - 56.f);
-        drawReadableText(ren, shownController,
-                         {connectionRect.x + 28.f, connectionRect.y + 186.f},
-                         m_fontNormal,
-                         nxui::Color(0.99f, 0.995f, 1.f, 0.99f),
-                         0.86f, contentAlpha, 0.30f);
+        drawAutoScrollText(
+            ren, m_controllerStatus,
+            {connectionRect.x + 28.f, connectionRect.y + 186.f,
+             connectionRect.width - 56.f, 34.f},
+            m_fontNormal,
+            nxui::Color(0.99f, 0.995f, 1.f, 0.99f),
+            0.86f, contentAlpha, m_animationTime, 1.25f, false, 0.30f);
     }
 
 
+    // microSD storage card. The native NS service gives total and available
+    // capacity without scanning the card contents.
+    const nxui::Rect storageRect = {930.f, 442.f + lift * 0.06f, 324.f, 120.f};
+    m_storagePanel.setRect(storageRect);
+    m_storagePanel.setOpacity(contentAlpha);
+    m_storagePanel.render(ren);
+
+    if (m_fontSmall) {
+        drawReadableText(ren, "CARTE MICROSD",
+                         {storageRect.x + 24.f, storageRect.y + 16.f},
+                         m_fontSmall,
+                         nxui::Color(0.94f, 0.96f, 1.f, 0.97f),
+                         0.94f, contentAlpha, 0.32f);
+    }
+
+    std::string storageText = "Carte microSD indisponible";
+    float usedRatio = 0.f;
+    if (m_storageAvailable && m_sdTotalBytes > 0) {
+        const std::uint64_t safeFree = std::min(m_sdFreeBytes, m_sdTotalBytes);
+        storageText = formatStorageAmount(safeFree) +
+                      " libres sur " + formatStorageAmount(m_sdTotalBytes);
+        usedRatio = clamp01(static_cast<float>(m_sdTotalBytes - safeFree) /
+                            static_cast<float>(m_sdTotalBytes));
+    }
+
+    if (m_fontNormal) {
+        drawAutoScrollText(
+            ren, storageText,
+            {storageRect.x + 24.f, storageRect.y + 49.f,
+             storageRect.width - 48.f, 31.f},
+            m_fontNormal,
+            nxui::Color(0.99f, 0.995f, 1.f, 0.98f),
+            0.78f, contentAlpha, m_animationTime, 1.65f, false, 0.26f);
+    }
+
+    const nxui::Rect storageTrack = {
+        storageRect.x + 24.f, storageRect.y + 88.f,
+        storageRect.width - 48.f, 8.f
+    };
+    ren.drawRoundedRect(storageTrack,
+                        nxui::Color(0.16f, 0.20f, 0.34f,
+                                    0.62f * contentAlpha), 4.f);
+    if (usedRatio > 0.001f) {
+        const nxui::Rect storageFill = {
+            storageTrack.x, storageTrack.y,
+            std::max(8.f, storageTrack.width * usedRatio), storageTrack.height
+        };
+        ren.drawRoundedRect(storageFill,
+                            nxui::Color(0.08f, 0.58f, 1.00f,
+                                        0.90f * contentAlpha), 4.f);
+    }
+
     if (m_hasGame) {
-        // With a suspended game, the large ring is the progress indicator.
+        // With a suspended game, the floating glass edge carries the progress
+        // colour while this line keeps the three-press instruction explicit.
         if (m_fontMedium && m_fontIcons) {
             const std::string instruction = "Appuie trois fois sur";
             const std::string aGlyph = utf8Codepoint(0xE0E0);
@@ -1341,7 +1508,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
             const float totalW = textSize.x * textScale + gap +
                                  glyphSize.x * 1.24f;
             const float startX = 650.f - totalW * 0.5f;
-            const float y = 646.f + lift;
+            const float y = 592.f + lift;
 
             drawReadableText(ren, instruction, {startX, y}, m_fontMedium,
                              nxui::Color(0.98f, 0.99f, 1.f, 0.98f),
@@ -1351,29 +1518,24 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                 glyphX + glyphSize.x * 1.24f * 0.5f,
                 y + glyphSize.y * 1.24f * 0.47f
             };
-            const float colorT = m_pressCount > 0
-                ? static_cast<float>(m_pressCount - 1) / 2.f
-                : 0.f;
-            const nxui::Color pressColor = lockGradient(colorT);
-
+            // Small white glow: immediate feedback without adding another
+            // multicolour focal point below the game title.
             ren.drawCircle(glyphCenter,
-                           28.f + 10.f * pressKick + 2.f * breathe,
-                           pressColor.withAlpha(
-                               (0.055f + 0.17f * pressKick +
-                                0.025f * breathe) * contentAlpha), 36);
+                           21.f + 5.f * pressKick + 1.2f * breathe,
+                           nxui::Color(1.f, 1.f, 1.f,
+                               (0.045f + 0.11f * pressKick +
+                                0.018f * breathe) * contentAlpha), 32);
             ren.drawCircle(glyphCenter,
-                           22.f + 3.f * pressKick,
-                           nxui::Color(0.70f, 0.86f, 1.f,
-                               (0.045f + 0.10f * pressKick) * contentAlpha), 32);
+                           16.f + 2.f * pressKick,
+                           nxui::Color(0.92f, 0.97f, 1.f,
+                               (0.025f + 0.055f * pressKick) * contentAlpha), 28);
             const float adjustedGlyphX =
                 glyphCenter.x - glyphSize.x * glyphScale * 0.5f;
             const float adjustedGlyphY =
                 glyphCenter.y - glyphSize.y * glyphScale * 0.47f;
             ren.drawText(aGlyph, {adjustedGlyphX, adjustedGlyphY - 3.f},
                          m_fontIcons,
-                         mixColor(nxui::Color(0.99f, 1.f, 1.f, 1.f),
-                                  pressColor, 0.30f * pressKick)
-                             .withAlpha(contentAlpha),
+                         nxui::Color(0.995f, 1.f, 1.f, contentAlpha),
                          glyphScale);
         }
     } else {

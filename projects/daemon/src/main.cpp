@@ -238,6 +238,12 @@ struct Action {
 static std::vector<Action> g_actionQueue;
 static bool g_foregroundAppletActive = false;
 static bool g_pendingForegroundAppletHome = false;
+// V7.4: le daemon survit a la veille. Il maintient la derniere surface
+// reellement visible (HOME ou GAME), puis en prend un snapshot au moment
+// de la veille. On ne depend donc pas d'un foreground qui peut deja avoir
+// change pendant la sequence Horizon de mise en veille.
+static smi::LockReturnTarget g_currentSurface = smi::LockReturnTarget::Home;
+static smi::LockReturnTarget g_lockReturnTarget = smi::LockReturnTarget::Home;
 static uint8_t g_lastBatteryPercent = 0xFF;
 static PsmChargerType g_lastChargerType = (PsmChargerType)0xFF;
 static int g_batteryPollCountdown = 0;
@@ -460,6 +466,7 @@ static smi::SystemStatus buildSystemStatus() {
     smi::SystemStatus st{};
     st.suspended_app_id = daemon::app::suspendedTitleId();
     st.app_running = daemon::app::isRunning();
+    st.lock_return_target = g_lockReturnTarget;
     return st;
 }
 
@@ -561,6 +568,24 @@ static bool takeForegroundFromRunningApp(const char* source) {
 }
 
 static void startPowerSequence(const char* source, smi::SystemMessage action) {
+    // Capturer l'emplacement AVANT toute prise de foreground.
+    if (action == smi::SystemMessage::EnterSleep) {
+        g_lockReturnTarget = g_currentSurface;
+        // Securite : GAME n'est valide que si une application existe encore.
+        if (g_lockReturnTarget == smi::LockReturnTarget::Game &&
+            (!daemon::app::isRunning() || daemon::app::suspendedTitleId() == 0)) {
+            g_lockReturnTarget = smi::LockReturnTarget::Home;
+        }
+        switchu::FileLog::log(
+            "[sleep-route] captured target=%s current=%s running=%d appFg=%d menuActive=%d suspended=0x%016lX",
+            g_lockReturnTarget == smi::LockReturnTarget::Game ? "GAME" : "HOME",
+            g_currentSurface == smi::LockReturnTarget::Game ? "GAME" : "HOME",
+            daemon::app::isRunning() ? 1 : 0,
+            daemon::app::hasForeground() ? 1 : 0,
+            daemon::menu_la::isActive() ? 1 : 0,
+            daemon::app::suspendedTitleId());
+    }
+
     cancelViewPolling(source);
     takeForegroundFromRunningApp(source);
 
@@ -588,6 +613,8 @@ static void openMenuFromHome(const char* source) {
             switchu::FileLog::log("[%s] HOME aborted: foreground request failed", source);
             return;
         }
+        g_currentSurface = smi::LockReturnTarget::Home;
+        switchu::FileLog::log("[sleep-route] current surface -> HOME (HOME request)");
         const auto status = buildSystemStatus();
         switchu::FileLog::log("[%s] HOME launching MainMenu status.running=%d suspended=0x%016lX",
                               source, status.app_running ? 1 : 0, status.suspended_app_id);
@@ -600,12 +627,14 @@ static void openMenuFromHome(const char* source) {
     }
 
     if (daemon::menu_la::isActive()) {
+        g_currentSurface = smi::LockReturnTarget::Home;
         switchu::FileLog::log("[%s] HOME forwarding HomeRequest to active menu", source);
         pushNotification(smi::MenuMessage::HomeRequest);
     } else if (g_foregroundAppletActive) {
         switchu::FileLog::log("[%s] HOME requested while foreground applet active", source);
         g_pendingForegroundAppletHome = true;
     } else {
+        g_currentSurface = smi::LockReturnTarget::Home;
         switchu::FileLog::log("[%s] HOME no app/menu active; launching MainMenu", source);
         Result menuRc = daemon::menu_la::launch(smi::MenuStartMode::MainMenu, buildSystemStatus());
         switchu::FileLog::log("[%s] HOME MainMenu launch rc=0x%X", source, menuRc);
@@ -734,7 +763,7 @@ static void handleAppletMessages() {
         case 29:
         case 32:
         switchu::FileLog::log("[ae] -> Sleep (msg=%u)", msg);
-        appletStartSleepSequence(true);
+        startPowerSequence("ae-sleep", smi::SystemMessage::EnterSleep);
         break;
 
         case 26: {
@@ -756,14 +785,24 @@ static void handleAppletMessages() {
             }
 
             if (daemon::menu_la::isActive()) {
-                switchu::FileLog::log("[ae] wake: active menu -> WakeUp notification");
-                pushNotification(smi::MenuMessage::WakeUp);
+                switchu::FileLog::log("[ae] wake: active menu -> WakeUp notification target=%s",
+                                      g_lockReturnTarget == smi::LockReturnTarget::Game
+                                          ? "GAME"
+                                          : "HOME");
+                pushNotification(
+                    smi::MenuMessage::WakeUp,
+                    0,
+                    static_cast<uint32_t>(g_lockReturnTarget)
+                );
             } else {
                 const auto status = buildSystemStatus();
                 switchu::FileLog::log(
-                    "[ae] wake: launching StartupBoot lockscreen running=%d suspended=0x%016lX",
+                    "[ae] wake: launching StartupBoot lockscreen running=%d suspended=0x%016lX target=%s",
                     status.app_running ? 1 : 0,
-                    status.suspended_app_id);
+                    status.suspended_app_id,
+                    status.lock_return_target == smi::LockReturnTarget::Game
+                        ? "GAME"
+                        : "HOME");
                 const Result menuRc = daemon::menu_la::launch(
                     smi::MenuStartMode::StartupBoot,
                     status);
@@ -917,6 +956,7 @@ static void handleMenuCommand() {
     case smi::SystemMessage::TerminateApplication:
         result = daemon::app::terminate();
         if (R_SUCCEEDED(result)) {
+            g_currentSurface = smi::LockReturnTarget::Home;
             pushNotification(smi::MenuMessage::ApplicationExited);
         }
         break;
@@ -1030,15 +1070,23 @@ static bool handleAction(Action& action) {
     switch (action.type) {
         case ActionType::LaunchApplication: {
             Result rc = daemon::app::launch(action.title_id, action.uid);
-            if (R_FAILED(rc))
+            if (R_FAILED(rc)) {
                 switchu::FileLog::log("[action] launch 0x%016lX FAIL: 0x%X", action.title_id, rc);
+            } else {
+                g_currentSurface = smi::LockReturnTarget::Game;
+                switchu::FileLog::log("[sleep-route] current surface -> GAME (launch)");
+            }
             return true;
         }
 
         case ActionType::ResumeApplication: {
             Result rc = daemon::app::resume();
-            if (R_FAILED(rc))
+            if (R_FAILED(rc)) {
                 switchu::FileLog::log("[action] resume FAIL: 0x%X", rc);
+            } else {
+                g_currentSurface = smi::LockReturnTarget::Game;
+                switchu::FileLog::log("[sleep-route] current surface -> GAME (resume)");
+            }
             return true;
         }
 
@@ -1211,6 +1259,7 @@ static void mainLoop() {
 
     if (daemon::app::checkFinished()) {
         switchu::FileLog::log("[main] app exited");
+        g_currentSurface = smi::LockReturnTarget::Home;
         if (daemon::menu_la::isActive()) {
             pushNotification(smi::MenuMessage::ApplicationExited);
         } else {
@@ -1223,6 +1272,7 @@ static void mainLoop() {
         !daemon::app::isRunning() && !daemon::menu_la::hasHolder() &&
         !g_foregroundAppletActive) {
         switchu::FileLog::log("[main] no app/menu active; relaunching menu");
+        g_currentSurface = smi::LockReturnTarget::Home;
         daemon::menu_la::launch(smi::MenuStartMode::MainMenu, buildSystemStatus());
     }
 }
