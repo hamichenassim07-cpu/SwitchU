@@ -220,8 +220,15 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
         const float compositeAlpha = std::clamp(
             0.56f + 0.10f * breathe + 0.22f * strongestFlash,
             0.f, 0.92f);
+        // The blur target is 640x360. On hardware, composing it into a
+        // 1280x720 destination caused the source to be interpreted once more
+        // at half scale, producing a smaller copy shifted toward the top-left.
+        // A 2x destination compensates that sampling path; the screen viewport
+        // clips the excess and puts the glow exactly behind the sharp ring.
         ren.drawOffscreen(0,
-                          {0.f, 0.f, (float)ren.width(), (float)ren.height()},
+                          {0.f, 0.f,
+                           (float)ren.width() * 2.f,
+                           (float)ren.height() * 2.f},
                           nxui::Color::white().withAlpha(compositeAlpha * alpha));
         usedRealBlur = true;
     }

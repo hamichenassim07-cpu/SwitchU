@@ -366,6 +366,72 @@ void drawReadableText(nxui::Renderer& ren,
     }
 }
 
+
+void drawAutoScrollText(nxui::Renderer& ren,
+                        const std::string& text,
+                        const nxui::Rect& clip,
+                        nxui::Font* font,
+                        const nxui::Color& color,
+                        float scale,
+                        float alpha,
+                        float animationTime,
+                        float phase = 0.f,
+                        bool centerWhenFits = false,
+                        float weight = 0.f) {
+    if (!font || text.empty() || clip.width <= 1.f || clip.height <= 1.f)
+        return;
+
+    const float textWidth = font->measure(text).x * scale;
+    float x = clip.x;
+    if (textWidth <= clip.width) {
+        if (centerWhenFits)
+            x = clip.x + (clip.width - textWidth) * 0.5f;
+        drawReadableText(ren, text, {x, clip.y}, font, color,
+                         scale, alpha, weight);
+        return;
+    }
+
+    // Calm marquee: pause at the beginning, scroll to the end, pause,
+    // then return quickly. It is only enabled when the text really overflows.
+    const float overflow = textWidth - clip.width;
+    const float startPause = 1.65f;
+    const float travelDuration = std::max(1.20f, overflow / 42.f);
+    const float endPause = 0.90f;
+    const float returnDuration = 0.48f;
+    const float cycle = startPause + travelDuration + endPause + returnDuration;
+    float t = std::fmod(std::max(0.f, animationTime + phase), cycle);
+    float offset = 0.f;
+
+    if (t < startPause) {
+        offset = 0.f;
+    } else if (t < startPause + travelDuration) {
+        const float u = (t - startPause) / travelDuration;
+        offset = overflow * smoothStep(u);
+    } else if (t < startPause + travelDuration + endPause) {
+        offset = overflow;
+    } else {
+        const float u = (t - startPause - travelDuration - endPause) /
+                        returnDuration;
+        offset = overflow * (1.f - smoothStep(u));
+    }
+
+    ren.pushClipRect(clip);
+    drawReadableText(ren, text, {clip.x - offset, clip.y}, font, color,
+                     scale, alpha, weight);
+    ren.popClipRect();
+}
+
+std::string formatStorageAmount(std::uint64_t bytes) {
+    constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+    const double value = static_cast<double>(bytes) / kGiB;
+    char buffer[48] = {};
+    if (value < 100.0)
+        std::snprintf(buffer, sizeof(buffer), "%.1f Go", value);
+    else
+        std::snprintf(buffer, sizeof(buffer), "%.0f Go", value);
+    return buffer;
+}
+
 void drawGradientText(nxui::Renderer& ren,
                       const std::string& text,
                       nxui::Font* font,
@@ -650,14 +716,19 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
 } // namespace
 
 LockScreenView::LockScreenView() {
-    DebugLog::log("[lockscreen] Switch U V6.5 view created");
+    DebugLog::log("[lockscreen] Switch U V6.6 view created");
     setRect({0.f, 0.f, 1280.f, 720.f});
 
-    // The profile is no longer a full card in V6.5, but the member is kept
-    // for source compatibility with older layouts.
-    m_profilePanel.setForceLiquidGlass(true);
+    // Compact blurred identity card in the lower-left corner.
+    m_profilePanel.setForceLiquidGlass(false);
+    m_profilePanel.setLiquidGlassEnabled(false);
     m_profilePanel.setBlurEnabled(true);
+    m_profilePanel.setBlurRadius(1.45f);
+    m_profilePanel.setBlurPasses(1);
     m_profilePanel.setBackingEnabled(false);
+    m_profilePanel.setPanelOpacity(0.88f);
+    m_profilePanel.setMaterialTextureEnabled(true);
+    m_profilePanel.setMaterialTextureIntensity(0.08f);
 
     m_connectionPanel.setForceLiquidGlass(false);
     m_connectionPanel.setLiquidGlassEnabled(false);
@@ -668,6 +739,16 @@ LockScreenView::LockScreenView() {
     m_connectionPanel.setPanelOpacity(0.94f);
     m_connectionPanel.setMaterialTextureEnabled(true);
     m_connectionPanel.setMaterialTextureIntensity(0.10f);
+
+    m_storagePanel.setForceLiquidGlass(false);
+    m_storagePanel.setLiquidGlassEnabled(false);
+    m_storagePanel.setBlurEnabled(true);
+    m_storagePanel.setBlurRadius(1.55f);
+    m_storagePanel.setBlurPasses(1);
+    m_storagePanel.setBackingEnabled(false);
+    m_storagePanel.setPanelOpacity(0.90f);
+    m_storagePanel.setMaterialTextureEnabled(true);
+    m_storagePanel.setMaterialTextureIntensity(0.08f);
 }
 
 void LockScreenView::setFonts(nxui::Font* normal,
@@ -862,6 +943,12 @@ void LockScreenView::applyThemeToWidgets() {
     m_connectionPanel.setHighlightColor(highlight);
     m_connectionPanel.setBorderWidth(1.20f);
     m_connectionPanel.setCornerRadius(28.f);
+
+    m_storagePanel.setBaseColor(base);
+    m_storagePanel.setBorderColor(border);
+    m_storagePanel.setHighlightColor(highlight);
+    m_storagePanel.setBorderWidth(1.15f);
+    m_storagePanel.setCornerRadius(24.f);
 }
 
 void LockScreenView::resetBackgroundAsset() {
@@ -1005,9 +1092,41 @@ void LockScreenView::ensureDynamicAssets(nxui::Renderer& ren) {
     }
 }
 
+void LockScreenView::updateStorageStatus() {
+    s64 total = 0;
+    s64 freeSpace = 0;
+    const Result rc = nsGetStorageSize(NcmStorageId_SdCard,
+                                       &total, &freeSpace);
+    if (R_FAILED(rc) || total <= 0 || freeSpace < 0) {
+        m_storageAvailable = false;
+        m_sdTotalBytes = 0;
+        m_sdFreeBytes = 0;
+        return;
+    }
+
+    m_storageAvailable = true;
+    m_sdTotalBytes = static_cast<std::uint64_t>(total);
+    m_sdFreeBytes = static_cast<std::uint64_t>(freeSpace);
+}
+
 void LockScreenView::onUpdate(float dt) {
     m_animationTime += dt;
     m_progress.update(dt);
+
+    // Softer, rapid press feedback. The target follows the existing press
+    // pulse, while exponential smoothing removes the abrupt cut on both ends.
+    const float pressShadeTarget = smoothStep(m_pressFlash);
+    const float shadeSpeed = pressShadeTarget > m_pressShade ? 19.f : 13.f;
+    const float shadeBlend = 1.f - std::exp(-shadeSpeed * std::max(0.f, dt));
+    m_pressShade += (pressShadeTarget - m_pressShade) * shadeBlend;
+    m_pressShade = clamp01(m_pressShade);
+
+    m_storagePollTimer -= dt;
+    if (m_storagePollTimer <= 0.f) {
+        m_storagePollTimer = 5.f;
+        updateStorageStatus();
+    }
+
     m_connectionPollTimer -= dt;
     if (m_connectionPollTimer <= 0.f) {
         m_connectionPollTimer = 1.f;
@@ -1125,6 +1244,14 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     // suspended game, where it becomes the main decorative background.
     drawFloatingShapes(ren, m_animationTime, contentAlpha, !m_hasGame);
 
+    // Less intense than the old cut, with a quick fade-in/fade-out driven by
+    // m_pressShade. It darkens the scene without swallowing the interface.
+    if (m_pressShade > 0.001f) {
+        ren.drawRect(screen,
+                     nxui::Color(0.001f, 0.003f, 0.012f,
+                                 0.105f * m_pressShade * contentAlpha));
+    }
+
     // The full central composition moves upward, while the cover itself is
     // placed a few pixels below the exact ring centre as requested.
     const nxui::Vec2 center = {650.f, 396.f + lift * 0.10f};
@@ -1132,7 +1259,6 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     // colon instantly disappears and reappears every second.
     ClockStrings clock;
     buildClockStrings(m_use12Hour, clock);
-    float clockVisualCenterX = 150.f;
     if (m_fontLarge) {
         const float scale = 1.22f;
         const float x = 44.f;
@@ -1151,7 +1277,6 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         drawReadableText(ren, clock.minute, {minuteX, y}, m_fontLarge,
                          white, scale, contentAlpha, 0.65f);
         const float minuteW = m_fontLarge->measure(clock.minute).x * scale;
-        clockVisualCenterX = x + (hourW + colonW + 2.f + minuteW) * 0.5f;
 
         if (!clock.suffix.empty() && m_fontMedium) {
             drawReadableText(ren, clock.suffix,
@@ -1163,10 +1288,8 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     }
     if (m_fontMedium) {
         const float dateScale = 0.82f;
-        const float dateWidth = m_fontMedium->measure(clock.date).x * dateScale;
-        const float dateX = clockVisualCenterX - dateWidth * 0.5f + 4.f;
         drawReadableText(ren, clock.date,
-                         {dateX, 124.f + lift * 0.04f},
+                         {48.f, 124.f + lift * 0.04f},
                          m_fontMedium,
                          nxui::Color(0.95f, 0.97f, 1.f, 0.97f),
                          dateScale, contentAlpha, 0.45f);
@@ -1192,11 +1315,11 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     if (m_hasGame) {
         // V6.3: the top of the ring is completely free. The whole central
         // composition is larger and the status is moved below it.
-        m_progress.setRect({394.f, 145.f + lift * 0.10f, 512.f, 438.f});
+        m_progress.setRect({394.f, 133.f + lift * 0.10f, 512.f, 438.f});
         m_progress.setOpacity(contentAlpha);
         m_progress.render(ren);
 
-        const nxui::Rect cover = {545.f, 265.f + lift * 0.10f, 210.f, 210.f};
+        const nxui::Rect cover = {545.f, 253.f + lift * 0.10f, 210.f, 210.f};
         ren.drawRoundedRect(cover.expanded(18.f),
                             nxui::Color(0.08f, 0.30f, 0.86f,
                                         (0.075f + 0.065f * breathe) * contentAlpha),
@@ -1234,50 +1357,66 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         // game title occupy the clean central gap below the cover.
         if (m_fontMedium && !m_gameTitle.empty()) {
             constexpr float titleScale = 0.84f;
-            const std::string shownTitle = truncateUtf8ToWidth(
-                m_gameTitle, m_fontMedium, titleScale, 480.f);
-            const nxui::Vec2 titleSize = m_fontMedium->measure(shownTitle);
-            drawReadableText(ren, shownTitle,
-                             {650.f - titleSize.x * titleScale * 0.5f,
-                              550.f + lift * 0.14f},
-                             m_fontMedium,
-                             nxui::Color(0.985f, 0.992f, 1.f, 0.99f),
-                             titleScale, contentAlpha, 0.52f);
+            const nxui::Rect titleClip = {
+                410.f, 520.f + lift * 0.14f, 480.f, 42.f
+            };
+            drawAutoScrollText(
+                ren, m_gameTitle, titleClip, m_fontMedium,
+                nxui::Color(0.985f, 0.992f, 1.f, 0.99f),
+                titleScale, contentAlpha, m_animationTime, 0.f, true, 0.52f);
         }
     }
 
-    // Compact profile identity: no dedicated card, only avatar + name.
-    const nxui::Rect avatarRect = {1054.f, 86.f + lift * 0.04f, 58.f, 58.f};
+    // Larger compact identity card in the lower-left corner, away from the
+    // clock and battery. It balances the right-side system widgets.
+    const nxui::Rect profileRect = {38.f, 594.f + lift * 0.03f, 292.f, 92.f};
+    m_profilePanel.setRect(profileRect);
+    m_profilePanel.setOpacity(contentAlpha);
+    m_profilePanel.render(ren);
+
+    const nxui::Rect avatarRect = {
+        profileRect.x + 16.f, profileRect.y + 14.f, 64.f, 64.f
+    };
     if (m_profileAvatarTexture.valid()) {
-        ren.drawTextureRounded(&m_profileAvatarTexture, avatarRect, 29.f,
+        ren.drawTextureRounded(&m_profileAvatarTexture, avatarRect, 32.f,
                                nxui::Color::white().withAlpha(contentAlpha));
     } else {
-        ren.drawCircle({avatarRect.x + 29.f, avatarRect.y + 29.f}, 29.f,
+        ren.drawCircle({avatarRect.x + 32.f, avatarRect.y + 32.f}, 32.f,
                        animatedLockGradient(0.16f,
                            std::fmod(m_animationTime / 3.6f, 1.f))
-                           .withAlpha(0.88f * contentAlpha), 34);
+                           .withAlpha(0.88f * contentAlpha), 36);
         if (m_fontSmall && !m_profileName.empty()) {
-            const std::string initial = splitUtf8(m_profileName).front();
+            const auto glyphs = splitUtf8(m_profileName);
+            const std::string initial = glyphs.empty() ? "?" : glyphs.front();
             const nxui::Vec2 size = m_fontSmall->measure(initial);
             drawReadableText(ren, initial,
-                             {avatarRect.x + (avatarRect.width - size.x * 1.10f) * 0.5f,
-                              avatarRect.y + 12.f},
+                             {avatarRect.x + (avatarRect.width - size.x * 1.18f) * 0.5f,
+                              avatarRect.y + 13.f},
                              m_fontSmall,
                              nxui::Color(1.f, 1.f, 1.f, 1.f),
-                             1.10f, contentAlpha, 0.30f);
+                             1.18f, contentAlpha, 0.30f);
         }
     }
-    ren.drawCircle({avatarRect.x + 29.f, avatarRect.y + 29.f}, 32.f,
-                   nxui::Color(0.60f, 0.74f, 1.f, 0.08f * contentAlpha), 34);
+    ren.drawCircle({avatarRect.x + 32.f, avatarRect.y + 32.f}, 35.f,
+                   nxui::Color(0.60f, 0.74f, 1.f,
+                               0.075f * contentAlpha), 36);
+
+    if (m_fontSmall) {
+        drawReadableText(ren, "PROFIL",
+                         {profileRect.x + 98.f, profileRect.y + 17.f},
+                         m_fontSmall,
+                         nxui::Color(0.46f, 0.78f, 1.f, 0.92f),
+                         0.76f, contentAlpha, 0.22f);
+    }
     if (m_fontMedium) {
-        const std::string shownName = truncateUtf8ToWidth(
-            m_profileName, m_fontMedium, 0.84f, 132.f
-        );
-        drawReadableText(ren, shownName,
-                         {1128.f, 100.f + lift * 0.04f},
-                         m_fontMedium,
-                         nxui::Color(0.99f, 0.995f, 1.f, 0.98f),
-                         0.84f, contentAlpha, 0.34f);
+        const nxui::Rect nameClip = {
+            profileRect.x + 98.f, profileRect.y + 42.f,
+            profileRect.width - 116.f, 34.f
+        };
+        drawAutoScrollText(
+            ren, m_profileName, nameClip, m_fontMedium,
+            nxui::Color(0.99f, 0.995f, 1.f, 0.98f),
+            0.88f, contentAlpha, m_animationTime, 0.55f, false, 0.34f);
     }
 
     // One larger contextual card. Real blur is enabled on the GlassPanel;
@@ -1304,28 +1443,81 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                          m_fontSmall,
                          nxui::Color(0.46f, 0.78f, 1.f, 0.94f),
                          0.88f, contentAlpha, 0.25f);
-        const std::string shownAudio = truncateUtf8ToWidth(
-            m_audioStatus, m_fontNormal, 0.86f, connectionRect.width - 56.f);
-        drawReadableText(ren, shownAudio,
-                         {connectionRect.x + 28.f, connectionRect.y + 113.f},
-                         m_fontNormal,
-                         nxui::Color(0.99f, 0.995f, 1.f, 0.99f),
-                         0.86f, contentAlpha, 0.30f);
+        drawAutoScrollText(
+            ren, m_audioStatus,
+            {connectionRect.x + 28.f, connectionRect.y + 113.f,
+             connectionRect.width - 56.f, 34.f},
+            m_fontNormal,
+            nxui::Color(0.99f, 0.995f, 1.f, 0.99f),
+            0.86f, contentAlpha, m_animationTime, 0.85f, false, 0.30f);
 
         drawReadableText(ren, "MANETTE",
                          {connectionRect.x + 28.f, connectionRect.y + 157.f},
                          m_fontSmall,
                          nxui::Color(0.46f, 0.78f, 1.f, 0.94f),
                          0.88f, contentAlpha, 0.25f);
-        const std::string shownController = truncateUtf8ToWidth(
-            m_controllerStatus, m_fontNormal, 0.86f, connectionRect.width - 56.f);
-        drawReadableText(ren, shownController,
-                         {connectionRect.x + 28.f, connectionRect.y + 186.f},
-                         m_fontNormal,
-                         nxui::Color(0.99f, 0.995f, 1.f, 0.99f),
-                         0.86f, contentAlpha, 0.30f);
+        drawAutoScrollText(
+            ren, m_controllerStatus,
+            {connectionRect.x + 28.f, connectionRect.y + 186.f,
+             connectionRect.width - 56.f, 34.f},
+            m_fontNormal,
+            nxui::Color(0.99f, 0.995f, 1.f, 0.99f),
+            0.86f, contentAlpha, m_animationTime, 1.25f, false, 0.30f);
     }
 
+
+    // microSD storage card. The native NS service gives total and available
+    // capacity without scanning the card contents.
+    const nxui::Rect storageRect = {930.f, 478.f + lift * 0.06f, 324.f, 120.f};
+    m_storagePanel.setRect(storageRect);
+    m_storagePanel.setOpacity(contentAlpha);
+    m_storagePanel.render(ren);
+
+    if (m_fontSmall) {
+        drawReadableText(ren, "CARTE MICROSD",
+                         {storageRect.x + 24.f, storageRect.y + 16.f},
+                         m_fontSmall,
+                         nxui::Color(0.94f, 0.96f, 1.f, 0.97f),
+                         0.94f, contentAlpha, 0.32f);
+    }
+
+    std::string storageText = "Carte microSD indisponible";
+    float usedRatio = 0.f;
+    if (m_storageAvailable && m_sdTotalBytes > 0) {
+        const std::uint64_t safeFree = std::min(m_sdFreeBytes, m_sdTotalBytes);
+        storageText = formatStorageAmount(safeFree) +
+                      " libres sur " + formatStorageAmount(m_sdTotalBytes);
+        usedRatio = clamp01(static_cast<float>(m_sdTotalBytes - safeFree) /
+                            static_cast<float>(m_sdTotalBytes));
+    }
+
+    if (m_fontNormal) {
+        drawAutoScrollText(
+            ren, storageText,
+            {storageRect.x + 24.f, storageRect.y + 49.f,
+             storageRect.width - 48.f, 31.f},
+            m_fontNormal,
+            nxui::Color(0.99f, 0.995f, 1.f, 0.98f),
+            0.78f, contentAlpha, m_animationTime, 1.65f, false, 0.26f);
+    }
+
+    const nxui::Rect storageTrack = {
+        storageRect.x + 24.f, storageRect.y + 88.f,
+        storageRect.width - 48.f, 8.f
+    };
+    ren.drawRoundedRect(storageTrack,
+                        nxui::Color(0.16f, 0.20f, 0.34f,
+                                    0.62f * contentAlpha), 4.f);
+    if (usedRatio > 0.001f) {
+        const nxui::Rect storageFill = {
+            storageTrack.x, storageTrack.y,
+            std::max(8.f, storageTrack.width * usedRatio), storageTrack.height
+        };
+        ren.drawRoundedRect(storageFill,
+                            animatedLockGradient(0.38f,
+                                std::fmod(m_animationTime / 5.5f, 1.f))
+                                .withAlpha(0.88f * contentAlpha), 4.f);
+    }
 
     if (m_hasGame) {
         // With a suspended game, the large ring is the progress indicator.
@@ -1341,7 +1533,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
             const float totalW = textSize.x * textScale + gap +
                                  glyphSize.x * 1.24f;
             const float startX = 650.f - totalW * 0.5f;
-            const float y = 646.f + lift;
+            const float y = 620.f + lift;
 
             drawReadableText(ren, instruction, {startX, y}, m_fontMedium,
                              nxui::Color(0.98f, 0.99f, 1.f, 0.98f),
