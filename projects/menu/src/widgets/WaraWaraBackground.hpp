@@ -5,7 +5,18 @@
 #include <nxui/core/Texture.hpp>
 #include <nxui/core/Types.hpp>
 #include <vector>
+#include <string>
+#include <cstdint>
 
+// V8.0A direct: les anciennes implementations onUpdate/onRender presentes
+// dans WaraWaraBackground.cpp deviennent weak. Le fichier
+// WaraWaraBackgroundPreviewV80.cpp fournit les implementations fortes avec
+// le background contextuel par jeu, sans script ni modification manuelle.
+#if defined(__GNUC__) && !defined(SWITCHU_V80_BACKGROUND_STRONG)
+#define SWITCHU_V80_BACKGROUND_WEAK __attribute__((weak))
+#else
+#define SWITCHU_V80_BACKGROUND_WEAK
+#endif
 
 class WaraWaraBackground : public nxui::Background {
 public:
@@ -61,11 +72,15 @@ public:
     bool loadImage(nxui::GpuDevice& gpu, nxui::Renderer& ren, const std::string& path);
     void clearImage();
 
+    // V8.0A: appel global depuis la jaquette qui vient de recevoir le focus.
+    // Le vrai chargement est temporise de 350 ms dans le background lui-meme.
+    static void notifySelectedGame(uint64_t titleId);
+
     void regenerate(int count = 50) override;
 
 protected:
-    void onUpdate(float dt) override;
-    void onRender(nxui::Renderer& ren) override;
+    SWITCHU_V80_BACKGROUND_WEAK void onUpdate(float dt) override;
+    SWITCHU_V80_BACKGROUND_WEAK void onRender(nxui::Renderer& ren) override;
 
 private:
     enum ShapeType { Circle, Triangle, Square, Diamond, Hexagon, ShapeCount };
@@ -93,5 +108,19 @@ private:
     std::vector<Shape> m_shapes;
     nxui::Texture m_backgroundImage;
     float m_time = 0.f;
-};
 
+    // V8.0A - preview statique par Title ID.
+    uint64_t m_previewRequestedTitle = 0;
+    uint64_t m_previewResolvedTitle = 0;
+    uint64_t m_previewPendingTitle = 0;
+    uint64_t m_previewNextTitle = 0;
+    float m_previewStableTimer = 0.f;
+    float m_previewFade = 0.f;
+    bool m_previewLoadPending = false;
+    bool m_previewTransitioning = false;
+    bool m_previewCurrentAvailable = false;
+    bool m_previewNextAvailable = false;
+    std::string m_previewPendingPath;
+    nxui::Texture m_previewCurrent;
+    nxui::Texture m_previewNext;
+};

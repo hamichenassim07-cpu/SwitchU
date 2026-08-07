@@ -4,7 +4,14 @@
 #include <nxui/core/Animation.hpp>
 #include <string>
 
-
+// V8.0A direct: l'ancien onFocusGained dans GlossyIcon.cpp devient weak.
+// GlossyIconFocusV80.cpp garde exactement l'animation existante et ajoute
+// uniquement la notification du Title ID au background contextuel.
+#if defined(__GNUC__) && !defined(SWITCHU_V80_FOCUS_STRONG)
+#define SWITCHU_V80_FOCUS_WEAK __attribute__((weak))
+#else
+#define SWITCHU_V80_FOCUS_WEAK
+#endif
 
 class GlossyIcon : public nxui::GlassWidget {
 public:
@@ -36,7 +43,7 @@ public:
 
     void setFocusable(bool f) { m_focusable = f; }
     bool isFocusable() const override { return m_focusable; }
-    void onFocusGained() override;
+    SWITCHU_V80_FOCUS_WEAK void onFocusGained() override;
     void onFocusLost() override;
 
 protected:
