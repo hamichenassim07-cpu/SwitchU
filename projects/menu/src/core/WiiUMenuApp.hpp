@@ -263,6 +263,10 @@ private:
     bool  m_lockScreenActive = true;
     bool  m_lockScreenUnlocking = false;
     bool  m_skipStartupLock = false;
+    // true: unlock d'un lockscreen avec jeu suspendu reprend le jeu.
+    // false: le lockscreen montre le jeu suspendu mais revient au HOME.
+    // Par defaut true pour le demarrage/reveil depuis un jeu; HomeButton le passe a false.
+    bool  m_lockResumeSuspendedOnUnlock = true;
     int   m_lockPressCount = 0;
     float m_lockPressResetTimer = 0.f;
     float m_lockScreenPulse = 0.f;

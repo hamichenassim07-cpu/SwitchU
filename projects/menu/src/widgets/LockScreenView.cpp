@@ -728,7 +728,7 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
 } // namespace
 
 LockScreenView::LockScreenView() {
-    DebugLog::log("[lockscreen] Switch U V7.1 true-3D card view created");
+    DebugLog::log("[lockscreen] Switch U V7.2 true-3D card view created");
     setRect({0.f, 0.f, 1280.f, 720.f});
 
     // Compact blurred identity card in the lower-left corner.
@@ -1178,7 +1178,7 @@ void LockScreenView::onUpdate(float dt) {
 
         const u32 handheldStyle = hidGetNpadStyleSet(HidNpadIdType_Handheld);
         if (handheldStyle != 0) {
-            m_controllerStatus = "Joy-Con attachés";
+            m_controllerStatus = "Mode portable";
         } else {
             static constexpr std::array<HidNpadIdType, 8> ids = {{
                 HidNpadIdType_No1, HidNpadIdType_No2,
@@ -1247,13 +1247,8 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     ren.drawRect(screen, nxui::Color(0.002f, 0.004f, 0.014f,
                                      0.17f * m_viewOpacity));
 
-    // A local top veil stabilises the readability of the animated greeting,
-    // clock, battery and profile without hiding the personalised background.
-    ren.drawGradientRect(
-        {0.f, 0.f, 1280.f, 232.f},
-        nxui::Color(0.004f, 0.006f, 0.020f, 0.56f * m_viewOpacity),
-        nxui::Color(0.020f, 0.008f, 0.052f, 0.025f * m_viewOpacity)
-    );
+    // V7.2: no permanent top veil. The clock, date, greeting and battery
+    // render directly over the normal lockscreen background.
 
     // Floating geometry is intentionally more visible when there is no
     // suspended game, where it becomes the main decorative background.
