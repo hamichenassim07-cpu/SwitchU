@@ -178,15 +178,22 @@ void WaraWaraBackground::onUpdate(float dt) {
 
         if (m_previewFade >= 1.f) {
             if (m_previewNextAvailable) {
-                m_previewCurrent = std::move(m_previewNext);
+                // IMPORTANT V8.0A.1 : ne jamais detruire une texture GPU au moment
+                // ou elle vient d'etre affichee. On permute les deux buffers :
+                // l'ancien fond reste alloue dans m_previewNext et pourra etre
+                // reutilise au prochain changement sans liberer sa memoire GPU.
+                std::swap(m_previewCurrent, m_previewNext);
                 m_previewCurrentAvailable = true;
                 m_previewResolvedTitle = m_previewNextTitle;
             } else {
-                m_previewCurrent = nxui::Texture{};
+                // Retour au theme : on masque la preview, mais on conserve sa
+                // texture allouee. La detruire ici pouvait liberer un MemBlock
+                // encore reference par une frame GPU en vol.
                 m_previewCurrentAvailable = false;
             }
 
-            m_previewNext = nxui::Texture{};
+            // Le buffer "next" est conserve tel quel pour reutilisation.
+            // Seuls ses indicateurs logiques sont remis a zero.
             m_previewNextAvailable = false;
             m_previewNextTitle = 0;
             m_previewFade = 0.f;
@@ -229,7 +236,14 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // Le chargement de la preview est execute ici, avec le GPU/Renderer valides.
     if (m_previewLoadPending) {
         m_previewLoadPending = false;
-        m_previewNext = nxui::Texture{};
+
+        // V8.0A.1 : m_previewNext peut contenir l'ancien background qui a ete
+        // affiche quelques frames plus tot. Avant de reutiliser son allocation
+        // ou son descriptor, attendre que le GPU ait termine les frames precedentes.
+        // Le chargement est rare (apres le debounce de 350 ms), donc ce point de
+        // synchronisation privilegie la stabilite sans toucher au rendu normal.
+        ren.flush();
+        ren.gpu().waitIdle();
 
         const bool loaded = m_previewNext.loadFromFile(
             ren.gpu(), ren, m_previewPendingPath, 1280);
