@@ -661,26 +661,22 @@ void drawNoGameUnlockPill(nxui::Renderer& ren,
         glyphX + glyphSize.x * baseGlyphScale * 0.5f,
         y + glyphSize.y * baseGlyphScale * 0.46f
     };
-    const float colorT = progress > 0
-        ? static_cast<float>(progress - 1) / 2.f
-        : 0.f;
-    const nxui::Color pressColor = lockGradient(colorT);
+    // The A glyph uses a compact neutral-white glow so it no longer competes
+    // with the blue progress accents.
     ren.drawCircle(glyphCenter,
-                   27.f + 9.f * pressKick + 2.f * breathe,
-                   pressColor.withAlpha(
-                       (0.065f + 0.16f * pressKick +
-                        0.03f * breathe) * alpha), 34);
+                   21.f + 5.f * pressKick + 1.2f * breathe,
+                   nxui::Color(1.f, 1.f, 1.f,
+                       (0.045f + 0.11f * pressKick +
+                        0.018f * breathe) * alpha), 32);
     ren.drawCircle(glyphCenter,
-                   21.f + 3.f * pressKick,
-                   nxui::Color(0.70f, 0.86f, 1.f,
-                               (0.04f + 0.09f * pressKick) * alpha), 30);
+                   16.f + 2.f * pressKick,
+                   nxui::Color(0.92f, 0.97f, 1.f,
+                               (0.025f + 0.055f * pressKick) * alpha), 28);
     ren.drawText(aGlyph,
                  {glyphCenter.x - glyphSize.x * glyphScale * 0.5f,
                   glyphCenter.y - glyphSize.y * glyphScale * 0.46f - 3.f},
                  iconFont,
-                 mixColor(nxui::Color(0.99f, 1.f, 1.f, 1.f),
-                          pressColor, 0.28f * pressKick)
-                     .withAlpha(alpha),
+                 nxui::Color(0.995f, 1.f, 1.f, alpha),
                  glyphScale);
 
     const float dotY = pill.y + 77.f;
@@ -1254,7 +1250,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
 
     // The full central composition moves upward, while the cover itself is
     // placed a few pixels below the exact ring centre as requested.
-    const nxui::Vec2 center = {650.f, 396.f + lift * 0.10f};
+    const nxui::Vec2 center = {650.f, 330.f + lift * 0.10f};
     // Clock: fixed-position pieces prevent the minutes from moving when the
     // colon instantly disappears and reappears every second.
     ClockStrings clock;
@@ -1315,19 +1311,18 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
     if (m_hasGame) {
         // V6.3: the top of the ring is completely free. The whole central
         // composition is larger and the status is moved below it.
-        m_progress.setRect({394.f, 133.f + lift * 0.10f, 512.f, 438.f});
+        // Final balance pass: the ring is more compact and slightly higher,
+        // while the application cover gains visual importance.
+        m_progress.setRect({410.f, 130.f + lift * 0.10f, 480.f, 400.f});
         m_progress.setOpacity(contentAlpha);
         m_progress.render(ren);
 
-        const nxui::Rect cover = {545.f, 253.f + lift * 0.10f, 210.f, 210.f};
-        ren.drawRoundedRect(cover.expanded(18.f),
-                            nxui::Color(0.08f, 0.30f, 0.86f,
-                                        (0.075f + 0.065f * breathe) * contentAlpha),
-                            39.f);
-        ren.drawRoundedRect(cover.expanded(8.f),
-                            nxui::Color(0.54f, 0.20f, 1.00f,
-                                        (0.035f + 0.035f * slowPulse) * contentAlpha),
-                            34.f);
+        const nxui::Rect cover = {539.f, 219.f + lift * 0.10f, 222.f, 222.f};
+        // No coloured frame around the icon: only a quiet neutral backplate,
+        // leaving the separate blue ring to carry the progress language.
+        ren.drawRoundedRect(cover.expanded(5.f),
+                            nxui::Color(0.002f, 0.005f, 0.020f,
+                                        0.50f * contentAlpha), 34.f);
         ren.drawRoundedRect(cover,
                             nxui::Color(0.018f, 0.022f, 0.070f,
                                         0.96f * contentAlpha), 30.f);
@@ -1348,9 +1343,9 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                  nxui::Color(0.26f, 0.08f, 0.46f, 0.78f * contentAlpha));
         }
         ren.drawRoundedRectOutline(cover,
-                                   nxui::Color(0.74f, 0.88f, 1.f,
-                                               0.66f * contentAlpha),
-                                   30.f, 1.9f);
+                                   nxui::Color(0.94f, 0.97f, 1.f,
+                                               0.18f * contentAlpha),
+                                   30.f, 1.2f);
 
         // The cover and ring already communicate that the application is
         // suspended. V6.5 removes the redundant status label and lets the
@@ -1358,7 +1353,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         if (m_fontMedium && !m_gameTitle.empty()) {
             constexpr float titleScale = 0.84f;
             const nxui::Rect titleClip = {
-                410.f, 520.f + lift * 0.14f, 480.f, 42.f
+                410.f, 526.f + lift * 0.14f, 480.f, 42.f
             };
             drawAutoScrollText(
                 ren, m_gameTitle, titleClip, m_fontMedium,
@@ -1402,11 +1397,11 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                0.075f * contentAlpha), 36);
 
     if (m_fontSmall) {
-        drawReadableText(ren, "PROFIL",
-                         {profileRect.x + 98.f, profileRect.y + 17.f},
+        drawReadableText(ren, "PROFIL ACTUEL",
+                         {profileRect.x + 98.f, profileRect.y + 15.f},
                          m_fontSmall,
-                         nxui::Color(0.46f, 0.78f, 1.f, 0.92f),
-                         0.76f, contentAlpha, 0.22f);
+                         nxui::Color(0.46f, 0.78f, 1.f, 0.94f),
+                         0.84f, contentAlpha, 0.24f);
     }
     if (m_fontMedium) {
         const nxui::Rect nameClip = {
@@ -1421,7 +1416,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
 
     // One larger contextual card. Real blur is enabled on the GlassPanel;
     // the old opaque backing is removed so the personalised background remains visible.
-    const nxui::Rect connectionRect = {930.f, 214.f + lift * 0.06f, 324.f, 244.f};
+    const nxui::Rect connectionRect = {930.f, 178.f + lift * 0.06f, 324.f, 244.f};
     m_connectionPanel.setRect(connectionRect);
     m_connectionPanel.setOpacity(contentAlpha);
     m_connectionPanel.render(ren);
@@ -1468,7 +1463,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
 
     // microSD storage card. The native NS service gives total and available
     // capacity without scanning the card contents.
-    const nxui::Rect storageRect = {930.f, 478.f + lift * 0.06f, 324.f, 120.f};
+    const nxui::Rect storageRect = {930.f, 442.f + lift * 0.06f, 324.f, 120.f};
     m_storagePanel.setRect(storageRect);
     m_storagePanel.setOpacity(contentAlpha);
     m_storagePanel.render(ren);
@@ -1514,9 +1509,8 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
             std::max(8.f, storageTrack.width * usedRatio), storageTrack.height
         };
         ren.drawRoundedRect(storageFill,
-                            animatedLockGradient(0.38f,
-                                std::fmod(m_animationTime / 5.5f, 1.f))
-                                .withAlpha(0.88f * contentAlpha), 4.f);
+                            nxui::Color(0.08f, 0.58f, 1.00f,
+                                        0.90f * contentAlpha), 4.f);
     }
 
     if (m_hasGame) {
@@ -1533,7 +1527,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
             const float totalW = textSize.x * textScale + gap +
                                  glyphSize.x * 1.24f;
             const float startX = 650.f - totalW * 0.5f;
-            const float y = 620.f + lift;
+            const float y = 606.f + lift;
 
             drawReadableText(ren, instruction, {startX, y}, m_fontMedium,
                              nxui::Color(0.98f, 0.99f, 1.f, 0.98f),
@@ -1543,29 +1537,24 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                 glyphX + glyphSize.x * 1.24f * 0.5f,
                 y + glyphSize.y * 1.24f * 0.47f
             };
-            const float colorT = m_pressCount > 0
-                ? static_cast<float>(m_pressCount - 1) / 2.f
-                : 0.f;
-            const nxui::Color pressColor = lockGradient(colorT);
-
+            // Small white glow: immediate feedback without adding another
+            // multicolour focal point below the game title.
             ren.drawCircle(glyphCenter,
-                           28.f + 10.f * pressKick + 2.f * breathe,
-                           pressColor.withAlpha(
-                               (0.055f + 0.17f * pressKick +
-                                0.025f * breathe) * contentAlpha), 36);
+                           21.f + 5.f * pressKick + 1.2f * breathe,
+                           nxui::Color(1.f, 1.f, 1.f,
+                               (0.045f + 0.11f * pressKick +
+                                0.018f * breathe) * contentAlpha), 32);
             ren.drawCircle(glyphCenter,
-                           22.f + 3.f * pressKick,
-                           nxui::Color(0.70f, 0.86f, 1.f,
-                               (0.045f + 0.10f * pressKick) * contentAlpha), 32);
+                           16.f + 2.f * pressKick,
+                           nxui::Color(0.92f, 0.97f, 1.f,
+                               (0.025f + 0.055f * pressKick) * contentAlpha), 28);
             const float adjustedGlyphX =
                 glyphCenter.x - glyphSize.x * glyphScale * 0.5f;
             const float adjustedGlyphY =
                 glyphCenter.y - glyphSize.y * glyphScale * 0.47f;
             ren.drawText(aGlyph, {adjustedGlyphX, adjustedGlyphY - 3.f},
                          m_fontIcons,
-                         mixColor(nxui::Color(0.99f, 1.f, 1.f, 1.f),
-                                  pressColor, 0.30f * pressKick)
-                             .withAlpha(contentAlpha),
+                         nxui::Color(0.995f, 1.f, 1.f, contentAlpha),
                          glyphScale);
         }
     } else {

@@ -163,10 +163,12 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
     const float radius = std::min(r.width, r.height) * 0.405f;
     const float breathe = 0.5f + 0.5f * std::sin(m_pulse * 1.62f);
 
+    // Final lockscreen palette: three shades of blue only. The segment
+    // geometry remains unchanged, but the old violet/fuchsia endpoint is gone.
     const std::array<RingSegment, 3> segments = {{
-        {3.70f, 5.72f, nxui::Color(0.05f, 0.88f, 1.00f, 1.f)},
-        {1.82f, 3.08f, nxui::Color(0.30f, 0.42f, 1.00f, 1.f)},
-        {0.06f, 1.32f, nxui::Color(1.00f, 0.22f, 0.86f, 1.f)},
+        {3.70f, 5.72f, nxui::Color(0.08f, 0.82f, 1.00f, 1.f)},
+        {1.82f, 3.08f, nxui::Color(0.10f, 0.55f, 1.00f, 1.f)},
+        {0.06f, 1.32f, nxui::Color(0.16f, 0.34f, 0.96f, 1.f)},
     }};
 
     float strongestFlash = 0.f;
@@ -197,7 +199,7 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
                 ? strongestFlash
                 : 0.f;
             const auto& segment = segments[static_cast<std::size_t>(i)];
-            const float sourceThickness = (38.f + 7.f * localFlash) * 0.5f;
+            const float sourceThickness = (35.f + 6.f * localFlash) * 0.5f;
 
             drawContinuousArc(
                 ren, glowCenter, glowRadius,
@@ -242,15 +244,12 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
             : 0.f;
         const RingSegment& segment = segments[static_cast<std::size_t>(i)];
 
-        const nxui::Color track = m_theme
-            ? m_theme->pageIndicator.withAlpha(
-                  (0.17f + (next ? 0.060f * breathe : 0.f)) * alpha)
-            : nxui::Color(0.22f, 0.27f, 0.48f,
-                          (0.17f + (next ? 0.060f * breathe : 0.f)) * alpha);
+        const nxui::Color track(0.16f, 0.24f, 0.46f,
+            (0.17f + (next ? 0.060f * breathe : 0.f)) * alpha);
 
         drawContinuousArc(ren, center, radius,
                           segment.startAngle, segment.endAngle,
-                          track, 27.f, 108);
+                          track, 24.f, 108);
 
         if (!active)
             continue;
@@ -264,13 +263,13 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
                               segment.color.withAlpha(
                                   (0.045f + 0.022f * breathe +
                                    0.050f * localFlash) * alpha),
-                              52.f * flashBoost, 116);
+                              46.f * flashBoost, 116);
             drawContinuousArc(ren, center, radius,
                               segment.startAngle, segment.endAngle,
                               segment.color.withAlpha(
                                   (0.090f + 0.028f * breathe +
                                    0.060f * localFlash) * alpha),
-                              42.f * flashBoost, 120);
+                              37.f * flashBoost, 120);
         }
 
         // Main body: unchanged geometry and dimensions from the validated ring.
@@ -278,10 +277,10 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
                           segment.startAngle, segment.endAngle,
                           segment.color.withAlpha(
                               (0.90f + 0.08f * breathe) * alpha),
-                          34.f * flashBoost, 128);
+                          30.f * flashBoost, 128);
 
         // Thin inner reflection retained for material depth.
-        drawContinuousArc(ren, center, radius - 8.0f,
+        drawContinuousArc(ren, center, radius - 7.0f,
                           segment.startAngle + 0.035f,
                           segment.endAngle - 0.035f,
                           nxui::Color(0.92f, 0.98f, 1.f,
