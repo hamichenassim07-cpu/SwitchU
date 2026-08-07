@@ -42,9 +42,7 @@
 #include <atomic>
 #include <future>
 #include <switch.h>
-#ifdef SWITCHU_MENU
 #include <switchu/smi_protocol.hpp>
-#endif
 
 
 #ifdef SWITCHU_HOMEBREW
