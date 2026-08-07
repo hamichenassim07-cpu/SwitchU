@@ -107,29 +107,63 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
     const float flash = clamp01(m_flash);
     const nxui::Color stage = cardStageColor(m_visualProgress);
     const float radius = std::min(r.width, r.height) * 0.135f;
+    const bool projected = m_outlineCount >= 3;
+
+    auto drawProjectedLines = [&](float coordinateScale,
+                                  const nxui::Color& color,
+                                  float thickness) {
+        if (!projected)
+            return;
+        for (int i = 0; i < m_outlineCount; ++i) {
+            const int j = (i + 1) % m_outlineCount;
+            ren.drawLine(
+                {m_outline[i].x * coordinateScale,
+                 m_outline[i].y * coordinateScale},
+                {m_outline[j].x * coordinateScale,
+                 m_outline[j].y * coordinateScale},
+                color,
+                thickness * coordinateScale);
+        }
+    };
 
     bool usedRealBlur = false;
 #ifdef NXUI_BACKEND_DEKO3D
     if (beginCardGlowTarget(ren)) {
-        const nxui::Rect halfRect = {
-            r.x * 0.5f,
-            r.y * 0.5f,
-            r.width * 0.5f,
-            r.height * 0.5f
-        };
-        const float halfRadius = radius * 0.5f;
+        if (projected) {
+            // The old glow is preserved, but its source now follows the actual
+            // perspective silhouette instead of an axis-aligned rectangle.
+            drawProjectedLines(
+                0.5f,
+                stage.withAlpha((0.72f + 0.10f * breathe +
+                                 0.18f * flash) * alpha),
+                18.f + 4.f * flash);
+            drawProjectedLines(
+                0.5f,
+                nxui::Color(0.94f, 0.98f, 1.f,
+                            (0.18f + 0.16f * flash) * alpha),
+                4.0f);
+        } else {
+            const nxui::Rect halfRect = {
+                r.x * 0.5f,
+                r.y * 0.5f,
+                r.width * 0.5f,
+                r.height * 0.5f
+            };
+            const float halfRadius = radius * 0.5f;
 
-        ren.drawRoundedRectOutline(
-            halfRect.expanded(3.5f),
-            stage.withAlpha((0.68f + 0.10f * breathe + 0.18f * flash) * alpha),
-            halfRadius + 3.5f,
-            15.f + 3.f * flash);
-        ren.drawRoundedRectOutline(
-            halfRect,
-            nxui::Color(0.94f, 0.98f, 1.f,
-                        (0.18f + 0.16f * flash) * alpha),
-            halfRadius,
-            3.2f);
+            ren.drawRoundedRectOutline(
+                halfRect.expanded(3.5f),
+                stage.withAlpha((0.68f + 0.10f * breathe +
+                                 0.18f * flash) * alpha),
+                halfRadius + 3.5f,
+                15.f + 3.f * flash);
+            ren.drawRoundedRectOutline(
+                halfRect,
+                nxui::Color(0.94f, 0.98f, 1.f,
+                            (0.18f + 0.16f * flash) * alpha),
+                halfRadius,
+                3.2f);
+        }
 
         endCardGlowTarget(ren);
         ren.applyBlur(2.50f, 2);
@@ -146,34 +180,60 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
 #endif
 
     if (!usedRealBlur) {
-        ren.drawRoundedRectOutline(
-            r.expanded(12.f + 3.f * flash),
-            stage.withAlpha((0.025f + 0.030f * breathe + 0.055f * flash) * alpha),
-            radius + 12.f,
-            24.f + 5.f * flash);
-        ren.drawRoundedRectOutline(
-            r.expanded(6.f),
-            stage.withAlpha((0.055f + 0.035f * breathe + 0.070f * flash) * alpha),
-            radius + 6.f,
-            14.f + 3.f * flash);
+        if (projected) {
+            drawProjectedLines(
+                1.f,
+                stage.withAlpha((0.040f + 0.035f * breathe +
+                                 0.065f * flash) * alpha),
+                27.f + 5.f * flash);
+            drawProjectedLines(
+                1.f,
+                stage.withAlpha((0.080f + 0.035f * breathe +
+                                 0.080f * flash) * alpha),
+                14.f + 3.f * flash);
+        } else {
+            ren.drawRoundedRectOutline(
+                r.expanded(12.f + 3.f * flash),
+                stage.withAlpha((0.025f + 0.030f * breathe +
+                                 0.055f * flash) * alpha),
+                radius + 12.f,
+                24.f + 5.f * flash);
+            ren.drawRoundedRectOutline(
+                r.expanded(6.f),
+                stage.withAlpha((0.055f + 0.035f * breathe +
+                                 0.070f * flash) * alpha),
+                radius + 6.f,
+                14.f + 3.f * flash);
+        }
     }
 
-    // Quiet track keeps the card defined before the first press.
+    if (projected) {
+        drawProjectedLines(
+            1.f,
+            nxui::Color(0.34f, 0.48f, 0.76f,
+                        (0.17f + 0.030f * breathe) * alpha),
+            2.4f);
+        drawProjectedLines(
+            1.f,
+            stage.withAlpha((0.68f + 0.13f * breathe +
+                             0.10f * flash) * alpha),
+            3.2f + 1.2f * flash);
+        return;
+    }
+
+    // Rectangle fallback kept for the no-game layout and older call sites.
     ren.drawRoundedRectOutline(
         r,
         nxui::Color(0.34f, 0.48f, 0.76f,
                     (0.20f + 0.035f * breathe) * alpha),
         radius,
         3.0f);
-
-    // Active coloured edge. It pulses briefly on each A press.
     ren.drawRoundedRectOutline(
         r,
-        stage.withAlpha((0.78f + 0.14f * breathe + 0.08f * flash) * alpha),
+        stage.withAlpha((0.78f + 0.14f * breathe +
+                         0.08f * flash) * alpha),
         radius,
         4.0f + 1.5f * flash);
-
-    // Fine glass reflection on the inner side of the border.
     ren.drawRoundedRectOutline(
         r.shrunk(3.4f),
         nxui::Color(0.96f, 0.99f, 1.f,

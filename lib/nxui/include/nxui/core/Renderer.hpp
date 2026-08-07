@@ -101,6 +101,24 @@ public:
     void drawTexture(const Texture* tex, const Rect& dest, const Color& tint = Color::white());
     void drawTextureSub(const Texture* tex, const Rect& src, const Rect& dest, const Color& tint = Color::white());
     void drawTextureRounded(const Texture* tex, const Rect& dest, float radius, const Color& tint = Color::white());
+
+    // Generic low-level textured triangle. V7.1 uses it to project a small,
+    // tessellated 3D card through the existing optimised 2D batcher. Keeping
+    // this primitive in Renderer makes the 3D card reusable elsewhere without
+    // adding a new shader or a second vertex format.
+    void drawTexturedTriangle(int textureSlot,
+                              const Vec2& p0, const Vec2& uv0,
+                              const Vec2& p1, const Vec2& uv1,
+                              const Vec2& p2, const Vec2& uv2,
+                              const Color& tint = Color::white()) {
+        if (textureSlot < 0)
+            return;
+        bindTexture(textureSlot);
+        addVertex(p0.x, p0.y, uv0.x, uv0.y, tint);
+        addVertex(p1.x, p1.y, uv1.x, uv1.y, tint);
+        addVertex(p2.x, p2.y, uv2.x, uv2.y, tint);
+    }
+
     void drawText(const std::string& text, const Vec2& pos, Font* font, const Color& color, float scale = 1.f);
 
     // Post-processing
