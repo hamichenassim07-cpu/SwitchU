@@ -36,6 +36,7 @@ public:
     void setGreeting(const std::string& greeting);
     void setBatteryStatus(std::uint32_t percentage, bool charging);
     void setProgress(int progress, float flash);
+    void setReturnToGameOnUnlock(bool enabled) { m_returnToGameOnUnlock = enabled; }
     void setTransition(float opacity,
                        float reveal,
                        float unlockProgress,
@@ -113,7 +114,5 @@ private:
 
     bool m_musicSceneEntered = false;
     bool m_unlockAudioStarted = false;
-    bool m_resumeHandoffPrepared = false;
-    bool m_resumeBlackFrameRendered = false;
-    bool m_resumeHandoffSent = false;
+    bool m_returnToGameOnUnlock = false;
 };

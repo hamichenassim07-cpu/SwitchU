@@ -4,10 +4,6 @@
 #include "core/AudioManager.hpp"
 #include "core/DebugLog.hpp"
 #include <nxui/Application.hpp>
-#ifdef SWITCHU_MENU
-#include "smi_commands.hpp"
-#endif
-
 #include <nxui/core/Renderer.hpp>
 #include <nxui/widgets/True3DCard.hpp>
 
@@ -218,9 +214,8 @@ void buildClockStrings(bool use12Hour, ClockStrings& out) {
     };
     const int weekday = std::clamp(local->tm_wday, 0, 6);
     const int month = std::clamp(local->tm_mon, 0, 11);
-    std::snprintf(buffer, sizeof(buffer), "%s %d %s %04d",
-                  days[weekday], local->tm_mday, months[month],
-                  local->tm_year + 1900);
+    std::snprintf(buffer, sizeof(buffer), "%s %d %s",
+                  days[weekday], local->tm_mday, months[month]);
     out.date = buffer;
 }
 
@@ -794,9 +789,6 @@ void LockScreenView::setSuspendedGame(nxui::Texture* texture,
         m_ownedGameTexture.valid() && m_ownedGameTextureTitleId == titleId;
     m_ownedGameTextureAttempted = alreadyOwnsThisTitle;
     m_deferredGameAssetReset = false;
-    m_resumeHandoffPrepared = false;
-    m_resumeBlackFrameRendered = false;
-    m_resumeHandoffSent = false;
     m_unlockAudioStarted = false;
     m_gameTitle = title;
     m_gameTitleId = titleId;
@@ -817,9 +809,6 @@ void LockScreenView::clearSuspendedGame() {
     m_gameIsCard = false;
     m_hasGame = false;
     m_deferredGameAssetReset = true;
-    m_resumeHandoffPrepared = false;
-    m_resumeBlackFrameRendered = false;
-    m_resumeHandoffSent = false;
     m_unlockAudioStarted = false;
     m_progress.clearProjectedOutline();
 }
@@ -889,49 +878,16 @@ void LockScreenView::setTransition(float opacity,
         m_unlockAudioStarted = true;
         DebugLog::log("[lockscreen] unlock begin suspended=%d", m_hasGame ? 1 : 0);
         if (audio) {
-            if (m_hasGame)
+            if (m_hasGame && m_returnToGameOnUnlock)
                 audio->fadeOutForGame(420);
             else
                 audio->playHome(420);
         }
     }
 
-#ifdef SWITCHU_MENU
-    // Safe direct handoff. The existing WiiUMenuApp code continues to own the
-    // three-press animation, but the view takes over before its old final
-    // clear/reload block. First render one completely black frame. On the next
-    // update, wait for that frame, queue resume, then stop the app loop.
-    if (m_unlocking && m_hasGame && !m_resumeHandoffSent) {
-        if (m_unlockProgress >= 0.78f && !m_resumeHandoffPrepared) {
-            m_resumeHandoffPrepared = true;
-            DebugLog::log("[lockscreen] suspended handoff prepared; game texture disabled");
-        }
-
-        if (m_resumeHandoffPrepared && m_resumeBlackFrameRendered) {
-            if (auto* application = nxui::Application::current()) {
-                DebugLog::log("[lockscreen] black frame submitted; waiting for GPU");
-                application->gpu().waitIdle();
-                DebugLog::log("[lockscreen] gpu idle; queueing resume");
-
-                if (audio)
-                    audio->stop();
-
-                const Result rc = switchu::menu::smi_cmd::resumeApplication();
-                DebugLog::log("[lockscreen] resume command rc=0x%X", rc);
-                if (R_SUCCEEDED(rc)) {
-                    m_resumeHandoffSent = true;
-                    DebugLog::log("[lockscreen] menu exit requested after resume queue");
-                    application->requestExit();
-                } else {
-                    m_resumeHandoffPrepared = false;
-                    m_resumeBlackFrameRendered = false;
-                    if (audio)
-                        audio->playLockscreen(220);
-                }
-            }
-        }
-    }
-#endif
+    // V7.4: LockScreenView ne decide plus jamais de la destination.
+    // Le controleur WiiUMenuApp possede seul le timer de 1,20 s puis choisit
+    // HOME ou GAME a partir de l'etat memorise par le daemon.
 
     if (!m_unlocking && m_viewOpacity <= 0.001f) {
         AudioManager::setLockscreenVisible(false);
@@ -1204,13 +1160,6 @@ void LockScreenView::onUpdate(float dt) {
 }
 
 void LockScreenView::onRender(nxui::Renderer& ren) {
-    if (m_resumeHandoffPrepared && m_hasGame) {
-        ren.drawRect({0.f, 0.f, 1280.f, 720.f},
-                     nxui::Color(0.f, 0.f, 0.f, 1.f));
-        m_resumeBlackFrameRendered = true;
-        return;
-    }
-
     const float contentAlpha = m_viewOpacity * easeOutCubic(m_reveal);
     if (contentAlpha <= 0.001f)
         return;
@@ -1238,17 +1187,18 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                    (0.08f + 0.025f * breathe) * contentAlpha), 96);
     }
 
-    // Global veil stays light enough to preserve the personalised background.
-    ren.drawGradientRect(
-        screen,
-        nxui::Color(0.004f, 0.008f, 0.025f, 0.38f * m_viewOpacity),
-        nxui::Color(0.004f, 0.006f, 0.020f, 0.72f * m_viewOpacity)
-    );
-    ren.drawRect(screen, nxui::Color(0.002f, 0.004f, 0.014f,
-                                     0.17f * m_viewOpacity));
+    // V7.3.1: remove the real permanent full-screen dark veil.
+    // The personalised background must keep its original brightness outside
+    // the dedicated readability area at the top of the lockscreen.
 
-    // V7.2: no permanent top veil. The clock, date, greeting and battery
-    // render directly over the normal lockscreen background.
+    // Restore the LOCAL top readability veil from V7.1. This is intentional:
+    // it only sits behind the clock, date, greeting and battery so those
+    // elements stay readable on bright custom backgrounds.
+    ren.drawGradientRect(
+        {0.f, 0.f, 1280.f, 232.f},
+        nxui::Color(0.004f, 0.006f, 0.020f, 0.56f * m_viewOpacity),
+        nxui::Color(0.020f, 0.008f, 0.052f, 0.025f * m_viewOpacity)
+    );
 
     // Floating geometry is intentionally more visible when there is no
     // suspended game, where it becomes the main decorative background.

@@ -8,6 +8,8 @@
 #ifdef SWITCHU_MENU
 enum class SysAction {
     HomeButton,
+    ApplicationExited,
+    ApplicationSuspended,
     Sleep,
     WakeUp,
     Shutdown,

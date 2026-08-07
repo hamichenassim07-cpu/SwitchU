@@ -61,7 +61,9 @@ public:
     void setTutorialStartupFade(bool enabled);
 
 #ifdef SWITCHU_MENU
-    void setStartupStatus(uint64_t suspendedTitleId, bool appRunning);
+    void setStartupStatus(uint64_t suspendedTitleId,
+                          bool appRunning,
+                          switchu::smi::LockReturnTarget returnTarget);
 
     // V6.5.1: HOME opens Switch U's HOME directly, while boot/wakeup keeps
     // the lockscreen. The daemon already passes MainMenu for a physical HOME
@@ -263,10 +265,10 @@ private:
     bool  m_lockScreenActive = true;
     bool  m_lockScreenUnlocking = false;
     bool  m_skipStartupLock = false;
-    // true: unlock d'un lockscreen avec jeu suspendu reprend le jeu.
-    // false: le lockscreen montre le jeu suspendu mais revient au HOME.
-    // Par defaut true pour le demarrage/reveil depuis un jeu; HomeButton le passe a false.
-    bool  m_lockResumeSuspendedOnUnlock = true;
+    // V7.4 : destination explicite transmise par le daemon.
+    // Elle represente l'ecran qui etait actif AVANT la mise en veille.
+    switchu::smi::LockReturnTarget m_lockReturnTarget =
+        switchu::smi::LockReturnTarget::Home;
     int   m_lockPressCount = 0;
     float m_lockPressResetTimer = 0.f;
     float m_lockScreenPulse = 0.f;
