@@ -5,7 +5,10 @@
 #include <cmath>
 
 namespace {
-constexpr int kVisibleIcons = 4;
+// V9: the focused cover is the visual anchor of the HOME. Five positions are
+// kept around that anchor; the two outer covers can naturally be clipped by
+// the screen edges, just like the reference layout.
+constexpr int kVisibleIcons = 5;
 constexpr float kLargeIconSize = 286.f;
 constexpr float kCompactIconGap = 10.f;
 
@@ -41,11 +44,11 @@ int IconGrid::visibleSlotCount() const {
 }
 
 float IconGrid::maxScrollPosition() const {
+    // V9: m_scrollPosition represents the item located under the exact
+    // horizontal centre of the HOME, not the first item of a visible window.
+    // The first and last games are therefore allowed to sit at screen centre.
     return static_cast<float>(
-        std::max(
-            0,
-            m_displayCount - visibleSlotCount()
-        )
+        std::max(0, m_displayCount - 1)
     );
 }
 
@@ -55,14 +58,8 @@ float IconGrid::desiredScrollPositionForFocus(
     if (m_displayCount <= 0)
         return 0.f;
 
-    const int visibleSlots =
-        visibleSlotCount();
-
-    const int desiredStart =
-        focusedIndex - visibleSlots / 2;
-
     return std::clamp(
-        static_cast<float>(desiredStart),
+        static_cast<float>(focusedIndex),
         0.f,
         maxScrollPosition()
     );
@@ -101,16 +98,11 @@ void IconGrid::reconfigureLayout(int cols, int rows,
 
     updateDisplayCount();
 
-    const int visibleSlots =
-        visibleSlotCount();
-
-    const float visibleW =
-        visibleSlots * m_cellW +
-        (visibleSlots - 1) * m_padX;
-
+    // V9: originX is the left edge of the centre slot itself.
     m_originX =
         m_rect.x +
-        (m_rect.width - visibleW) * 0.5f;
+        m_rect.width * 0.5f -
+        m_cellW * 0.5f;
 
     m_originY =
         m_rect.y +
@@ -191,6 +183,8 @@ void IconGrid::layoutCarousel() {
         focused >= m_displayCount)
         focused = 0;
 
+    // V9: this is deliberately the focused index itself. No edge clamping to
+    // a four-cover window: game 0 and the last game remain perfectly centred.
     m_scrollPosition =
         desiredScrollPositionForFocus(focused);
 
@@ -210,13 +204,11 @@ void IconGrid::layoutAtScrollPosition() {
     const int visibleSlots =
         visibleSlotCount();
 
-    const float visibleW =
-        visibleSlots * m_cellW +
-        (visibleSlots - 1) * m_padX;
-
+    // Exact centre anchor used by every controller/touch state.
     m_originX =
         m_rect.x +
-        (m_rect.width - visibleW) * 0.5f;
+        m_rect.width * 0.5f -
+        m_cellW * 0.5f;
 
     m_originY =
         m_rect.y +
@@ -225,12 +217,10 @@ void IconGrid::layoutAtScrollPosition() {
     const float step =
         m_cellW + m_padX;
 
-    m_windowStart = std::clamp(
-        static_cast<int>(
-            std::floor(m_scrollPosition)
-        ),
+    m_windowStart = std::max(
         0,
-        static_cast<int>(maxScrollPosition())
+        static_cast<int>(std::floor(m_scrollPosition)) -
+            visibleSlots / 2
     );
 
     for (int i = 0; i < m_displayCount; ++i) {
@@ -257,8 +247,9 @@ void IconGrid::layoutAtScrollPosition() {
 }
 
 bool IconGrid::canTouchScroll() const {
-    return m_displayCount >
-           visibleSlotCount();
+    // Even a short list can be dragged: the centre slot, not the number of
+    // simultaneously visible covers, is what defines selection in V9.
+    return m_displayCount > 1;
 }
 
 void IconGrid::beginTouchScroll() {
@@ -271,20 +262,9 @@ void IconGrid::beginTouchScroll() {
     m_scrollVelocity = 0.f;
     m_pendingSettledFocusIndex = -1;
 
-    int focused =
-        focusedGlobalIndex();
-
-    if (focused < 0)
-        focused = 0;
-
-    m_touchFocusOffset = std::clamp(
-        static_cast<float>(focused) -
-            m_scrollPosition,
-        0.f,
-        static_cast<float>(
-            visibleSlotCount() - 1
-        )
-    );
+    // The focused item is already centred when a drag begins. Keeping the
+    // offset at zero makes the item landing under screen centre become focus.
+    m_touchFocusOffset = 0.f;
 }
 
 void IconGrid::dragTouchScroll(
@@ -390,10 +370,7 @@ void IconGrid::finishSnap() {
     const int targetFocus =
         std::clamp(
             static_cast<int>(
-                std::round(
-                    m_scrollPosition +
-                    m_touchFocusOffset
-                )
+                std::round(m_scrollPosition)
             ),
             0,
             std::max(
@@ -537,10 +514,8 @@ void IconGrid::startAppearAnimation() {
         std::max(
             0,
             static_cast<int>(
-                std::floor(
-                    m_scrollPosition
-                )
-            ) - 1
+                std::floor(m_scrollPosition)
+            ) - visibleSlotCount() / 2 - 1
         );
 
     const int last =

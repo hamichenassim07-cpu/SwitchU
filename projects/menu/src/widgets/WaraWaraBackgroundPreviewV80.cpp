@@ -1,4 +1,4 @@
-// Switch U HOME V8.1 - preview MP4 H.264 asynchrone.
+// Switch U HOME V9.0 - preview MP4 H.264 asynchrone + rendu cinematographique.
 //
 // La base V8.0A.2 reste intacte pour les backgrounds statiques. V8.1 ajoute
 // un decodeur MP4 dans un thread dedie, une petite file de frames CPU et trois
@@ -47,9 +47,16 @@ constexpr float kPreviewDebounce = 0.12f;
 constexpr float kPreviewFadeDuration = 0.32f;
 constexpr int kPreviewMaxWidth = 1280;
 constexpr int kPreviewMaxHeight = 720;
-constexpr int kVideoMaxWidth = 640;
-constexpr int kVideoMaxHeight = 360;
-constexpr float kVideoMaxFps = 30.f;
+constexpr int kVideoDefaultMaxWidth = 1280;
+constexpr int kVideoDefaultMaxHeight = 720;
+constexpr float kVideoDefaultMaxFps = 30.f;
+constexpr int kVideoStressMaxWidth = 1920;
+constexpr int kVideoStressMaxHeight = 1080;
+constexpr float kVideoStressMaxFps = 60.f;
+constexpr float kVideoVisualZoom = 1.06f;
+constexpr float kVideoVerticalAnchor = 0.62f;
+constexpr const char* kVideoStressFlag =
+    "sdmc:/config/SwitchU/video_1080p60.flag";
 constexpr float kVideoFadeInDuration = 0.26f;
 constexpr float kVideoFadeOutDuration = 0.15f;
 constexpr uint64_t kGpuRetireFrames = 3;
@@ -141,6 +148,30 @@ nxui::Rect coverRect(int texW, int texH, const nxui::Rect& area) {
     return {
         area.x + (area.width - drawW) * 0.5f,
         area.y + (area.height - drawH) * 0.5f,
+        drawW,
+        drawH
+    };
+}
+
+bool videoStress1080p60Enabled() {
+    return fileExists(kVideoStressFlag);
+}
+
+nxui::Rect videoCoverRect(int texW, int texH, const nxui::Rect& area) {
+    if (texW <= 0 || texH <= 0)
+        return area;
+
+    const float w = static_cast<float>(texW);
+    const float h = static_cast<float>(texH);
+    const float coverScale = std::max(area.width / w, area.height / h);
+    const float scale = coverScale * kVideoVisualZoom;
+    const float drawW = w * scale;
+    const float drawH = h * scale;
+    const float hiddenY = std::max(0.f, drawH - area.height);
+
+    return {
+        area.x + (area.width - drawW) * 0.5f,
+        area.y - hiddenY * kVideoVerticalAnchor,
         drawW,
         drawH
     };
@@ -524,6 +555,25 @@ private:
             return;
         }
 
+        const bool stress1080p60 = videoStress1080p60Enabled();
+        const int videoMaxWidth = stress1080p60
+            ? kVideoStressMaxWidth
+            : kVideoDefaultMaxWidth;
+        const int videoMaxHeight = stress1080p60
+            ? kVideoStressMaxHeight
+            : kVideoDefaultMaxHeight;
+        const float videoMaxFps = stress1080p60
+            ? kVideoStressMaxFps
+            : kVideoDefaultMaxFps;
+
+        DebugLog::log(
+            "[home-video] decode profile %s max=%dx%d@%.0f",
+            stress1080p60 ? "STRESS_1080P60" : "QUALITY_720P30",
+            videoMaxWidth,
+            videoMaxHeight,
+            videoMaxFps
+        );
+
         AVRational guessedRate = av_guess_frame_rate(format, stream, nullptr);
         double sourceFps = 24.0;
         if (guessedRate.num > 0 && guessedRate.den > 0) {
@@ -532,7 +582,7 @@ private:
                 sourceFps = guessed;
         }
         const double outputFps = std::clamp(sourceFps, 1.0,
-                                             static_cast<double>(kVideoMaxFps));
+                                             static_cast<double>(videoMaxFps));
         const float outputDuration = static_cast<float>(1.0 / outputFps);
         double sampleAccumulator = 0.0;
 
@@ -566,9 +616,9 @@ private:
                 return true;
             }
 
-            const float sx = static_cast<float>(kVideoMaxWidth) /
+            const float sx = static_cast<float>(videoMaxWidth) /
                              static_cast<float>(sourceW);
-            const float sy = static_cast<float>(kVideoMaxHeight) /
+            const float sy = static_cast<float>(videoMaxHeight) /
                              static_cast<float>(sourceH);
             const float scale = std::min(1.f, std::min(sx, sy));
             const int outW = std::max(
@@ -1310,14 +1360,26 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 #ifdef SWITCHU_V81_FFMPEG
     if (!r.videoPrewarmAttempted) {
         r.videoPrewarmAttempted = true;
+        const bool stress1080p60 = videoStress1080p60Enabled();
+        const int capacityW = stress1080p60
+            ? kVideoStressMaxWidth
+            : kVideoDefaultMaxWidth;
+        const int capacityH = stress1080p60
+            ? kVideoStressMaxHeight
+            : kVideoDefaultMaxHeight;
         for (auto& texture : r.videoTextures)
-            texture.configureCapacity(kVideoMaxWidth, kVideoMaxHeight);
+            texture.configureCapacity(capacityW, capacityH);
         r.videoPrewarmOk =
             r.videoTextures[0].prewarm(ren) &&
             r.videoTextures[1].prewarm(ren) &&
             r.videoTextures[2].prewarm(ren);
-        DebugLog::log("[home-video] GPU stream prewarm %s",
-                      r.videoPrewarmOk ? "ok" : "failed");
+        DebugLog::log(
+            "[home-video] GPU stream prewarm %s profile=%s capacity=%dx%d",
+            r.videoPrewarmOk ? "ok" : "failed",
+            stress1080p60 ? "STRESS_1080P60" : "QUALITY_720P30",
+            capacityW,
+            capacityH
+        );
     }
 #endif
 
@@ -1466,28 +1528,55 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         const auto& videoTexture = r.videoTextures[r.videoCurrentIndex];
         videoTexture.draw(
             ren,
-            coverRect(videoTexture.width(), videoTexture.height(), area),
+            videoCoverRect(videoTexture.width(), videoTexture.height(), area),
             r.videoOpacity * m_opacity
         );
         previewVisualAlpha = std::max(previewVisualAlpha, r.videoOpacity);
     }
 #endif
 
-    // Overlay cinematographique totalement separe du flux image/video/GPU.
+    // V9 : traitement visuel proche de la reference. La video reste lisible
+    // en haut, prend une tres legere teinte violet/rose puis disparait dans
+    // un socle anthracite opaque. Le filtre ne modifie jamais le MP4 source.
+    const nxui::Color lowerBase(0.050f, 0.050f, 0.058f, 1.f);
+    const float fadeStartY = area.y + area.height * 0.43f;
+    const float solidStartY = area.y + area.height * 0.74f;
+    const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
+
     if (previewVisualAlpha > 0.001f) {
         const float a = std::clamp(previewVisualAlpha * m_opacity, 0.f, 1.f);
+
+        // Voile sombre doux sur toute la preview pour garder le HUD lisible.
         ren.drawGradientRect(
             area,
-            nxui::Color(0.006f, 0.008f, 0.018f, 0.06f * a),
-            nxui::Color(0.004f, 0.004f, 0.012f, 0.76f * a)
+            nxui::Color(0.020f, 0.012f, 0.035f, 0.10f * a),
+            nxui::Color(0.018f, 0.014f, 0.028f, 0.26f * a)
         );
+
+        // Teinte couleur volontairement discrete.
         ren.drawGradientRect(
-            {area.x, area.y + area.height * 0.48f,
-             area.width, area.height * 0.52f},
-            nxui::Color(0.005f, 0.006f, 0.015f, 0.00f),
-            nxui::Color(0.003f, 0.003f, 0.010f, 0.34f * a)
+            area,
+            nxui::Color(0.20f, 0.055f, 0.24f, 0.055f * a),
+            nxui::Color(0.08f, 0.025f, 0.13f, 0.085f * a)
         );
     }
+
+    // Le socle du HOME appartient a la composition, pas seulement a la video.
+    // Il reste donc present aussi pour un jeu qui n'a qu'un background.jpg
+    // ou aucun asset personnalise.
+    ren.drawGradientRect(
+        {area.x, fadeStartY, area.width, solidStartY - fadeStartY},
+        lowerBase.withAlpha(0.00f),
+        lowerBase.withAlpha(baseAlpha)
+    );
+
+    // A partir d'ici l'eventuelle video n'est plus visible du tout. Ce n'est
+    // pas du noir pur : le fond reste un gris-noir tres legerement releve.
+    ren.drawRect(
+        {area.x, solidStartY,
+         area.width, area.y + area.height - solidStartY},
+        lowerBase.withAlpha(baseAlpha)
+    );
 
     ren.flush();
 }
