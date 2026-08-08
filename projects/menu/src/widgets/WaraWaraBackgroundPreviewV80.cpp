@@ -232,6 +232,13 @@ enum class VideoDecodeStatus : int {
     Failed,
 };
 
+std::string ffmpegErrorText(int errorCode) {
+    char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
+    if (av_strerror(errorCode, buffer, sizeof(buffer)) < 0)
+        std::snprintf(buffer, sizeof(buffer), "ffmpeg error %d", errorCode);
+    return buffer;
+}
+
 struct DecodedVideoFrame {
     uint64_t serial = 0;
     uint64_t titleId = 0;
@@ -435,8 +442,18 @@ private:
                 avformat_close_input(&format);
         };
 
-        int result = avformat_open_input(&format, path.c_str(), nullptr, nullptr);
+        // FFmpeg traite une chaine contenant ':' comme une URL/protocole.
+        // "sdmc:/..." serait donc interprete comme un protocole "sdmc",
+        // qui n'existe pas dans le build devkitPro. Forcer le protocole file
+        // permet a l'I/O locale de transmettre ensuite "sdmc:/..." a libnx.
+        const std::string ffmpegPath = "file:" + path;
+        DebugLog::log("[home-video] ffmpeg open %s", ffmpegPath.c_str());
+
+        int result = avformat_open_input(&format, ffmpegPath.c_str(), nullptr, nullptr);
         if (result < 0 || !format) {
+            DebugLog::log("[home-video] avformat_open_input failed %016llX: %s (%d)",
+                          static_cast<unsigned long long>(titleId),
+                          ffmpegErrorText(result).c_str(), result);
             cleanup();
             setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
             return;
@@ -444,6 +461,9 @@ private:
 
         result = avformat_find_stream_info(format, nullptr);
         if (result < 0) {
+            DebugLog::log("[home-video] avformat_find_stream_info failed %016llX: %s (%d)",
+                          static_cast<unsigned long long>(titleId),
+                          ffmpegErrorText(result).c_str(), result);
             cleanup();
             setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
             return;
@@ -453,6 +473,9 @@ private:
         const int streamIndex = av_find_best_stream(
             format, AVMEDIA_TYPE_VIDEO, -1, -1, &decoder, 0);
         if (streamIndex < 0 || !decoder) {
+            DebugLog::log("[home-video] no video stream/decoder %016llX: %s (%d)",
+                          static_cast<unsigned long long>(titleId),
+                          ffmpegErrorText(streamIndex).c_str(), streamIndex);
             cleanup();
             setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
             return;
@@ -460,6 +483,9 @@ private:
 
         AVStream* stream = format->streams[streamIndex];
         if (!stream || stream->codecpar->codec_id != AV_CODEC_ID_H264) {
+            DebugLog::log("[home-video] unsupported codec %016llX codec_id=%d",
+                          static_cast<unsigned long long>(titleId),
+                          stream ? static_cast<int>(stream->codecpar->codec_id) : -1);
             cleanup();
             setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
             return;
@@ -468,16 +494,25 @@ private:
         bool hardware = openDecoder(format, streamIndex, decoder,
                                     true, codec, hwDevice);
         if (!hardware) {
+            DebugLog::log("[home-video] NVTEGRA unavailable %016llX -> software fallback",
+                          static_cast<unsigned long long>(titleId));
             if (codec)
                 avcodec_free_context(&codec);
             if (hwDevice)
                 av_buffer_unref(&hwDevice);
             if (!openDecoder(format, streamIndex, decoder,
                              false, codec, hwDevice)) {
+                DebugLog::log("[home-video] software decoder open failed %016llX",
+                              static_cast<unsigned long long>(titleId));
                 cleanup();
                 setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
                 return;
             }
+            DebugLog::log("[home-video] software decoder opened %016llX",
+                          static_cast<unsigned long long>(titleId));
+        } else {
+            DebugLog::log("[home-video] NVTEGRA decoder opened %016llX",
+                          static_cast<unsigned long long>(titleId));
         }
 
         packet = av_packet_alloc();
