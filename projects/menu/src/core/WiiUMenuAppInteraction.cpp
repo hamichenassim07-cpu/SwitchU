@@ -504,9 +504,10 @@ void WiiUMenuApp::wireFocusCallback() {
                 )
             );
 
-            // V5 NAVIGATION
+            // V9 NAVIGATION
             // Haut : profil du joueur.
-            // Bas  : rangée centrée des six boutons système.
+            // Bas  : only the two visible shelf anchors at rest. Once one is
+            // focused, SidebarManager unfolds the other system functions.
             nxui::Widget* profileTarget = nullptr;
 
             if (!m_userAvatarButtons.empty())
@@ -545,7 +546,7 @@ void WiiUMenuApp::wireFocusCallback() {
                 float distance =
                     std::abs(centerX - iconCenterX);
 
-                if (distance < bestDistance) {
+                if (btn->isVisible() && distance < bestDistance) {
                     bestDistance = distance;
                     bottomTarget = btn.get();
                 }
@@ -566,7 +567,7 @@ void WiiUMenuApp::wireFocusCallback() {
                 float distance =
                     std::abs(centerX - iconCenterX);
 
-                if (distance < bestDistance) {
+                if (btn->isVisible() && distance < bestDistance) {
                     bestDistance = distance;
                     bottomTarget = btn.get();
                 }

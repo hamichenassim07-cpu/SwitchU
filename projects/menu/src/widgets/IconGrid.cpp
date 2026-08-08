@@ -9,8 +9,27 @@ namespace {
 // kept around that anchor; the two outer covers can naturally be clipped by
 // the screen edges, just like the reference layout.
 constexpr int kVisibleIcons = 5;
-constexpr float kLargeIconSize = 286.f;
-constexpr float kCompactIconGap = 10.f;
+// V9 Beta: hierarchy inspired by the reference. The centre cover is the
+// hero element; neighbouring covers are deliberately much smaller.
+constexpr float kSelectedIconSize = 310.f;
+constexpr float kNeighborIconSize = 182.f;
+constexpr float kOuterIconSize = 136.f;
+constexpr float kCarouselStep = 258.f;
+constexpr float kCarouselBaselineY = 500.f;
+
+float iconSizeForDistance(float distance) {
+    distance = std::abs(distance);
+    if (distance <= 1.f) {
+        return kSelectedIconSize +
+               (kNeighborIconSize - kSelectedIconSize) * distance;
+    }
+    if (distance <= 2.f) {
+        const float t = distance - 1.f;
+        return kNeighborIconSize +
+               (kOuterIconSize - kNeighborIconSize) * t;
+    }
+    return kOuterIconSize;
+}
 
 // Plus le geste est rapide, plus la vitesse initiale est forte.
 // La friction reste douce pour permettre aux gestes puissants
@@ -92,9 +111,11 @@ void IconGrid::reconfigureLayout(int cols, int rows,
     (void)padY;
 
     m_visibleCols = kVisibleIcons;
-    m_cellW = kLargeIconSize;
-    m_cellH = kLargeIconSize;
-    m_padX = kCompactIconGap;
+    // Logical cell values are kept for compatibility with the existing API.
+    // Actual cover geometry is distance-based in layoutAtScrollPosition().
+    m_cellW = kSelectedIconSize;
+    m_cellH = kSelectedIconSize;
+    m_padX = 0.f;
 
     updateDisplayCount();
 
@@ -102,11 +123,11 @@ void IconGrid::reconfigureLayout(int cols, int rows,
     m_originX =
         m_rect.x +
         m_rect.width * 0.5f -
-        m_cellW * 0.5f;
+        kSelectedIconSize * 0.5f;
 
-    m_originY =
-        m_rect.y +
-        (m_rect.height - m_cellH) * 0.5f;
+    // Covers share a baseline: smaller neighbours sit lower while the centre
+    // cover rises upward and dominates the composition.
+    m_originY = kCarouselBaselineY - kSelectedIconSize;
 
     rebuildFocusRow();
 }
@@ -204,18 +225,11 @@ void IconGrid::layoutAtScrollPosition() {
     const int visibleSlots =
         visibleSlotCount();
 
-    // Exact centre anchor used by every controller/touch state.
-    m_originX =
-        m_rect.x +
-        m_rect.width * 0.5f -
-        m_cellW * 0.5f;
+    const float screenCenterX =
+        m_rect.x + m_rect.width * 0.5f;
 
-    m_originY =
-        m_rect.y +
-        (m_rect.height - m_cellH) * 0.5f;
-
-    const float step =
-        m_cellW + m_padX;
+    m_originX = screenCenterX - kSelectedIconSize * 0.5f;
+    m_originY = kCarouselBaselineY - kSelectedIconSize;
 
     m_windowStart = std::max(
         0,
@@ -229,17 +243,17 @@ void IconGrid::layoutAtScrollPosition() {
         if (!icon)
             continue;
 
-        const float x =
-            m_originX +
-            (static_cast<float>(i) -
-             m_scrollPosition) *
-            step;
+        const float logicalDistance =
+            static_cast<float>(i) - m_scrollPosition;
+        const float size = iconSizeForDistance(logicalDistance);
+        const float centerX =
+            screenCenterX + logicalDistance * kCarouselStep;
 
         icon->setRect({
-            x,
-            m_originY,
-            m_cellW,
-            m_cellH
+            centerX - size * 0.5f,
+            kCarouselBaselineY - size,
+            size,
+            size
         });
 
         icon->forceVisible();
@@ -274,8 +288,7 @@ void IconGrid::dragTouchScroll(
         !canTouchScroll())
         return;
 
-    const float step =
-        m_cellW + m_padX;
+    const float step = kCarouselStep;
 
     if (step <= 0.f)
         return;
@@ -302,8 +315,7 @@ void IconGrid::endTouchScroll(
 
     m_touchScrolling = false;
 
-    const float step =
-        m_cellW + m_padX;
+    const float step = kCarouselStep;
 
     if (step <= 0.f) {
         startSnapToNearest();

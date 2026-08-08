@@ -81,6 +81,12 @@ public:
     // MP4 sont geres par le moteur de preview asynchrone V8.1.
     static void notifySelectedGame(uint64_t titleId);
 
+    // V9: HOME previews are suspended while the lockscreen is visible.
+    // This prevents video/static textures from competing with lockscreen fonts
+    // and icons for the limited Deko3D image-memory budget.
+    void setPreviewActive(bool active);
+    bool previewActive() const { return m_previewActive; }
+
     void regenerate(int count = 50) override;
 
 protected:
@@ -114,6 +120,7 @@ private:
     nxui::Texture m_backgroundImage;
     float m_time = 0.f;
 
-    // V8.1 : tout l'etat preview est encapsule ici.
+    // V8.1/V9 : tout l'etat preview est encapsule ici.
     std::shared_ptr<WaraPreviewRuntime> m_previewRuntime;
+    bool m_previewActive = true;
 };

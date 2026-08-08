@@ -54,12 +54,17 @@ constexpr int kVideoStressMaxWidth = 1920;
 constexpr int kVideoStressMaxHeight = 1080;
 constexpr float kVideoStressMaxFps = 60.f;
 constexpr float kVideoVisualZoom = 1.06f;
-constexpr float kVideoVerticalAnchor = 0.62f;
+constexpr float kVideoVerticalAnchor = 0.66f;
 constexpr const char* kVideoStressFlag =
     "sdmc:/config/SwitchU/video_1080p60.flag";
+constexpr const char* kVideoDisabledFlag =
+    "sdmc:/config/SwitchU/video_disabled.flag";
 constexpr float kVideoFadeInDuration = 0.26f;
 constexpr float kVideoFadeOutDuration = 0.15f;
 constexpr uint64_t kGpuRetireFrames = 3;
+constexpr uint64_t kVideoGpuRetireFrames = 1;
+
+std::atomic<bool> g_forceVideo720Profile{false};
 
 float random01V80() {
     return (std::rand() % 1000) / 1000.f;
@@ -153,8 +158,14 @@ nxui::Rect coverRect(int texW, int texH, const nxui::Rect& area) {
     };
 }
 
+bool videoPlaybackEnabled() {
+    return !fileExists(kVideoDisabledFlag);
+}
+
 bool videoStress1080p60Enabled() {
-    return fileExists(kVideoStressFlag);
+    return videoPlaybackEnabled() &&
+           fileExists(kVideoStressFlag) &&
+           !g_forceVideo720Profile.load(std::memory_order_relaxed);
 }
 
 nxui::Rect videoCoverRect(int texW, int texH, const nxui::Rect& area) {
@@ -175,6 +186,15 @@ nxui::Rect videoCoverRect(int texW, int texH, const nxui::Rect& area) {
         drawW,
         drawH
     };
+}
+
+uint64_t previewImageMemoryUsed(nxui::Renderer& ren) {
+#ifdef NXUI_BACKEND_DEKO3D
+    return ren.gpu().imageMemoryUsed();
+#else
+    (void)ren;
+    return 0;
+#endif
 }
 
 struct DecodedPreview {
@@ -370,7 +390,7 @@ private:
         m_cv.wait(lk, [&]() {
             return m_stop.load(std::memory_order_acquire) ||
                    m_serial.load(std::memory_order_acquire) != serial ||
-                   m_frames.size() < 3;
+                   m_frames.size() < 2;
         });
 
         if (!isCurrent(serial))
@@ -771,12 +791,7 @@ public:
     PreviewStreamTexture& operator=(const PreviewStreamTexture&) = delete;
 
     ~PreviewStreamTexture() {
-#ifdef NXUI_BACKEND_DEKO3D
-        if (m_uploadInFlight)
-            m_uploadFence.wait();
-        if (m_gpu && m_imageMem && m_imageAllocSize > 0)
-            m_gpu->freeImageMemory(m_imageAllocSize);
-#endif
+        releaseGpuResources();
     }
 
     void configureCapacity(int maxWidth, int maxHeight) {
@@ -784,6 +799,30 @@ public:
             return;
         m_maxWidth = std::max(1, maxWidth);
         m_maxHeight = std::max(1, maxHeight);
+    }
+
+    void releaseGpuResources() {
+#ifdef NXUI_BACKEND_DEKO3D
+        if (m_uploadInFlight) {
+            m_uploadFence.wait();
+            m_uploadInFlight = false;
+        }
+
+        if (m_gpu && m_imageMem && m_imageAllocSize > 0)
+            m_gpu->freeImageMemory(m_imageAllocSize);
+
+        // Destroy the command buffer before its backing memory.
+        m_uploadCmd = nullptr;
+        m_uploadCmdMem = nullptr;
+        m_stagingMem = nullptr;
+        m_imageMem = nullptr;
+        m_imageAllocSize = 0;
+        m_stagingCapacity = 0;
+#endif
+        m_prewarmed = false;
+        m_valid = false;
+        m_width = 0;
+        m_height = 0;
     }
 
     bool prewarm(nxui::Renderer& ren) {
@@ -804,13 +843,12 @@ public:
         m_imageAllocSize = maxLayout.getSize();
         m_imageMem = gpu.allocImageMemory(m_imageAllocSize);
         if (!m_imageMem) {
-            DebugLog::log("[home-preview] prewarm failed: image memory");
+            DebugLog::log("[home-preview] prewarm failed: image memory (%dx%d)",
+                          m_maxWidth, m_maxHeight);
             m_imageAllocSize = 0;
             return false;
         }
 
-        // Initialiser une image valide uniquement pour reserver le bloc et le
-        // descriptor. Son contenu n'est jamais dessine avant le premier upload.
         m_image.initialize(maxLayout, m_imageMem, 0);
 
         const uint32_t stagingBytes =
@@ -824,7 +862,9 @@ public:
         m_stagingCapacity = stagingAlloc;
 
         if (!m_stagingMem || !m_stagingMem.getCpuAddr()) {
-            DebugLog::log("[home-preview] prewarm failed: staging memory");
+            DebugLog::log("[home-preview] prewarm failed: staging memory (%dx%d)",
+                          m_maxWidth, m_maxHeight);
+            releaseGpuResources();
             return false;
         }
 
@@ -834,6 +874,7 @@ public:
             .create();
         if (!m_uploadCmdMem) {
             DebugLog::log("[home-preview] prewarm failed: command memory");
+            releaseGpuResources();
             return false;
         }
 
@@ -841,9 +882,14 @@ public:
         m_uploadCmd.addMemory(m_uploadCmdMem, 0, kUploadCmdBytes);
 
         dk::ImageView initialView{m_image};
-        m_descriptorSlot = ren.registerTexture(initialView);
+        if (m_descriptorSlot < 0)
+            m_descriptorSlot = ren.registerTexture(initialView);
+        else
+            ren.updateTexture(m_descriptorSlot, initialView);
+
         if (m_descriptorSlot < 0) {
             DebugLog::log("[home-preview] prewarm failed: descriptor pool");
+            releaseGpuResources();
             return false;
         }
 #else
@@ -868,10 +914,6 @@ public:
 #ifdef NXUI_BACKEND_DEKO3D
         nxui::GpuDevice& gpu = ren.gpu();
 
-        // Cette attente ne concerne QUE le precedent upload de CE buffer.
-        // Le buffer est reutilise apres plusieurs frames de retraite et le
-        // debounce court, donc la fence est normalement deja signalee.
-        // Aucun queue.waitIdle() global n'est utilise.
         if (m_uploadInFlight) {
             m_uploadFence.wait();
             m_uploadInFlight = false;
@@ -891,7 +933,6 @@ public:
         if (bytes > m_stagingCapacity)
             return false;
 
-        // Le bloc image reste le meme : aucune liberation/reallocation GPU.
         m_image.initialize(layout, m_imageMem, 0);
         std::memcpy(m_stagingMem.getCpuAddr(), rgba, bytes);
 
@@ -909,9 +950,6 @@ public:
         );
         m_uploadCmd.signalFence(m_uploadFence);
 
-        // Soumission sur la meme queue avant la command-list de la frame.
-        // L'ordre de queue garantit que la copie termine avant l'echantillonnage
-        // de cette texture, sans bloquer le CPU.
         dk::Queue queue = gpu.queue();
         queue.submitCommands(m_uploadCmd.finishList());
         m_uploadInFlight = true;
@@ -932,6 +970,7 @@ public:
     }
 
     bool valid() const { return m_valid; }
+    bool prewarmed() const { return m_prewarmed; }
     int width() const { return m_width; }
     int height() const { return m_height; }
 
@@ -988,6 +1027,8 @@ private:
     dk::Fence m_uploadFence;
     bool m_uploadInFlight = false;
 
+    // Keep descriptor slots across lock/unlock cycles: Renderer has no
+    // unregister API, so the existing slot is updated when memory returns.
     int m_descriptorSlot = -1;
 #else
     nxui::Texture m_sdlTexture;
@@ -998,6 +1039,7 @@ private:
 
 struct WaraPreviewRuntime {
     nxui::ThreadPool loader{1};
+    nxui::GpuDevice* gpu = nullptr;
     std::future<void> decodeFuture;
     std::shared_ptr<DecodedPreview> decoding;
     std::shared_ptr<DecodedPreview> ready;
@@ -1036,11 +1078,13 @@ struct WaraPreviewRuntime {
     float videoTargetOpacity = 0.f;
     bool videoHasCurrent = false;
 
-    PreviewStreamTexture videoTextures[3];
+    PreviewStreamTexture videoTextures[2];
     int videoCurrentIndex = 0;
-    uint64_t videoSlotSafeAfterFrame[3] = {0, 0, 0};
+    uint64_t videoSlotSafeAfterFrame[2] = {0, 0};
     bool videoPrewarmAttempted = false;
     bool videoPrewarmOk = false;
+    bool videoFallbackRequired = false;
+    bool videoDisabledLogged = false;
 #endif
 };
 
@@ -1091,6 +1135,14 @@ void scheduleDecodeIfNeeded(WaraPreviewRuntime& r) {
         r.stableTimer < kPreviewDebounce)
         return;
 
+#ifdef SWITCHU_V81_FFMPEG
+    // Static JPG/PNG becomes a fallback instead of being decoded in parallel
+    // with a valid MP4. This is a major memory reduction on the HOME.
+    if (r.videoRequestedTitle == r.requestedTitle &&
+        !r.videoFallbackRequired)
+        return;
+#endif
+
     r.decoding = std::make_shared<DecodedPreview>();
     r.decoding->titleId = r.requestedTitle;
     const auto job = r.decoding;
@@ -1111,6 +1163,29 @@ void scheduleVideoIfNeeded(WaraPreviewRuntime& r) {
         r.stableTimer < kPreviewDebounce)
         return;
 
+    if (!videoPlaybackEnabled()) {
+        r.videoDecoder.cancel();
+        r.videoRequestedTitle = r.requestedTitle;
+        r.videoFallbackRequired = true;
+        if (!r.videoDisabledLogged) {
+            r.videoDisabledLogged = true;
+            DebugLog::log("[home-video] disabled by %s", kVideoDisabledFlag);
+        }
+        return;
+    }
+
+    r.videoDisabledLogged = false;
+
+    if (videoPathFor(r.requestedTitle).empty()) {
+        r.videoDecoder.cancel();
+        r.videoRequestedTitle = r.requestedTitle;
+        r.videoFallbackRequired = true;
+        DebugLog::log("[home-video] no preview.mp4 for %016llX",
+                      static_cast<unsigned long long>(r.requestedTitle));
+        return;
+    }
+
+    r.videoFallbackRequired = false;
     r.videoRequestedTitle = r.requestedTitle;
     r.videoStatusLoggedTitle = 0;
     r.videoStatusLogged = VideoDecodeStatus::Idle;
@@ -1130,9 +1205,11 @@ void pollVideoStatus(WaraPreviewRuntime& r) {
     r.videoStatusLogged = status;
 
     if (status == VideoDecodeStatus::NoFile) {
+        r.videoFallbackRequired = true;
         DebugLog::log("[home-video] no preview.mp4 for %016llX",
                       static_cast<unsigned long long>(title));
     } else if (status == VideoDecodeStatus::Failed) {
+        r.videoFallbackRequired = true;
         DebugLog::log("[home-video] decode failed %016llX -> static/theme fallback",
                       static_cast<unsigned long long>(title));
     }
@@ -1155,6 +1232,25 @@ void processReadyFallback(WaraPreviewRuntime& r) {
     const uint64_t title = r.ready->titleId;
     const bool hadAsset = r.ready->hasAsset;
     r.ready.reset();
+
+#ifdef SWITCHU_V81_FFMPEG
+    // If both MP4 and static fallback are unavailable, do not leave the
+    // previous game's video pool resident behind the theme background.
+    if (r.videoFallbackRequired &&
+        r.gpu &&
+        (r.videoPrewarmOk || r.videoHasCurrent)) {
+        r.gpu->waitIdle();
+        for (auto& texture : r.videoTextures)
+            texture.releaseGpuResources();
+        r.videoPrewarmAttempted = false;
+        r.videoPrewarmOk = false;
+        r.videoHasCurrent = false;
+        r.videoCurrentTitle = 0;
+        r.videoOpacity = 0.f;
+        r.videoTargetOpacity = 0.f;
+        DebugLog::log("[home-video] fallback has no static asset; GPU memory released");
+    }
+#endif
 
     r.transitionTargetTitle = title;
     r.nextAvailable = false;
@@ -1180,6 +1276,84 @@ void WaraWaraBackground::notifySelectedGame(uint64_t titleId) {
         g_selectedGameTitle.store(titleId, std::memory_order_relaxed);
 }
 
+void WaraWaraBackground::setPreviewActive(bool active) {
+    if (m_previewActive == active)
+        return;
+
+    m_previewActive = active;
+
+    if (!m_previewRuntime) {
+        if (active)
+            g_forceVideo720Profile.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    WaraPreviewRuntime& r = *m_previewRuntime;
+
+    if (!active) {
+#ifdef SWITCHU_V81_FFMPEG
+        r.videoDecoder.cancel();
+#endif
+
+        // This transition occurs once when the lockscreen takes ownership of
+        // the screen. Waiting here is intentional: afterwards the lockscreen
+        // gets a clean GPU budget and no HOME texture remains in flight.
+        if (r.gpu)
+            r.gpu->waitIdle();
+
+        for (auto& texture : r.textures)
+            texture.releaseGpuResources();
+
+#ifdef SWITCHU_V81_FFMPEG
+        for (auto& texture : r.videoTextures)
+            texture.releaseGpuResources();
+#endif
+
+        r.ready.reset();
+        r.decoding.reset();
+        r.requestedTitle = 0;
+        r.resolvedTitle = 0;
+        r.transitionTargetTitle = 0;
+        r.nextTitle = 0;
+        r.stableTimer = 0.f;
+        r.fade = 0.f;
+        r.transitioning = false;
+        r.currentAvailable = false;
+        r.nextAvailable = false;
+        r.currentIndex = 0;
+        r.nextIndex = 1;
+        r.prewarmAttempted = false;
+        r.prewarmOk = false;
+
+#ifdef SWITCHU_V81_FFMPEG
+        r.videoRequestedTitle = 0;
+        r.videoCurrentTitle = 0;
+        r.videoStatusLoggedTitle = 0;
+        r.videoStatusLogged = VideoDecodeStatus::Idle;
+        r.videoPendingFrame.reset();
+        r.videoFrameTimer = 0.f;
+        r.videoOpacity = 0.f;
+        r.videoTargetOpacity = 0.f;
+        r.videoHasCurrent = false;
+        r.videoCurrentIndex = 0;
+        r.videoPrewarmAttempted = false;
+        r.videoPrewarmOk = false;
+        r.videoFallbackRequired = false;
+#endif
+
+        DebugLog::log("[home-preview] suspended for lockscreen; GPU preview memory released");
+        return;
+    }
+
+    // Give a new HOME session one clean chance to use the optional stress
+    // profile. If it cannot fit, onRender falls back to 720p automatically.
+    g_forceVideo720Profile.store(false, std::memory_order_relaxed);
+    r.requestedTitle = 0;
+    r.resolvedTitle = 0;
+    r.stableTimer = 0.f;
+    DebugLog::log("[home-preview] resumed after lockscreen");
+}
+
 void WaraWaraBackground::onUpdate(float dt) {
     // Fond historique conserve a l'identique.
     m_time += dt;
@@ -1202,6 +1376,9 @@ void WaraWaraBackground::onUpdate(float dt) {
         }
         s.rotation += s.rotSpeed * dt;
     }
+
+    if (!m_previewActive)
+        return;
 
     auto runtime = ensureRuntime(m_previewRuntime);
     WaraPreviewRuntime& r = *runtime;
@@ -1226,6 +1403,8 @@ void WaraWaraBackground::onUpdate(float dt) {
         r.videoPendingFrame.reset();
         r.videoTargetOpacity = 0.f;
         r.videoFrameTimer = 0.f;
+        r.videoFallbackRequired = !videoPlaybackEnabled();
+        r.videoPrewarmAttempted = false;
 #endif
 
         DebugLog::log("[home-preview] focus -> %016llX",
@@ -1344,44 +1523,159 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
     ren.flush();
 
+    if (!m_previewActive)
+        return;
+
     auto runtime = ensureRuntime(m_previewRuntime);
     WaraPreviewRuntime& r = *runtime;
 
-    // Preallocation une seule fois au chargement du HOME. Cela retire du chemin
-    // critique de selection les allocations image/staging/descriptor.
-    if (!r.prewarmAttempted) {
-        r.prewarmAttempted = true;
-        r.prewarmOk = r.textures[0].prewarm(ren) &&
-                      r.textures[1].prewarm(ren);
-        DebugLog::log("[home-preview] async GPU prewarm %s",
-                      r.prewarmOk ? "ok" : "failed");
-    }
+    r.gpu = &ren.gpu();
 
 #ifdef SWITCHU_V81_FFMPEG
-    if (!r.videoPrewarmAttempted) {
+    // Allocate video resources only for a title that actually owns preview.mp4.
+    if (r.videoRequestedTitle == r.requestedTitle &&
+        r.videoRequestedTitle != 0 &&
+        !r.videoFallbackRequired &&
+        !r.videoPrewarmAttempted) {
+
         r.videoPrewarmAttempted = true;
-        const bool stress1080p60 = videoStress1080p60Enabled();
-        const int capacityW = stress1080p60
+
+        // A video title does not need the two static 720p textures resident.
+        if (r.prewarmOk || r.currentAvailable || r.nextAvailable) {
+            ren.gpu().waitIdle();
+            for (auto& texture : r.textures)
+                texture.releaseGpuResources();
+            r.prewarmAttempted = false;
+            r.prewarmOk = false;
+            r.currentAvailable = false;
+            r.nextAvailable = false;
+            r.transitioning = false;
+            r.transitionTargetTitle = 0;
+            r.nextTitle = 0;
+            r.fade = 0.f;
+            r.ready.reset();
+            DebugLog::log("[home-preview] static GPU textures released for video");
+        }
+
+        const bool requestedStress = videoStress1080p60Enabled();
+        int capacityW = requestedStress
             ? kVideoStressMaxWidth
             : kVideoDefaultMaxWidth;
-        const int capacityH = stress1080p60
+        int capacityH = requestedStress
             ? kVideoStressMaxHeight
             : kVideoDefaultMaxHeight;
+
         for (auto& texture : r.videoTextures)
             texture.configureCapacity(capacityW, capacityH);
+
         r.videoPrewarmOk =
             r.videoTextures[0].prewarm(ren) &&
-            r.videoTextures[1].prewarm(ren) &&
-            r.videoTextures[2].prewarm(ren);
+            r.videoTextures[1].prewarm(ren);
+
         DebugLog::log(
-            "[home-video] GPU stream prewarm %s profile=%s capacity=%dx%d",
+            "[home-video] GPU stream prewarm %s profile=%s capacity=%dx%d imageUsed=%llu",
             r.videoPrewarmOk ? "ok" : "failed",
-            stress1080p60 ? "STRESS_1080P60" : "QUALITY_720P30",
+            requestedStress ? "STRESS_1080P60" : "QUALITY_720P30",
             capacityW,
-            capacityH
+            capacityH,
+            static_cast<unsigned long long>(previewImageMemoryUsed(ren))
         );
+
+        if (!r.videoPrewarmOk && requestedStress) {
+            // The stress profile must never break the normal reader. Release
+            // every partial 1080p allocation before retrying a smaller pool.
+            ren.gpu().waitIdle();
+            for (auto& texture : r.videoTextures)
+                texture.releaseGpuResources();
+
+            g_forceVideo720Profile.store(true, std::memory_order_relaxed);
+            capacityW = kVideoDefaultMaxWidth;
+            capacityH = kVideoDefaultMaxHeight;
+
+            for (auto& texture : r.videoTextures)
+                texture.configureCapacity(capacityW, capacityH);
+
+            r.videoPrewarmOk =
+                r.videoTextures[0].prewarm(ren) &&
+                r.videoTextures[1].prewarm(ren);
+
+            DebugLog::log(
+                "[home-video] 1080p60 memory fallback -> 720p30 %s imageUsed=%llu",
+                r.videoPrewarmOk ? "ok" : "failed",
+                static_cast<unsigned long long>(previewImageMemoryUsed(ren))
+            );
+
+            if (r.videoPrewarmOk) {
+                // Decoder may already have produced a 1080p frame. Restart it
+                // after forcing the 720p profile so the pending frame fits.
+                r.videoDecoder.cancel();
+                r.videoPendingFrame.reset();
+                r.videoCurrentTitle = 0;
+                r.videoHasCurrent = false;
+                r.videoOpacity = 0.f;
+                r.videoTargetOpacity = 0.f;
+                r.videoDecoder.request(r.requestedTitle);
+                r.videoRequestedTitle = r.requestedTitle;
+            }
+        }
+
+        if (!r.videoPrewarmOk) {
+            ren.gpu().waitIdle();
+            for (auto& texture : r.videoTextures)
+                texture.releaseGpuResources();
+            r.videoDecoder.cancel();
+            r.videoPendingFrame.reset();
+            // Remember that this title already attempted video; otherwise the
+            // next update would immediately retry the same failed allocation.
+            r.videoRequestedTitle = r.requestedTitle;
+            r.videoFallbackRequired = true;
+            DebugLog::log(
+                "[home-video] 720p GPU allocation failed -> static/theme fallback"
+            );
+        }
     }
 #endif
+
+    // Static preview GPU memory is also lazy. It exists only when the selected
+    // title needs JPG/PNG fallback, never permanently beside video memory.
+    if (r.ready &&
+        r.ready->titleId == r.requestedTitle &&
+        r.ready->hasAsset &&
+        r.ready->decoded &&
+        !r.prewarmAttempted) {
+
+#ifdef SWITCHU_V81_FFMPEG
+        if (r.videoPrewarmOk || r.videoHasCurrent) {
+            ren.gpu().waitIdle();
+            for (auto& texture : r.videoTextures)
+                texture.releaseGpuResources();
+            r.videoPrewarmAttempted = false;
+            r.videoPrewarmOk = false;
+            r.videoHasCurrent = false;
+            r.videoCurrentTitle = 0;
+            r.videoOpacity = 0.f;
+            r.videoTargetOpacity = 0.f;
+            DebugLog::log("[home-video] GPU textures released for static fallback");
+        }
+#endif
+
+        r.prewarmAttempted = true;
+        r.prewarmOk =
+            r.textures[0].prewarm(ren) &&
+            r.textures[1].prewarm(ren);
+
+        if (!r.prewarmOk) {
+            ren.gpu().waitIdle();
+            for (auto& texture : r.textures)
+                texture.releaseGpuResources();
+        }
+
+        DebugLog::log(
+            "[home-preview] lazy static GPU prewarm %s imageUsed=%llu",
+            r.prewarmOk ? "ok" : "failed",
+            static_cast<unsigned long long>(previewImageMemoryUsed(ren))
+        );
+    }
 
     // Le worker a fini : seule la copie RGBA -> staging et la soumission GPU
     // restent ici. Aucun fichier, aucun JPEG/PNG decode, aucun waitIdle global.
@@ -1432,7 +1726,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         r.videoPendingFrame->titleId == r.requestedTitle) {
 
         int uploadIndex = -1;
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 2; ++i) {
             if (r.videoHasCurrent && i == r.videoCurrentIndex)
                 continue;
             if (r.frameCounter >= r.videoSlotSafeAfterFrame[i]) {
@@ -1459,7 +1753,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
                     !r.videoHasCurrent || r.videoCurrentTitle != frame->titleId;
                 if (r.videoHasCurrent && uploadIndex != r.videoCurrentIndex) {
                     r.videoSlotSafeAfterFrame[r.videoCurrentIndex] =
-                        r.frameCounter + kGpuRetireFrames;
+                        r.frameCounter + kVideoGpuRetireFrames;
                 }
                 r.videoCurrentIndex = uploadIndex;
                 r.videoCurrentTitle = frame->titleId;
@@ -1538,9 +1832,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // V9 : traitement visuel proche de la reference. La video reste lisible
     // en haut, prend une tres legere teinte violet/rose puis disparait dans
     // un socle anthracite opaque. Le filtre ne modifie jamais le MP4 source.
-    const nxui::Color lowerBase(0.050f, 0.050f, 0.058f, 1.f);
-    const float fadeStartY = area.y + area.height * 0.43f;
-    const float solidStartY = area.y + area.height * 0.74f;
+    const nxui::Color lowerBase(0.067f, 0.067f, 0.075f, 1.f);
+    const float fadeStartY = area.y + area.height * 0.42f;
+    const float solidStartY = area.y + area.height * 0.66f;
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
     if (previewVisualAlpha > 0.001f) {

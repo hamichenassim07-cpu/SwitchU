@@ -1,5 +1,6 @@
 #include "DateTimeWidget.hpp"
 #include <nxui/core/Renderer.hpp>
+#include <nxui/core/I18n.hpp>
 #include <algorithm>
 #include <ctime>
 #include <cstdio>
@@ -165,6 +166,60 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         dateFont,
         secondary.withAlpha(0.48f * m_opacity),
         kDateScale
+    );
+
+    // V9 top navigation scaffold, visually matching the reference. "Jeux" is
+    // the active HOME section; Applications is kept subtle until its filtering
+    // logic is wired in a later pass.
+    const nxui::Rect navRect {455.f, 18.f, 370.f, 48.f};
+    const nxui::Rect activeRect {461.f, 24.f, 146.f, 36.f};
+
+    ren.drawRoundedRect(
+        navRect,
+        nxui::Color(0.035f, 0.032f, 0.045f, 0.52f * m_opacity),
+        24.f
+    );
+    ren.drawRoundedRectOutline(
+        navRect,
+        nxui::Color(1.f, 1.f, 1.f, 0.12f * m_opacity),
+        24.f,
+        1.f
+    );
+    ren.drawRoundedRect(
+        activeRect,
+        nxui::Color(0.94f, 0.94f, 0.96f, 0.96f * m_opacity),
+        18.f
+    );
+
+    auto& i18n = nxui::I18n::instance();
+    const std::string games =
+        i18n.tr("home.tabs.games", "Jeux");
+    const std::string apps =
+        i18n.tr("home.tabs.apps", "Applications");
+
+    const nxui::Vec2 gamesSz = dateFont->measure(games);
+    const nxui::Vec2 appsSz = dateFont->measure(apps);
+
+    ren.drawText(
+        games,
+        {activeRect.x + (activeRect.width - gamesSz.x) * 0.5f,
+         activeRect.y + (activeRect.height - gamesSz.y) * 0.5f},
+        dateFont,
+        nxui::Color(0.08f, 0.075f, 0.10f, m_opacity),
+        1.f
+    );
+
+    const float appsCenterX =
+        activeRect.x + activeRect.width +
+        (navRect.x + navRect.width - activeRect.x - activeRect.width) * 0.5f;
+
+    ren.drawText(
+        apps,
+        {appsCenterX - appsSz.x * 0.5f,
+         navRect.y + (navRect.height - appsSz.y) * 0.5f},
+        dateFont,
+        nxui::Color(0.95f, 0.94f, 0.98f, 0.72f * m_opacity),
+        1.f
     );
 }
 

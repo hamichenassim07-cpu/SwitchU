@@ -52,6 +52,11 @@ void WiiUMenuApp::setStartupStatus(
 #endif
 
 void WiiUMenuApp::handleLockScreen(float dt) {
+    // V9 memory ownership: while the lockscreen is visible the HOME preview
+    // engine must own zero video/static preview textures.
+    if (m_background)
+        m_background->setPreviewActive(false);
+
     m_lockScreenPulse += dt;
     m_lockScreenReveal = std::min(1.f, m_lockScreenReveal + dt / 0.48f);
     m_lockPressFlash = std::max(0.f, m_lockPressFlash - dt * 2.8f);
@@ -159,6 +164,8 @@ void WiiUMenuApp::handleLockScreen(float dt) {
             }
 
             m_lockScreenActive = false;
+            if (m_background)
+                m_background->setPreviewActive(true);
             m_lockScreenUnlocking = false;
             m_lockPressCount = 0;
             m_lockPressResetTimer = 0.f;
@@ -226,6 +233,8 @@ void WiiUMenuApp::handleSystemAction(SysAction a) {
         }
 
         m_lockScreenActive = false;
+        if (m_background)
+            m_background->setPreviewActive(true);
         m_lockScreenUnlocking = false;
         m_lockScreenOpacity = 0.f;
         m_lockScreenReveal = 0.f;
@@ -319,6 +328,8 @@ void WiiUMenuApp::handleSystemAction(SysAction a) {
                     : "HOME",
                 m_launcher.suspendedTitleId()
             );
+            if (m_background)
+                m_background->setPreviewActive(false);
             showLockScreen();
             break;
         }
