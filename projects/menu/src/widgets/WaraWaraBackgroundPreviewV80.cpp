@@ -1,9 +1,9 @@
-// Switch U HOME V8.0A.2 - backgrounds contextuels asynchrones.
+// Switch U HOME V8.1 - preview MP4 H.264 asynchrone.
 //
-// Objectif : aucune lecture SD, aucun decodage JPEG/PNG et aucun waitIdle()
-// dans le thread de rendu. Le CPU decode sur un worker. Sur deko3d, l'upload
-// utilise une commande GPU dediee soumise sans attendre la fin de la queue.
-// Deux textures persistantes sont alternees pour les fondus.
+// La base V8.0A.2 reste intacte pour les backgrounds statiques. V8.1 ajoute
+// un decodeur MP4 dans un thread dedie, une petite file de frames CPU et trois
+// textures GPU persistantes. Le thread HOME ne lit ni ne decode la video et
+// ne fait aucun queue.waitIdle() pour une frame de preview.
 #define SWITCHU_V80_BACKGROUND_STRONG 1
 #include "WaraWaraBackground.hpp"
 #include "core/DebugLog.hpp"
@@ -14,24 +14,44 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
+
+#ifdef SWITCHU_V81_FFMPEG
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/pixfmt.h>
+#include <libswscale/swscale.h>
+}
+#endif
 
 namespace {
 
 std::atomic<uint64_t> g_selectedGameTitle{0};
 
-constexpr float kPreviewDebounce = 0.35f;
+constexpr float kPreviewDebounce = 0.12f;
 constexpr float kPreviewFadeDuration = 0.32f;
 constexpr int kPreviewMaxWidth = 1280;
 constexpr int kPreviewMaxHeight = 720;
+constexpr int kVideoMaxWidth = 640;
+constexpr int kVideoMaxHeight = 360;
+constexpr float kVideoMaxFps = 30.f;
+constexpr float kVideoFadeInDuration = 0.26f;
+constexpr float kVideoFadeOutDuration = 0.15f;
 constexpr uint64_t kGpuRetireFrames = 3;
 
 float random01V80() {
@@ -75,6 +95,25 @@ std::string previewPathFor(uint64_t titleId) {
         root + tid + ".jpg",
         root + tid + ".jpeg",
         root + tid + ".png",
+    };
+
+    for (const auto& candidate : candidates) {
+        if (fileExists(candidate))
+            return candidate;
+    }
+    return {};
+}
+
+std::string videoPathFor(uint64_t titleId) {
+    if (titleId == 0)
+        return {};
+
+    const std::string tid = titleIdHex(titleId);
+    const std::string root = "sdmc:/config/SwitchU/game_previews/";
+    const std::string folder = root + tid + "/";
+    const std::string candidates[] = {
+        folder + "preview.mp4",
+        root + tid + ".mp4",
     };
 
     for (const auto& candidate : candidates) {
@@ -183,6 +222,463 @@ void decodePreviewOnWorker(const std::shared_ptr<DecodedPreview>& out) {
     out->decoded = !out->rgba.empty();
 }
 
+#ifdef SWITCHU_V81_FFMPEG
+
+enum class VideoDecodeStatus : int {
+    Idle = 0,
+    Opening,
+    Playing,
+    NoFile,
+    Failed,
+};
+
+struct DecodedVideoFrame {
+    uint64_t serial = 0;
+    uint64_t titleId = 0;
+    std::vector<uint8_t> rgba;
+    int width = 0;
+    int height = 0;
+    float duration = 1.f / 24.f;
+};
+
+class Mp4PreviewDecoder {
+public:
+    Mp4PreviewDecoder() : m_worker([this]() { workerLoop(); }) {}
+
+    Mp4PreviewDecoder(const Mp4PreviewDecoder&) = delete;
+    Mp4PreviewDecoder& operator=(const Mp4PreviewDecoder&) = delete;
+
+    ~Mp4PreviewDecoder() {
+        m_stop.store(true, std::memory_order_release);
+        m_serial.fetch_add(1, std::memory_order_acq_rel);
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            m_hasRequest = false;
+            m_frames.clear();
+        }
+        m_cv.notify_all();
+        if (m_worker.joinable())
+            m_worker.join();
+    }
+
+    uint64_t request(uint64_t titleId) {
+        const uint64_t serial = m_serial.fetch_add(1, std::memory_order_acq_rel) + 1;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            m_requestSerial = serial;
+            m_requestTitle = titleId;
+            m_hasRequest = true;
+            m_frames.clear();
+        }
+        m_statusTitle.store(titleId, std::memory_order_release);
+        m_status.store(static_cast<int>(VideoDecodeStatus::Opening),
+                       std::memory_order_release);
+        m_cv.notify_all();
+        return serial;
+    }
+
+    void cancel() {
+        m_serial.fetch_add(1, std::memory_order_acq_rel);
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            m_hasRequest = false;
+            m_frames.clear();
+        }
+        m_statusTitle.store(0, std::memory_order_release);
+        m_status.store(static_cast<int>(VideoDecodeStatus::Idle),
+                       std::memory_order_release);
+        m_cv.notify_all();
+    }
+
+    bool popFrame(uint64_t titleId, std::shared_ptr<DecodedVideoFrame>& out) {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        while (!m_frames.empty() && m_frames.front()->titleId != titleId)
+            m_frames.pop_front();
+        if (m_frames.empty())
+            return false;
+        out = std::move(m_frames.front());
+        m_frames.pop_front();
+        m_cv.notify_all();
+        return static_cast<bool>(out);
+    }
+
+    VideoDecodeStatus status() const {
+        return static_cast<VideoDecodeStatus>(
+            m_status.load(std::memory_order_acquire));
+    }
+
+    uint64_t statusTitle() const {
+        return m_statusTitle.load(std::memory_order_acquire);
+    }
+
+private:
+    bool isCurrent(uint64_t serial) const {
+        return !m_stop.load(std::memory_order_acquire) &&
+               m_serial.load(std::memory_order_acquire) == serial;
+    }
+
+    void setStatusIfCurrent(uint64_t serial,
+                            uint64_t titleId,
+                            VideoDecodeStatus status) {
+        if (!isCurrent(serial))
+            return;
+        m_statusTitle.store(titleId, std::memory_order_release);
+        m_status.store(static_cast<int>(status), std::memory_order_release);
+    }
+
+    bool enqueueFrame(uint64_t serial,
+                      const std::shared_ptr<DecodedVideoFrame>& frame) {
+        std::unique_lock<std::mutex> lk(m_mutex);
+        m_cv.wait(lk, [&]() {
+            return m_stop.load(std::memory_order_acquire) ||
+                   m_serial.load(std::memory_order_acquire) != serial ||
+                   m_frames.size() < 3;
+        });
+
+        if (!isCurrent(serial))
+            return false;
+
+        m_frames.push_back(frame);
+        lk.unlock();
+        m_cv.notify_all();
+        return true;
+    }
+
+    bool openDecoder(AVFormatContext* format,
+                     int streamIndex,
+                     const AVCodec* decoder,
+                     bool hardware,
+                     AVCodecContext*& codec,
+                     AVBufferRef*& hwDevice) {
+        if (!format || streamIndex < 0 || !decoder)
+            return false;
+
+        codec = avcodec_alloc_context3(decoder);
+        if (!codec)
+            return false;
+
+        AVStream* stream = format->streams[streamIndex];
+        if (avcodec_parameters_to_context(codec, stream->codecpar) < 0) {
+            avcodec_free_context(&codec);
+            return false;
+        }
+
+        codec->thread_count = hardware ? 1 : 2;
+        codec->thread_type = hardware ? FF_THREAD_FRAME : FF_THREAD_SLICE;
+
+        if (hardware) {
+            const int hwResult = av_hwdevice_ctx_create(
+                &hwDevice,
+                AV_HWDEVICE_TYPE_NVTEGRA,
+                nullptr,
+                nullptr,
+                0
+            );
+            if (hwResult < 0 || !hwDevice) {
+                if (hwDevice)
+                    av_buffer_unref(&hwDevice);
+                avcodec_free_context(&codec);
+                return false;
+            }
+
+            codec->hw_device_ctx = av_buffer_ref(hwDevice);
+            if (!codec->hw_device_ctx) {
+                av_buffer_unref(&hwDevice);
+                avcodec_free_context(&codec);
+                return false;
+            }
+
+            // Le port devkitPro FFmpeg expose le pixel format NVTEGRA.
+            // C'est aussi le chemin utilise par les lecteurs Deko3D Switch.
+            codec->pix_fmt = AV_PIX_FMT_NVTEGRA;
+        }
+
+        const int openResult = avcodec_open2(codec, decoder, nullptr);
+        if (openResult < 0) {
+            avcodec_free_context(&codec);
+            if (hwDevice)
+                av_buffer_unref(&hwDevice);
+            return false;
+        }
+        return true;
+    }
+
+    void decodeRequest(uint64_t serial, uint64_t titleId) {
+        const std::string path = videoPathFor(titleId);
+        if (path.empty()) {
+            setStatusIfCurrent(serial, titleId, VideoDecodeStatus::NoFile);
+            return;
+        }
+
+        AVFormatContext* format = nullptr;
+        AVCodecContext* codec = nullptr;
+        AVBufferRef* hwDevice = nullptr;
+        AVPacket* packet = nullptr;
+        AVFrame* decoded = nullptr;
+        AVFrame* transferred = nullptr;
+        SwsContext* sws = nullptr;
+
+        auto cleanup = [&]() {
+            if (sws)
+                sws_freeContext(sws);
+            if (transferred)
+                av_frame_free(&transferred);
+            if (decoded)
+                av_frame_free(&decoded);
+            if (packet)
+                av_packet_free(&packet);
+            if (codec)
+                avcodec_free_context(&codec);
+            if (hwDevice)
+                av_buffer_unref(&hwDevice);
+            if (format)
+                avformat_close_input(&format);
+        };
+
+        int result = avformat_open_input(&format, path.c_str(), nullptr, nullptr);
+        if (result < 0 || !format) {
+            cleanup();
+            setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
+            return;
+        }
+
+        result = avformat_find_stream_info(format, nullptr);
+        if (result < 0) {
+            cleanup();
+            setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
+            return;
+        }
+
+        const AVCodec* decoder = nullptr;
+        const int streamIndex = av_find_best_stream(
+            format, AVMEDIA_TYPE_VIDEO, -1, -1, &decoder, 0);
+        if (streamIndex < 0 || !decoder) {
+            cleanup();
+            setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
+            return;
+        }
+
+        AVStream* stream = format->streams[streamIndex];
+        if (!stream || stream->codecpar->codec_id != AV_CODEC_ID_H264) {
+            cleanup();
+            setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
+            return;
+        }
+
+        bool hardware = openDecoder(format, streamIndex, decoder,
+                                    true, codec, hwDevice);
+        if (!hardware) {
+            if (codec)
+                avcodec_free_context(&codec);
+            if (hwDevice)
+                av_buffer_unref(&hwDevice);
+            if (!openDecoder(format, streamIndex, decoder,
+                             false, codec, hwDevice)) {
+                cleanup();
+                setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
+                return;
+            }
+        }
+
+        packet = av_packet_alloc();
+        decoded = av_frame_alloc();
+        transferred = av_frame_alloc();
+        if (!packet || !decoded || !transferred) {
+            cleanup();
+            setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
+            return;
+        }
+
+        AVRational guessedRate = av_guess_frame_rate(format, stream, nullptr);
+        double sourceFps = 24.0;
+        if (guessedRate.num > 0 && guessedRate.den > 0) {
+            const double guessed = av_q2d(guessedRate);
+            if (guessed > 1.0 && guessed < 240.0)
+                sourceFps = guessed;
+        }
+        const double outputFps = std::clamp(sourceFps, 1.0,
+                                             static_cast<double>(kVideoMaxFps));
+        const float outputDuration = static_cast<float>(1.0 / outputFps);
+        double sampleAccumulator = 0.0;
+
+        (void)hardware;
+        setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Playing);
+
+        auto processDecodedFrame = [&](AVFrame* input) -> bool {
+            sampleAccumulator += outputFps;
+            if (sampleAccumulator + 0.0001 < sourceFps) {
+                av_frame_unref(input);
+                return true;
+            }
+            sampleAccumulator -= sourceFps;
+
+            AVFrame* source = input;
+            av_frame_unref(transferred);
+            if (input->format == AV_PIX_FMT_NVTEGRA) {
+                const int transferResult =
+                    av_hwframe_transfer_data(transferred, input, 0);
+                if (transferResult < 0) {
+                    av_frame_unref(input);
+                    return true;
+                }
+                source = transferred;
+            }
+
+            const int sourceW = source->width > 0 ? source->width : codec->width;
+            const int sourceH = source->height > 0 ? source->height : codec->height;
+            if (sourceW <= 0 || sourceH <= 0) {
+                av_frame_unref(input);
+                return true;
+            }
+
+            const float sx = static_cast<float>(kVideoMaxWidth) /
+                             static_cast<float>(sourceW);
+            const float sy = static_cast<float>(kVideoMaxHeight) /
+                             static_cast<float>(sourceH);
+            const float scale = std::min(1.f, std::min(sx, sy));
+            const int outW = std::max(
+                1, static_cast<int>(std::floor(sourceW * scale + 0.5f)));
+            const int outH = std::max(
+                1, static_cast<int>(std::floor(sourceH * scale + 0.5f)));
+
+            sws = sws_getCachedContext(
+                sws,
+                sourceW,
+                sourceH,
+                static_cast<AVPixelFormat>(source->format),
+                outW,
+                outH,
+                AV_PIX_FMT_RGBA,
+                SWS_BILINEAR,
+                nullptr,
+                nullptr,
+                nullptr
+            );
+            if (!sws) {
+                av_frame_unref(input);
+                return true;
+            }
+
+            auto frame = std::make_shared<DecodedVideoFrame>();
+            frame->serial = serial;
+            frame->titleId = titleId;
+            frame->width = outW;
+            frame->height = outH;
+            frame->duration = outputDuration;
+            frame->rgba.resize(
+                static_cast<size_t>(outW) * static_cast<size_t>(outH) * 4u);
+
+            uint8_t* dstData[4] = {frame->rgba.data(), nullptr, nullptr, nullptr};
+            int dstStride[4] = {outW * 4, 0, 0, 0};
+            const int scaled = sws_scale(
+                sws,
+                source->data,
+                source->linesize,
+                0,
+                sourceH,
+                dstData,
+                dstStride
+            );
+
+            av_frame_unref(input);
+            if (scaled <= 0)
+                return true;
+
+            return enqueueFrame(serial, frame);
+        };
+
+        while (isCurrent(serial)) {
+            result = av_read_frame(format, packet);
+            if (result < 0) {
+                // Preview = boucle. On repart au debut et on vide les buffers.
+                if (av_seek_frame(format, streamIndex, 0,
+                                  AVSEEK_FLAG_BACKWARD) < 0) {
+                    break;
+                }
+                avcodec_flush_buffers(codec);
+                sampleAccumulator = 0.0;
+                continue;
+            }
+
+            if (packet->stream_index != streamIndex) {
+                av_packet_unref(packet);
+                continue;
+            }
+
+            // FFmpeg peut demander de recevoir une frame avant d'accepter le
+            // paquet suivant. On ne jette donc jamais un paquet sur EAGAIN.
+            while (isCurrent(serial)) {
+                result = avcodec_send_packet(codec, packet);
+                if (result != AVERROR(EAGAIN))
+                    break;
+
+                const int receiveResult = avcodec_receive_frame(codec, decoded);
+                if (receiveResult < 0)
+                    break;
+                if (!processDecodedFrame(decoded)) {
+                    av_packet_unref(packet);
+                    cleanup();
+                    return;
+                }
+            }
+
+            av_packet_unref(packet);
+            if (result < 0 && result != AVERROR(EAGAIN))
+                continue;
+
+            while (isCurrent(serial)) {
+                result = avcodec_receive_frame(codec, decoded);
+                if (result == AVERROR(EAGAIN) || result == AVERROR_EOF)
+                    break;
+                if (result < 0)
+                    break;
+                if (!processDecodedFrame(decoded)) {
+                    cleanup();
+                    return;
+                }
+            }
+        }
+
+        cleanup();
+        if (isCurrent(serial))
+            setStatusIfCurrent(serial, titleId, VideoDecodeStatus::Failed);
+    }
+
+    void workerLoop() {
+        while (!m_stop.load(std::memory_order_acquire)) {
+            uint64_t serial = 0;
+            uint64_t titleId = 0;
+            {
+                std::unique_lock<std::mutex> lk(m_mutex);
+                m_cv.wait(lk, [&]() {
+                    return m_stop.load(std::memory_order_acquire) || m_hasRequest;
+                });
+                if (m_stop.load(std::memory_order_acquire))
+                    return;
+                serial = m_requestSerial;
+                titleId = m_requestTitle;
+                m_hasRequest = false;
+            }
+            decodeRequest(serial, titleId);
+        }
+    }
+
+    std::thread m_worker;
+    std::atomic<bool> m_stop{false};
+    std::atomic<uint64_t> m_serial{1};
+    std::atomic<int> m_status{static_cast<int>(VideoDecodeStatus::Idle)};
+    std::atomic<uint64_t> m_statusTitle{0};
+
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    bool m_hasRequest = false;
+    uint64_t m_requestSerial = 0;
+    uint64_t m_requestTitle = 0;
+    std::deque<std::shared_ptr<DecodedVideoFrame>> m_frames;
+};
+
+#endif // SWITCHU_V81_FFMPEG
+
 class PreviewStreamTexture {
 public:
     PreviewStreamTexture() = default;
@@ -198,6 +694,13 @@ public:
 #endif
     }
 
+    void configureCapacity(int maxWidth, int maxHeight) {
+        if (m_prewarmed)
+            return;
+        m_maxWidth = std::max(1, maxWidth);
+        m_maxHeight = std::max(1, maxHeight);
+    }
+
     bool prewarm(nxui::Renderer& ren) {
         if (m_prewarmed)
             return true;
@@ -210,7 +713,7 @@ public:
         dk::ImageLayoutMaker{gpu.device()}
             .setFlags(0)
             .setFormat(DkImageFormat_RGBA8_Unorm)
-            .setDimensions(kPreviewMaxWidth, kPreviewMaxHeight)
+            .setDimensions(m_maxWidth, m_maxHeight)
             .initialize(maxLayout);
 
         m_imageAllocSize = maxLayout.getSize();
@@ -226,7 +729,7 @@ public:
         m_image.initialize(maxLayout, m_imageMem, 0);
 
         const uint32_t stagingBytes =
-            static_cast<uint32_t>(kPreviewMaxWidth * kPreviewMaxHeight * 4);
+            static_cast<uint32_t>(m_maxWidth * m_maxHeight * 4);
         const uint32_t stagingAlloc =
             (stagingBytes + nxui::kGpuAlign - 1) & ~(nxui::kGpuAlign - 1);
 
@@ -271,7 +774,7 @@ public:
                 int w,
                 int h) {
         if (!rgba || w <= 0 || h <= 0 ||
-            w > kPreviewMaxWidth || h > kPreviewMaxHeight)
+            w > m_maxWidth || h > m_maxHeight)
             return false;
 
         if (!prewarm(ren))
@@ -282,7 +785,7 @@ public:
 
         // Cette attente ne concerne QUE le precedent upload de CE buffer.
         // Le buffer est reutilise apres plusieurs frames de retraite et le
-        // debounce de 350 ms, donc la fence est normalement deja signalee.
+        // debounce court, donc la fence est normalement deja signalee.
         // Aucun queue.waitIdle() global n'est utilise.
         if (m_uploadInFlight) {
             m_uploadFence.wait();
@@ -383,6 +886,8 @@ private:
     bool m_valid = false;
     int m_width = 0;
     int m_height = 0;
+    int m_maxWidth = kPreviewMaxWidth;
+    int m_maxHeight = kPreviewMaxHeight;
 
 #ifdef NXUI_BACKEND_DEKO3D
     nxui::GpuDevice* m_gpu = nullptr;
@@ -433,6 +938,25 @@ struct WaraPreviewRuntime {
 
     bool prewarmAttempted = false;
     bool prewarmOk = false;
+
+#ifdef SWITCHU_V81_FFMPEG
+    Mp4PreviewDecoder videoDecoder;
+    uint64_t videoRequestedTitle = 0;
+    uint64_t videoCurrentTitle = 0;
+    uint64_t videoStatusLoggedTitle = 0;
+    VideoDecodeStatus videoStatusLogged = VideoDecodeStatus::Idle;
+    std::shared_ptr<DecodedVideoFrame> videoPendingFrame;
+    float videoFrameTimer = 0.f;
+    float videoOpacity = 0.f;
+    float videoTargetOpacity = 0.f;
+    bool videoHasCurrent = false;
+
+    PreviewStreamTexture videoTextures[3];
+    int videoCurrentIndex = 0;
+    uint64_t videoSlotSafeAfterFrame[3] = {0, 0, 0};
+    bool videoPrewarmAttempted = false;
+    bool videoPrewarmOk = false;
+#endif
 };
 
 namespace {
@@ -482,7 +1006,6 @@ void scheduleDecodeIfNeeded(WaraPreviewRuntime& r) {
         r.stableTimer < kPreviewDebounce)
         return;
 
-    r.stableTimer = 0.f;
     r.decoding = std::make_shared<DecodedPreview>();
     r.decoding->titleId = r.requestedTitle;
     const auto job = r.decoding;
@@ -495,6 +1018,41 @@ void scheduleDecodeIfNeeded(WaraPreviewRuntime& r) {
     DebugLog::log("[home-preview] async decode start %016llX",
                   static_cast<unsigned long long>(r.requestedTitle));
 }
+
+#ifdef SWITCHU_V81_FFMPEG
+void scheduleVideoIfNeeded(WaraPreviewRuntime& r) {
+    if (r.requestedTitle == 0 ||
+        r.videoRequestedTitle == r.requestedTitle ||
+        r.stableTimer < kPreviewDebounce)
+        return;
+
+    r.videoRequestedTitle = r.requestedTitle;
+    r.videoStatusLoggedTitle = 0;
+    r.videoStatusLogged = VideoDecodeStatus::Idle;
+    r.videoDecoder.request(r.requestedTitle);
+    DebugLog::log("[home-video] request %016llX",
+                  static_cast<unsigned long long>(r.requestedTitle));
+}
+
+void pollVideoStatus(WaraPreviewRuntime& r) {
+    const uint64_t title = r.videoDecoder.statusTitle();
+    const VideoDecodeStatus status = r.videoDecoder.status();
+    if (title == 0 ||
+        (title == r.videoStatusLoggedTitle && status == r.videoStatusLogged))
+        return;
+
+    r.videoStatusLoggedTitle = title;
+    r.videoStatusLogged = status;
+
+    if (status == VideoDecodeStatus::NoFile) {
+        DebugLog::log("[home-video] no preview.mp4 for %016llX",
+                      static_cast<unsigned long long>(title));
+    } else if (status == VideoDecodeStatus::Failed) {
+        DebugLog::log("[home-video] decode failed %016llX -> static/theme fallback",
+                      static_cast<unsigned long long>(title));
+    }
+}
+#endif
 
 void processReadyFallback(WaraPreviewRuntime& r) {
     if (!r.ready || r.transitioning)
@@ -575,6 +1133,16 @@ void WaraWaraBackground::onUpdate(float dt) {
         if (r.ready && r.ready->titleId != selected)
             r.ready.reset();
 
+#ifdef SWITCHU_V81_FFMPEG
+        // On stoppe immediatement le decode de l'ancien jeu. Sa derniere frame
+        // peut rester visible pendant un tres court fondu de sortie.
+        r.videoDecoder.cancel();
+        r.videoRequestedTitle = 0;
+        r.videoPendingFrame.reset();
+        r.videoTargetOpacity = 0.f;
+        r.videoFrameTimer = 0.f;
+#endif
+
         DebugLog::log("[home-preview] focus -> %016llX",
                       static_cast<unsigned long long>(selected));
     }
@@ -583,8 +1151,42 @@ void WaraWaraBackground::onUpdate(float dt) {
         r.stableTimer += std::max(0.f, dt);
 
     pollDecodeResult(r);
+#ifdef SWITCHU_V81_FFMPEG
+    scheduleVideoIfNeeded(r);
+    pollVideoStatus(r);
+#endif
     scheduleDecodeIfNeeded(r);
     processReadyFallback(r);
+
+#ifdef SWITCHU_V81_FFMPEG
+    if (r.videoFrameTimer > 0.f)
+        r.videoFrameTimer = std::max(0.f, r.videoFrameTimer - std::max(0.f, dt));
+
+    if (r.videoRequestedTitle == r.requestedTitle &&
+        r.videoRequestedTitle != 0 &&
+        !r.videoPendingFrame &&
+        (!r.videoHasCurrent || r.videoFrameTimer <= 0.f)) {
+        std::shared_ptr<DecodedVideoFrame> frame;
+        if (r.videoDecoder.popFrame(r.requestedTitle, frame))
+            r.videoPendingFrame = std::move(frame);
+    }
+
+    if (r.videoTargetOpacity > r.videoOpacity) {
+        r.videoOpacity = std::min(
+            r.videoTargetOpacity,
+            r.videoOpacity + std::max(0.f, dt) / kVideoFadeInDuration);
+    } else if (r.videoTargetOpacity < r.videoOpacity) {
+        r.videoOpacity = std::max(
+            r.videoTargetOpacity,
+            r.videoOpacity - std::max(0.f, dt) / kVideoFadeOutDuration);
+    }
+
+    if (r.videoOpacity <= 0.001f &&
+        r.videoTargetOpacity <= 0.001f &&
+        r.videoCurrentTitle != r.requestedTitle) {
+        r.videoHasCurrent = false;
+    }
+#endif
 
     if (r.transitioning) {
         r.fade = std::min(
@@ -670,6 +1272,20 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
                       r.prewarmOk ? "ok" : "failed");
     }
 
+#ifdef SWITCHU_V81_FFMPEG
+    if (!r.videoPrewarmAttempted) {
+        r.videoPrewarmAttempted = true;
+        for (auto& texture : r.videoTextures)
+            texture.configureCapacity(kVideoMaxWidth, kVideoMaxHeight);
+        r.videoPrewarmOk =
+            r.videoTextures[0].prewarm(ren) &&
+            r.videoTextures[1].prewarm(ren) &&
+            r.videoTextures[2].prewarm(ren);
+        DebugLog::log("[home-video] GPU stream prewarm %s",
+                      r.videoPrewarmOk ? "ok" : "failed");
+    }
+#endif
+
     // Le worker a fini : seule la copie RGBA -> staging et la soumission GPU
     // restent ici. Aucun fichier, aucun JPEG/PNG decode, aucun waitIdle global.
     if (r.prewarmOk &&
@@ -713,6 +1329,58 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         }
     }
 
+#ifdef SWITCHU_V81_FFMPEG
+    if (r.videoPrewarmOk &&
+        r.videoPendingFrame &&
+        r.videoPendingFrame->titleId == r.requestedTitle) {
+
+        int uploadIndex = -1;
+        for (int i = 0; i < 3; ++i) {
+            if (r.videoHasCurrent && i == r.videoCurrentIndex)
+                continue;
+            if (r.frameCounter >= r.videoSlotSafeAfterFrame[i]) {
+                uploadIndex = i;
+                break;
+            }
+        }
+        if (!r.videoHasCurrent && uploadIndex < 0 &&
+            r.frameCounter >= r.videoSlotSafeAfterFrame[r.videoCurrentIndex]) {
+            uploadIndex = r.videoCurrentIndex;
+        }
+
+        if (uploadIndex >= 0) {
+            const auto frame = r.videoPendingFrame;
+            const bool uploaded = r.videoTextures[uploadIndex].upload(
+                ren,
+                frame->rgba.data(),
+                frame->width,
+                frame->height
+            );
+
+            if (uploaded) {
+                const bool changedTitle =
+                    !r.videoHasCurrent || r.videoCurrentTitle != frame->titleId;
+                if (r.videoHasCurrent && uploadIndex != r.videoCurrentIndex) {
+                    r.videoSlotSafeAfterFrame[r.videoCurrentIndex] =
+                        r.frameCounter + kGpuRetireFrames;
+                }
+                r.videoCurrentIndex = uploadIndex;
+                r.videoCurrentTitle = frame->titleId;
+                r.videoHasCurrent = true;
+                r.videoFrameTimer = std::max(0.010f, frame->duration);
+                if (changedTitle)
+                    r.videoOpacity = 0.f;
+                r.videoTargetOpacity = 1.f;
+                r.videoPendingFrame.reset();
+            } else {
+                DebugLog::log("[home-video] GPU upload failed %016llX",
+                              static_cast<unsigned long long>(frame->titleId));
+                r.videoPendingFrame.reset();
+            }
+        }
+    }
+#endif
+
     const nxui::Rect area = {
         m_rect.x,
         m_rect.y,
@@ -755,7 +1423,22 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         previewVisualAlpha = 1.f;
     }
 
-    // Overlay cinematographique totalement separe du flux image/GPU.
+#ifdef SWITCHU_V81_FFMPEG
+    if (r.videoHasCurrent &&
+        r.videoCurrentTitle == r.requestedTitle &&
+        r.videoTextures[r.videoCurrentIndex].valid() &&
+        r.videoOpacity > 0.001f) {
+        const auto& videoTexture = r.videoTextures[r.videoCurrentIndex];
+        videoTexture.draw(
+            ren,
+            coverRect(videoTexture.width(), videoTexture.height(), area),
+            r.videoOpacity * m_opacity
+        );
+        previewVisualAlpha = std::max(previewVisualAlpha, r.videoOpacity);
+    }
+#endif
+
+    // Overlay cinematographique totalement separe du flux image/video/GPU.
     if (previewVisualAlpha > 0.001f) {
         const float a = std::clamp(previewVisualAlpha * m_opacity, 0.f, 1.f);
         ren.drawGradientRect(

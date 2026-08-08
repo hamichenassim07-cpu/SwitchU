@@ -10,6 +10,54 @@ end
 -- Rule: switch
 rule("switch")
 
+    -- Switch U V8.1: add the official devkitPro FFmpeg port only to the
+    -- SwitchU menu target. The daemon and the rest of the project are untouched.
+    on_load(function(target)
+        if target:name() ~= "SwitchU" then return end
+
+        local DEVKITPRO = os.getenv("DEVKITPRO") or "/opt/devkitpro"
+        local portlibs = path.join(DEVKITPRO, "portlibs", "switch")
+        local pkg_config = path.join(portlibs, "bin", "aarch64-none-elf-pkg-config")
+        local avcodec = path.join(portlibs, "lib", "libavcodec.a")
+
+        if not os.isfile(pkg_config) or not os.isfile(avcodec) then
+            raise("SwitchU V8.1 MP4 requires the devkitPro package 'switch-ffmpeg'. Install it, then re-run xmake.")
+        end
+
+        target:add("defines", "SWITCHU_V81_FFMPEG")
+        target:add("includedirs", path.join(portlibs, "include"))
+
+        -- Ask the Switch pkg-config wrapper for the complete static link chain.
+        -- This keeps FFmpeg's transitive dependencies in the correct order.
+        local libflags = os.iorunv(pkg_config, {
+            "--libs", "--static",
+            "libavformat", "libavcodec", "libswscale", "libavutil"
+        })
+
+        local linkdirs = {}
+        local links = {}
+        local ldflags = {}
+        for token in libflags:gmatch("%S+") do
+            if token:startswith("-L") then
+                table.insert(linkdirs, token:sub(3))
+            elseif token:startswith("-l") then
+                table.insert(links, token:sub(3))
+            else
+                table.insert(ldflags, token)
+            end
+        end
+
+        for _, dir in ipairs(linkdirs) do
+            target:add("linkdirs", dir)
+        end
+        for _, link in ipairs(links) do
+            target:add("links", link)
+        end
+        for _, flag in ipairs(ldflags) do
+            target:add("ldflags", flag, {force = true})
+        end
+    end)
+
     -- Shaders: compile GLSL -> DKSH via uam before linking 
     before_build(function(target)
         local shaderdir = path.join(os.projectdir(), "shaders")
