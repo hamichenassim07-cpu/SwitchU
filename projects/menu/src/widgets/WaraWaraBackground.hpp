@@ -7,11 +7,16 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <memory>
 
-// V8.0A direct: les anciennes implementations onUpdate/onRender presentes
-// dans WaraWaraBackground.cpp deviennent weak. Le fichier
-// WaraWaraBackgroundPreviewV80.cpp fournit les implementations fortes avec
-// le background contextuel par jeu, sans script ni modification manuelle.
+// Runtime V8.0A.2 defini dans WaraWaraBackgroundPreviewV80.cpp.
+// shared_ptr permet de garder le header leger et de ne pas exposer
+// les details de thread/deko3d au reste du menu.
+struct WaraPreviewRuntime;
+
+// V8.0A.2 direct : les implementations historiques onUpdate/onRender
+// presentes dans WaraWaraBackground.cpp restent weak. Le fichier
+// WaraWaraBackgroundPreviewV80.cpp fournit les implementations fortes.
 #if defined(__GNUC__) && !defined(SWITCHU_V80_BACKGROUND_STRONG)
 #define SWITCHU_V80_BACKGROUND_WEAK __attribute__((weak))
 #else
@@ -72,8 +77,8 @@ public:
     bool loadImage(nxui::GpuDevice& gpu, nxui::Renderer& ren, const std::string& path);
     void clearImage();
 
-    // V8.0A: appel global depuis la jaquette qui vient de recevoir le focus.
-    // Le vrai chargement est temporise de 350 ms dans le background lui-meme.
+    // Une simple selection de jaquette suffit. Le debounce, la lecture SD
+    // et le decodage sont geres par le moteur de preview asynchrone.
     static void notifySelectedGame(uint64_t titleId);
 
     void regenerate(int count = 50) override;
@@ -109,18 +114,6 @@ private:
     nxui::Texture m_backgroundImage;
     float m_time = 0.f;
 
-    // V8.0A - preview statique par Title ID.
-    uint64_t m_previewRequestedTitle = 0;
-    uint64_t m_previewResolvedTitle = 0;
-    uint64_t m_previewPendingTitle = 0;
-    uint64_t m_previewNextTitle = 0;
-    float m_previewStableTimer = 0.f;
-    float m_previewFade = 0.f;
-    bool m_previewLoadPending = false;
-    bool m_previewTransitioning = false;
-    bool m_previewCurrentAvailable = false;
-    bool m_previewNextAvailable = false;
-    std::string m_previewPendingPath;
-    nxui::Texture m_previewCurrent;
-    nxui::Texture m_previewNext;
+    // V8.0A.2 : tout l'etat preview est encapsule ici.
+    std::shared_ptr<WaraPreviewRuntime> m_previewRuntime;
 };

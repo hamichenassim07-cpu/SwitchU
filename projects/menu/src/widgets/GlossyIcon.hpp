@@ -4,7 +4,7 @@
 #include <nxui/core/Animation.hpp>
 #include <string>
 
-// V8.0A direct: l'ancien onFocusGained dans GlossyIcon.cpp devient weak.
+// V8.0A.2 direct: l'ancien onFocusGained dans GlossyIcon.cpp devient weak.
 // GlossyIconFocusV80.cpp garde exactement l'animation existante et ajoute
 // uniquement la notification du Title ID au background contextuel.
 #if defined(__GNUC__) && !defined(SWITCHU_V80_FOCUS_STRONG)
