@@ -1,6 +1,7 @@
 #include "DateTimeWidget.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <nxui/core/I18n.hpp>
+#include "HomeLiquidGlassStyle.hpp"
 #include <algorithm>
 #include <cmath>
 #include <ctime>
@@ -32,14 +33,25 @@ float smooth01(float value) {
 }
 
 DateTimeWidget::DateTimeWidget() {
-    // V10.1: the clock belongs to the same soft frosted-green visual family
-    // as the HOME category capsule. The app still applies its global theme,
-    // so the final pass below is intentionally subtle rather than opaque.
+    // V10.2: use the real nxui LiquidGlass shader instead of stacking flat
+    // translucent rectangles. Wide category glass is rendered explicitly in
+    // onContentRender with the same captured backdrop.
     setCornerRadius(22.f);
-    setBaseColor(nxui::Color(0.46f, 0.62f, 0.56f, 0.22f));
-    setBorderColor(nxui::Color(0.86f, 0.98f, 0.92f, 0.24f));
-    setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.09f));
-    setPanelOpacity(0.82f);
+    setBaseColor(nxui::Color(0.48f, 0.72f, 0.62f, 0.30f));
+    setBorderColor(nxui::Color(0.88f, 1.00f, 0.94f, 0.28f));
+    setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.14f));
+    setPanelOpacity(0.90f);
+    setLiquidGlassEnabled(true);
+    setLiquidGlassShaderEnabled(true);
+    setForceLiquidGlass(true);
+    setBlurEnabled(false);
+}
+
+void DateTimeWidget::onRender(nxui::Renderer& ren) {
+    const nxui::LiquidGlassSettings saved = ren.liquidGlassSettings();
+    switchu::homeui::applyLiquidGlassV102(ren);
+    nxui::GlassWidget::onRender(ren);
+    ren.liquidGlassSettings() = saved;
 }
 
 nxui::Rect DateTimeWidget::homeTabsRect() const {
@@ -132,32 +144,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     if (!m_font)
         return;
 
-    // Re-enable one light blur pass after the HOME builder's legacy
-    // setBlurEnabled(false); this takes effect from the next frame onward.
-    setBlurEnabled(true);
-    setBlurRadius(1.35f);
-    setBlurPasses(1);
-
     nxui::Rect cr = contentRect();
-
-    // Slightly stronger than the category bar so time/date stay readable over
-    // bright game artwork. This is a layered glass illusion, not an opaque card.
-    ren.drawRoundedRect(
-        cr,
-        nxui::Color(0.42f, 0.58f, 0.52f, 0.20f * m_opacity),
-        20.f
-    );
-    ren.drawRoundedRect(
-        {cr.x + 2.f, cr.y + 2.f, cr.width - 4.f, cr.height * 0.42f},
-        nxui::Color(0.94f, 1.00f, 0.97f, 0.055f * m_opacity),
-        18.f
-    );
-    ren.drawRoundedRectOutline(
-        cr,
-        nxui::Color(0.90f, 1.00f, 0.95f, 0.18f * m_opacity),
-        20.f,
-        1.f
-    );
 
     nxui::Font* dateFont =
         m_smallFont ? m_smallFont : m_font;
@@ -260,40 +247,31 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         kTabH
     };
 
-    // V10.1: Jeux / Applications is now an indicator only. It never receives
-    // focus; L and R change category globally. The outer body uses a light
-    // frosted-green treatment inspired by the new reference images.
-    ren.drawRoundedRect(
-        {navRect.x, navRect.y + 2.f, navRect.width, navRect.height},
-        nxui::Color(0.01f, 0.025f, 0.020f, 0.18f * m_opacity),
-        24.f
-    );
-    ren.drawRoundedRect(
-        navRect,
-        nxui::Color(0.58f, 0.73f, 0.67f, 0.28f * m_opacity),
-        24.f
-    );
-    ren.drawRoundedRect(
-        {navRect.x + 2.f, navRect.y + 2.f, navRect.width - 4.f, navRect.height * 0.46f},
-        nxui::Color(0.92f, 1.00f, 0.96f, 0.075f * m_opacity),
-        22.f
+    // V10.2: real refractive/frosted glass. Reuse the capture already made
+    // by the clock GlassWidget when possible, avoiding a second full-screen
+    // backdrop copy in the same frame.
+    ren.captureToOffscreen(true);
+    ren.drawLiquidGlass(
+        0, navRect, 24.f,
+        nxui::Color(0.50f, 0.80f, 0.66f, 0.48f),
+        0.93f * m_opacity, 0.f
     );
     ren.drawRoundedRectOutline(
         navRect,
-        nxui::Color(0.90f, 1.00f, 0.95f, 0.22f * m_opacity),
-        24.f,
-        1.15f
+        nxui::Color(0.91f, 1.00f, 0.96f, 0.24f * m_opacity),
+        24.f, 1.f
     );
-    ren.drawRoundedRect(
-        activeRect,
-        nxui::Color(0.90f, 0.96f, 0.92f, 0.93f * m_opacity),
-        18.f
+
+    // The active category is a brighter internal lens, not a focus cursor.
+    ren.drawLiquidGlass(
+        0, activeRect, 18.f,
+        nxui::Color(0.86f, 1.00f, 0.92f, 0.82f),
+        0.82f * m_opacity, 0.f
     );
     ren.drawRoundedRectOutline(
         activeRect,
-        nxui::Color(1.f, 1.f, 1.f, 0.28f * m_opacity),
-        18.f,
-        1.f
+        nxui::Color(1.f, 1.f, 1.f, 0.22f * m_opacity),
+        18.f, 1.f
     );
 
     auto& i18n = nxui::I18n::instance();

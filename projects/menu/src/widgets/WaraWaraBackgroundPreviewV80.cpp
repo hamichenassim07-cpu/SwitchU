@@ -187,6 +187,62 @@ uint64_t previewImageMemoryUsed(nxui::Renderer& ren) {
 #endif
 }
 
+#ifdef NXUI_BACKEND_DEKO3D
+void writeHomeGlowProjectionV102(nxui::Renderer& ren, float width, float height) {
+    nxui::VsUniforms vs{};
+    vs.projection[0] = 2.f / width;
+    vs.projection[5] = -2.f / height;
+    vs.projection[10] = -1.f;
+    vs.projection[12] = -1.f;
+    vs.projection[13] = 1.f;
+    vs.projection[15] = 1.f;
+
+    auto& gpu = ren.gpu();
+    const int slot = gpu.slot();
+    std::memcpy(gpu.vsUboCpuAddr(slot), &vs, sizeof(vs));
+    gpu.cmdBuf().bindUniformBuffer(DkStage_Vertex, 0,
+                                   gpu.vsUboGpuAddr(slot),
+                                   nxui::GpuDevice::VS_UBO_SIZE);
+}
+
+bool beginHomeGlowTargetV102(nxui::Renderer& ren) {
+    auto& gpu = ren.gpu();
+    if (!gpu.offscreenReady())
+        return false;
+
+    ren.flush();
+    auto cmd = gpu.cmdBuf();
+    dk::ImageView colorTarget{gpu.offscreenImage(0)};
+    cmd.bindRenderTargets(&colorTarget);
+
+    constexpr uint32_t offW = nxui::GpuDevice::FB_WIDTH / 2;
+    constexpr uint32_t offH = nxui::GpuDevice::FB_HEIGHT / 2;
+    cmd.setViewports(0, DkViewport{0.f, 0.f, (float)offW, (float)offH, 0.f, 1.f});
+    cmd.setScissors(0, DkScissor{0, 0, offW, offH});
+    cmd.clearColor(0, DkColorMask_RGBA, 0.f, 0.f, 0.f, 0.f);
+    writeHomeGlowProjectionV102(ren, (float)offW, (float)offH);
+    ren.useShader(nxui::ShaderProgram::Basic);
+    return true;
+}
+
+void endHomeGlowTargetV102(nxui::Renderer& ren) {
+    ren.flush();
+    auto& gpu = ren.gpu();
+    auto cmd = gpu.cmdBuf();
+    cmd.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+
+    const int slot = gpu.slot();
+    dk::ImageView colorTarget{gpu.fbImage(slot)};
+    dk::ImageView dsTarget{gpu.dsImage()};
+    cmd.bindRenderTargets(&colorTarget, &dsTarget);
+    cmd.setViewports(0, DkViewport{0.f, 0.f,
+        (float)gpu.width(), (float)gpu.height(), 0.f, 1.f});
+    cmd.setScissors(0, DkScissor{0, 0,
+        (uint32_t)gpu.width(), (uint32_t)gpu.height()});
+    writeHomeGlowProjectionV102(ren, (float)gpu.width(), (float)gpu.height());
+}
+#endif
+
 struct AmbientSwatch {
     float r = 0.f;
     float g = 0.f;
@@ -2145,28 +2201,58 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
                     0.040f * baseAlpha)
     );
 
-    // Broad diffuse atmosphere, not LED dots. The two hues are extracted from
-    // the selected background image on the worker thread (fallback: violet/blue).
-    const nxui::Vec2 primaryCenter {area.x + area.width * 0.40f,
-                                    area.y + area.height * 0.50f};
-    const nxui::Vec2 secondaryCenter {area.x + area.width * 0.63f,
-                                      area.y + area.height * 0.48f};
+    // V10.2: TRUE GPU glow. The V10.1 circles were visible geometry with low
+    // alpha; now they are only high-energy light sources rendered to the same
+    // half-resolution offscreen pipeline used by the V7.4.4 lockscreen glow,
+    // then Gaussian-blurred and composited back behind the carousel.
+    bool realGlow = false;
+#ifdef NXUI_BACKEND_DEKO3D
+    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
+        constexpr float hs = 0.5f;
+        auto emitLightMass = [&](float cx, float cy,
+                                 const AmbientSwatch& c,
+                                 float strength,
+                                 float stretch) {
+            const nxui::Color hot(c.r, c.g, c.b, strength);
+            ren.drawCircle({cx * hs, cy * hs}, 112.f * hs * stretch, hot, 48);
+            ren.drawCircle({(cx - 92.f) * hs, (cy + 24.f) * hs},
+                           86.f * hs * stretch,
+                           nxui::Color(c.r, c.g, c.b, strength * 0.72f), 44);
+            ren.drawCircle({(cx + 102.f) * hs, (cy - 18.f) * hs},
+                           78.f * hs * stretch,
+                           nxui::Color(c.r, c.g, c.b, strength * 0.60f), 44);
+        };
 
-    auto drawGlow = [&](const nxui::Vec2& center,
-                        const AmbientSwatch& c,
-                        float radiusScale) {
-        ren.drawCircle(center, 390.f * radiusScale,
-                       nxui::Color(c.r, c.g, c.b, 0.018f * baseAlpha), 80);
-        ren.drawCircle(center, 285.f * radiusScale,
-                       nxui::Color(c.r, c.g, c.b, 0.032f * baseAlpha), 72);
-        ren.drawCircle(center, 190.f * radiusScale,
-                       nxui::Color(c.r, c.g, c.b, 0.052f * baseAlpha), 64);
-        ren.drawCircle(center, 116.f * radiusScale,
-                       nxui::Color(c.r, c.g, c.b, 0.068f * baseAlpha), 56);
-    };
+        emitLightMass(area.x + area.width * 0.36f,
+                      area.y + area.height * 0.47f,
+                      glowPrimary, 0.54f * baseAlpha, 1.22f);
+        emitLightMass(area.x + area.width * 0.66f,
+                      area.y + area.height * 0.45f,
+                      glowSecondary, 0.48f * baseAlpha, 1.08f);
 
-    drawGlow(primaryCenter, glowPrimary, 1.f);
-    drawGlow(secondaryCenter, glowSecondary, 0.94f);
+        endHomeGlowTargetV102(ren);
+        ren.applyBlur(3.65f, 2);
+        ren.drawOffscreen(
+            0,
+            {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
+            nxui::Color::white().withAlpha(0.72f * baseAlpha)
+        );
+        realGlow = true;
+    }
+#endif
+
+    if (!realGlow) {
+        const nxui::Vec2 p {area.x + area.width * 0.38f,
+                            area.y + area.height * 0.48f};
+        const nxui::Vec2 q {area.x + area.width * 0.64f,
+                            area.y + area.height * 0.46f};
+        ren.drawCircle(p, 250.f,
+                       nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
+                                   0.070f * baseAlpha), 72);
+        ren.drawCircle(q, 235.f,
+                       nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
+                                   0.064f * baseAlpha), 72);
+    }
 
     // The lower information zone is anthracite rather than black and blends
     // into the media so the title/actions feel embedded in the composition.

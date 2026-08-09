@@ -500,12 +500,37 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
     nxui::Widget* previousMainFocus = focusManager().current();
     const bool wasGameFocused =
         previousMainFocus && previousMainFocus->tag() == "glossy_icon";
+    const nxui::Rect previousFocusRect =
+        previousMainFocus ? previousMainFocus->focusRect() : nxui::Rect{};
 
     g_v10ApplicationsActive = applications;
     m_clock->setHomeApplicationsActive(applications);
     m_grid->setShowApplications(applications);
 
+    // V10.2: L/R changes content, not navigation context. If the user was on
+    // a cover, pick the cover whose centre is closest to the previous cursor
+    // position instead of jumping to the first app (or to the profile).
     nxui::Widget* gridTarget = m_grid->focusManager().current();
+    if (wasGameFocused && m_grid->visibleCount() > 0) {
+        const float oldCenterX = previousFocusRect.x + previousFocusRect.width * 0.5f;
+        GlossyIcon* closest = nullptr;
+        float closestDistance = 1.0e9f;
+        for (auto* icon : m_grid->pageIcons()) {
+            if (!icon || !icon->isVisible())
+                continue;
+            const nxui::Rect r = icon->focusRect();
+            const float cx = r.x + r.width * 0.5f;
+            const float d = std::abs(cx - oldCenterX);
+            if (d < closestDistance) {
+                closestDistance = d;
+                closest = icon;
+            }
+        }
+        if (closest) {
+            m_grid->focusManager().setFocus(closest);
+            gridTarget = closest;
+        }
+    }
 
     // Keep out-of-carousel navigation coherent even when L/R is pressed while
     // the profile or a corner button owns focus.
@@ -542,24 +567,12 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
     } else {
         WaraWaraBackground::notifySelectedGame(0);
 
-        // An empty Applications list must never leave the global focus parked
-        // on an invisible game from the previous category.
-        if (wasGameFocused) {
-            nxui::Widget* fallback = nullptr;
-            if (!m_userAvatarButtons.empty() && m_userAvatarButtons.front()->isVisible())
-                fallback = m_userAvatarButtons.front().get();
-            if (!fallback) {
-                for (auto& btn : m_sidebar.leftButtons()) {
-                    if (btn && btn->isVisible()) {
-                        fallback = btn.get();
-                        break;
-                    }
-                }
-            }
-            if (fallback) {
-                m_suppressNextNavigateSfx = true;
-                focusManager().setFocus(fallback);
-            }
+        // Empty category: do NOT teleport to the profile. Keep the global
+        // focus/cursor where it was. L/R remains globally available, so the
+        // user can return to the populated category immediately.
+        if (wasGameFocused && previousMainFocus) {
+            m_suppressNextNavigateSfx = true;
+            focusManager().setFocus(previousMainFocus);
         }
     }
 
@@ -572,7 +585,9 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
         }
     }
 
-    updateCursor();
+    if (!(wasGameFocused && m_grid->visibleCount() == 0))
+        updateCursor();
+
     m_audio.playSfx(Sfx::PageChange);
 
     DebugLog::log(
@@ -583,6 +598,9 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
 }
 
 void WiiUMenuApp::wireFocusCallback() {
+    if (m_titlePill)
+        m_titlePill->setIconFont(&m_fontIcons);
+
     // V10.1 categories are display-only: L selects Jeux, R selects
     // Applications. The category capsule never enters the FocusManager.
     if (m_clock && m_grid) {

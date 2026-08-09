@@ -10,6 +10,7 @@ public:
     TitlePillWidget();
 
     void setFont(nxui::Font* f)              { m_font = f; }
+    void setIconFont(nxui::Font* f)          { m_iconFont = f; }
     void setTextColor(const nxui::Color& c)  { m_textColor = c; }
 
     void setAnchor(float centerX, float topY, float screenWidth = 1280.f);
@@ -27,6 +28,7 @@ private:
     float anchoredX(float width, float screenWidth) const;
 
     nxui::Font*       m_font = nullptr;
+    nxui::Font*       m_iconFont = nullptr;
     std::string       m_text;
     nxui::Color       m_textColor {1.f, 1.f, 1.f, 1.f};
     nxui::AnimatedFloat m_animX{0.f};

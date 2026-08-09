@@ -6,14 +6,37 @@
 
 namespace {
 constexpr float kV9TitleCenterX = 640.f;
-constexpr float kV9TitleTopY = 526.f;
-constexpr float kV9TitleScale = 1.58f;
+constexpr float kV9TitleTopY = 522.f;
+constexpr float kV9TitleScale = 1.42f;
 constexpr float kV9TitleMaxWidth = 900.f;
-constexpr float kV101SeparatorWidth = 94.f;
-constexpr float kV101SeparatorHeight = 2.f;
-constexpr float kV101ActionButton = 24.f;
-constexpr float kV101ActionLabelScale = 0.74f;
-constexpr float kV101ActionKeyScale = 0.70f;
+constexpr float kV102SeparatorWidth = 248.f;
+constexpr float kV102SeparatorHeight = 2.2f;
+constexpr float kV102TitleToSeparatorGap = 18.f;
+constexpr float kV102SeparatorToActionsGap = 21.f;
+constexpr float kV102ActionLabelScale = 0.74f;
+constexpr float kV102ActionGlyphScale = 0.88f;
+constexpr float kV102ActionGap = 8.f;
+constexpr float kV102PairGap = 42.f;
+
+std::string utf8CodepointV102(unsigned cp) {
+    std::string out;
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+    return out;
+}
 }
 
 TitlePillWidget::TitlePillWidget() {
@@ -151,12 +174,13 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
 
     ren.pushClipRect(cr);
 
-    // Slightly heavier title than V9: a tiny second pass gives the stock font
-    // more visual mass without needing another font asset.
+    // V10.2: restore the V9 size, but make ONLY the game title visually
+    // heavier. Sub-pixel duplicate passes emulate a semibold face without
+    // enlarging the text or changing the rest of the HOME typography.
     ren.drawText(m_text,
-                 {tx + 1.4f, ty + 1.8f + lift},
+                 {tx + 1.2f, ty + 1.6f + lift},
                  m_font,
-                 nxui::Color(0.f, 0.f, 0.f, 0.46f * m_opacity * reveal),
+                 nxui::Color(0.f, 0.f, 0.f, 0.44f * m_opacity * reveal),
                  scale);
     ren.drawText(m_text,
                  {tx, ty + lift},
@@ -164,79 +188,80 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
                  m_textColor.withAlpha(m_opacity * reveal),
                  scale);
     ren.drawText(m_text,
-                 {tx + 0.62f, ty + lift},
+                 {tx + 0.48f, ty + lift},
                  m_font,
-                 m_textColor.withAlpha(0.48f * m_opacity * reveal),
+                 m_textColor.withAlpha(0.62f * m_opacity * reveal),
+                 scale);
+    ren.drawText(m_text,
+                 {tx - 0.38f, ty + lift},
+                 m_font,
+                 m_textColor.withAlpha(0.42f * m_opacity * reveal),
                  scale);
 
     if (m_showGameActions) {
-        const float separatorY = ty + textSz.y + 9.f;
-        const float separatorX = cr.x + (cr.width - kV101SeparatorWidth) * 0.5f;
+        const float separatorY = ty + textSz.y + kV102TitleToSeparatorGap;
+        const float separatorX = cr.x + (cr.width - kV102SeparatorWidth) * 0.5f;
         ren.drawRoundedRect(
-            {separatorX, separatorY, kV101SeparatorWidth, kV101SeparatorHeight},
-            nxui::Color(0.94f, 0.97f, 1.00f, 0.46f * m_opacity * reveal),
-            1.f
+            {separatorX, separatorY, kV102SeparatorWidth, kV102SeparatorHeight},
+            nxui::Color(0.94f, 0.97f, 1.00f, 0.42f * m_opacity * reveal),
+            1.1f
         );
 
         auto& i18n = nxui::I18n::instance();
         const std::string launch = i18n.tr("hint.launch", "Lancer");
         const std::string move = i18n.tr("hint.move", "Déplacer");
+        const std::string aGlyph = utf8CodepointV102(0xE0E0);
+        const std::string yGlyph = utf8CodepointV102(0xE0E3);
+        nxui::Font* glyphFont = m_iconFont ? m_iconFont : m_font;
+
         const nxui::Vec2 launchBase = m_font->measure(launch);
         const nxui::Vec2 moveBase = m_font->measure(move);
-        const float launchW = launchBase.x * kV101ActionLabelScale;
-        const float moveW = moveBase.x * kV101ActionLabelScale;
-        const float keyGap = 7.f;
-        const float pairGap = 34.f;
-        const float firstW = kV101ActionButton + keyGap + launchW;
-        const float secondW = kV101ActionButton + keyGap + moveW;
-        const float rowW = firstW + pairGap + secondW;
+        const nxui::Vec2 aBase = glyphFont->measure(aGlyph);
+        const nxui::Vec2 yBase = glyphFont->measure(yGlyph);
+        const float launchW = launchBase.x * kV102ActionLabelScale;
+        const float moveW = moveBase.x * kV102ActionLabelScale;
+        const float aW = aBase.x * kV102ActionGlyphScale;
+        const float yW = yBase.x * kV102ActionGlyphScale;
+        const float firstW = aW + kV102ActionGap + launchW;
+        const float secondW = yW + kV102ActionGap + moveW;
+        const float rowW = firstW + kV102PairGap + secondW;
         float x = cr.x + (cr.width - rowW) * 0.5f;
-        const float rowY = separatorY + 13.f;
+        const float rowY = separatorY + kV102SeparatorHeight +
+                           kV102SeparatorToActionsGap;
 
-        auto drawAction = [&](const char* key,
+        auto drawAction = [&](const std::string& glyph,
                               const std::string& label,
+                              float glyphW,
                               float labelW) {
-            const nxui::Rect keyRect{x, rowY, kV101ActionButton, kV101ActionButton};
-            ren.drawRoundedRect(
-                keyRect,
-                nxui::Color(0.76f, 0.84f, 0.80f, 0.18f * m_opacity * reveal),
-                7.f
-            );
-            ren.drawRoundedRectOutline(
-                keyRect,
-                nxui::Color(0.96f, 1.00f, 0.98f, 0.42f * m_opacity * reveal),
-                7.f,
-                1.f
-            );
-
-            const nxui::Vec2 keyBase = m_font->measure(key);
-            const float keyW = keyBase.x * kV101ActionKeyScale;
-            const float keyH = keyBase.y * kV101ActionKeyScale;
-            ren.drawText(
-                key,
-                {keyRect.x + (keyRect.width - keyW) * 0.5f,
-                 keyRect.y + (keyRect.height - keyH) * 0.5f},
-                m_font,
-                nxui::Color(0.98f, 1.f, 0.99f, 0.94f * m_opacity * reveal),
-                kV101ActionKeyScale
-            );
-
+            const nxui::Vec2 glyphBase = glyphFont->measure(glyph);
+            const float glyphH = glyphBase.y * kV102ActionGlyphScale;
             const nxui::Vec2 labelBase = m_font->measure(label);
-            const float labelH = labelBase.y * kV101ActionLabelScale;
+            const float labelH = labelBase.y * kV102ActionLabelScale;
+            const float rowH = std::max(glyphH, labelH);
+
+            // switch_icons.ttf is the same icon font already used by Switch U
+            // for Nintendo-style controller hints. No hand-drawn square badge.
+            ren.drawText(
+                glyph,
+                {x, rowY + (rowH - glyphH) * 0.5f},
+                glyphFont,
+                nxui::Color(0.98f, 1.f, 0.99f, 0.94f * m_opacity * reveal),
+                kV102ActionGlyphScale
+            );
             ren.drawText(
                 label,
-                {keyRect.right() + keyGap,
-                 keyRect.y + (keyRect.height - labelH) * 0.5f},
+                {x + glyphW + kV102ActionGap,
+                 rowY + (rowH - labelH) * 0.5f},
                 m_font,
                 nxui::Color(0.94f, 0.96f, 0.98f, 0.82f * m_opacity * reveal),
-                kV101ActionLabelScale
+                kV102ActionLabelScale
             );
-            x += kV101ActionButton + keyGap + labelW;
+            x += glyphW + kV102ActionGap + labelW;
         };
 
-        drawAction("A", launch, launchW);
-        x += pairGap;
-        drawAction("Y", move, moveW);
+        drawAction(aGlyph, launch, aW, launchW);
+        x += kV102PairGap;
+        drawAction(yGlyph, move, yW, moveW);
     }
 
     ren.popClipRect();
@@ -251,7 +276,8 @@ nxui::Vec2 TitlePillWidget::computeContentSize() const {
     float height = titleH;
 
     if (m_showGameActions)
-        height += 9.f + kV101SeparatorHeight + 13.f + kV101ActionButton;
+        height += kV102TitleToSeparatorGap + kV102SeparatorHeight +
+                  kV102SeparatorToActionsGap + 30.f;
 
     float width = std::min(kV9TitleMaxWidth, base.x * kV9TitleScale);
     if (m_showGameActions)

@@ -6,12 +6,13 @@
 
 class BatteryWidget : public nxui::GlassWidget {
 public:
-    BatteryWidget() = default;
+    BatteryWidget();
     void setFont(nxui::Font* f) { m_font = f; }
     void setTextColor(const nxui::Color& c) { m_textColor = c; }
     void setBatteryStatus(uint32_t percentage, bool charging);
 
 protected:
+    void onRender(nxui::Renderer& ren) override;
     void onContentUpdate(float dt) override;
     void onContentRender(nxui::Renderer& ren) override;
     nxui::Vec2 computeContentSize() const override;

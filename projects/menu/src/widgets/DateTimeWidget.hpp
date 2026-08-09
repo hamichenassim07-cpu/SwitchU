@@ -23,6 +23,7 @@ public:
     nxui::Rect homeTabsRect() const;
 
 protected:
+    void onRender(nxui::Renderer& ren) override;
     void onContentUpdate(float dt) override;
     void onContentRender(nxui::Renderer& ren) override;
     nxui::Vec2 computeContentSize() const override;
