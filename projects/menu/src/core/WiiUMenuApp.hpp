@@ -42,10 +42,17 @@
 #include <atomic>
 #include <future>
 #include <switch.h>
-#ifdef SWITCHU_MENU
 #include <switchu/smi_protocol.hpp>
-#endif
 
+// V7.4.3 direct: les anciennes implementations restees dans les fichiers
+// historiques sont marquees weak. Le fichier WiiUMenuAppRoutingV74.cpp
+// fournit les implementations fortes du routage lockscreen. Ainsi, aucune
+// etape .bat/.ps1 n'est necessaire avant la compilation.
+#if defined(__GNUC__) && !defined(SWITCHU_V74_ROUTING_STRONG)
+#define SWITCHU_V74_LEGACY_WEAK __attribute__((weak))
+#else
+#define SWITCHU_V74_LEGACY_WEAK
+#endif
 
 #ifdef SWITCHU_HOMEBREW
 static constexpr const char* SD_ASSETS = "romfs:";
@@ -61,7 +68,17 @@ public:
     void setTutorialStartupFade(bool enabled);
 
 #ifdef SWITCHU_MENU
-    void setStartupStatus(uint64_t suspendedTitleId, bool appRunning);
+    // Signature historique conservee uniquement pour que l'ancien corps
+    // present dans WiiUMenuApp.cpp compile. Elle est weak et n'est plus
+    // utilisee par le demarrage V7.4.3.
+    void setStartupStatus(uint64_t suspendedTitleId,
+                          bool appRunning) SWITCHU_V74_LEGACY_WEAK;
+
+    // V7.4.3 : vraie entree de demarrage, avec la destination memorisee
+    // par le daemon avant la veille.
+    void setStartupStatus(uint64_t suspendedTitleId,
+                          bool appRunning,
+                          switchu::smi::LockReturnTarget returnTarget);
 
     // V6.5.1: HOME opens Switch U's HOME directly, while boot/wakeup keeps
     // the lockscreen. The daemon already passes MainMenu for a physical HOME
@@ -113,7 +130,7 @@ private:
     void handleTouch();
 
     void showLockScreen();
-    void handleLockScreen(float dt);
+    void handleLockScreen(float dt) SWITCHU_V74_LEGACY_WEAK;
     void renderLockScreen(nxui::Renderer& ren);
     void prepareLockScreenView();
     void rememberLaunchUser(AccountUid uid);
@@ -160,7 +177,7 @@ private:
 #ifdef SWITCHU_MENU
     void refreshAppList();
     void finalizeRefresh();
-    void handleSystemAction(SysAction a);
+    void handleSystemAction(SysAction a) SWITCHU_V74_LEGACY_WEAK;
 #endif
 
     nxui::Font  m_fontNormal;
@@ -263,6 +280,10 @@ private:
     bool  m_lockScreenActive = true;
     bool  m_lockScreenUnlocking = false;
     bool  m_skipStartupLock = false;
+    // V7.4 : destination explicite transmise par le daemon.
+    // Elle represente l'ecran qui etait actif AVANT la mise en veille.
+    switchu::smi::LockReturnTarget m_lockReturnTarget =
+        switchu::smi::LockReturnTarget::Home;
     int   m_lockPressCount = 0;
     float m_lockPressResetTimer = 0.f;
     float m_lockScreenPulse = 0.f;
