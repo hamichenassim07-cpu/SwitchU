@@ -235,6 +235,11 @@ void IconGrid::rebuildFocusRow() {
         if (!icon)
             continue;
 
+        // V10 FIX5: rebuildFocusRow() hides every icon before rebuilding the
+        // active category. forceVisible() only resets the appear animation; it
+        // does NOT change Widget::m_visible. Explicitly restore visibility or
+        // the covers remain interactive/focusable but are never rendered.
+        icon->setVisible(true);
         icon->forceVisible();
         addChild(icon);
 
@@ -357,6 +362,9 @@ void IconGrid::layoutAtScrollPosition() {
             size
         });
 
+        // Keep active-category covers renderable after any relayout/snap.
+        // This also protects against a category rebuild leaving m_visible=false.
+        icon->setVisible(true);
         icon->forceVisible();
     }
 }
@@ -641,6 +649,7 @@ void IconGrid::startAppearAnimation() {
             !m_allIcons[globalIndex])
             continue;
 
+        m_allIcons[globalIndex]->setVisible(true);
         m_allIcons[globalIndex]->forceVisible();
         m_allIcons[globalIndex]->startAppear(order * 0.06f);
         ++order;
