@@ -90,11 +90,9 @@ void WiiUMenuApp::handleLockScreen(float dt) {
 #else
         const bool returnToGame = false;
 #endif
-        (void)returnToGame;
-
-        // LockScreenView no longer exposes a return-target setter. The actual
-        // GAME/HOME handoff is owned by this routing layer after the 1.20 s
-        // unlock transition, so the visual view only needs progress/transition.
+        // V7.4.4 exposes this visual state again. The actual GAME/HOME handoff
+        // still remains owned by this routing layer after the 1.20 s transition.
+        m_lockScreenView->setReturnToGameOnUnlock(returnToGame);
         m_lockScreenView->setProgress(m_lockPressCount, m_lockPressFlash);
         m_lockScreenView->setTransition(m_lockScreenOpacity,
                                         m_lockScreenReveal,

@@ -1187,13 +1187,18 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
                                    (0.08f + 0.025f * breathe) * contentAlpha), 96);
     }
 
-    // V7.3.1: remove the real permanent full-screen dark veil.
-    // The personalised background must keep its original brightness outside
-    // the dedicated readability area at the top of the lockscreen.
+    // V7.4.4: restore the validated lockscreen layer stack from the older
+    // stable revisions. The global veil gives the whole lockscreen its normal
+    // moody contrast, while the local top veil specifically protects the
+    // readability of the clock, date, greeting and battery.
+    ren.drawGradientRect(
+        screen,
+        nxui::Color(0.004f, 0.008f, 0.025f, 0.38f * m_viewOpacity),
+        nxui::Color(0.004f, 0.006f, 0.020f, 0.72f * m_viewOpacity)
+    );
+    ren.drawRect(screen, nxui::Color(0.002f, 0.004f, 0.014f,
+                                     0.17f * m_viewOpacity));
 
-    // Restore the LOCAL top readability veil from V7.1. This is intentional:
-    // it only sits behind the clock, date, greeting and battery so those
-    // elements stay readable on bright custom backgrounds.
     ren.drawGradientRect(
         {0.f, 0.f, 1280.f, 232.f},
         nxui::Color(0.004f, 0.006f, 0.020f, 0.56f * m_viewOpacity),

@@ -12,6 +12,7 @@
 #include <nxui/third_party/stb/stb_image.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -186,12 +187,154 @@ uint64_t previewImageMemoryUsed(nxui::Renderer& ren) {
 #endif
 }
 
+struct AmbientSwatch {
+    float r = 0.f;
+    float g = 0.f;
+    float b = 0.f;
+};
+
+AmbientSwatch defaultAmbientA() {
+    return {0.48f, 0.14f, 0.90f};
+}
+
+AmbientSwatch defaultAmbientB() {
+    return {0.12f, 0.38f, 1.00f};
+}
+
+AmbientSwatch mixAmbient(const AmbientSwatch& a,
+                         const AmbientSwatch& b,
+                         float t) {
+    t = std::clamp(t, 0.f, 1.f);
+    return {
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t
+    };
+}
+
+void extractAmbientSwatches(const std::vector<uint8_t>& rgba,
+                            int w,
+                            int h,
+                            AmbientSwatch& primary,
+                            AmbientSwatch& secondary) {
+    primary = defaultAmbientA();
+    secondary = defaultAmbientB();
+    if (rgba.empty() || w <= 0 || h <= 0)
+        return;
+
+    constexpr int kBins = 12;
+    std::array<float, kBins> weight{};
+    std::array<float, kBins> sumR{};
+    std::array<float, kBins> sumG{};
+    std::array<float, kBins> sumB{};
+
+    const int stepX = std::max(1, w / 64);
+    const int stepY = std::max(1, h / 40);
+
+    for (int y = 0; y < h; y += stepY) {
+        for (int x = 0; x < w; x += stepX) {
+            const size_t idx =
+                (static_cast<size_t>(y) * static_cast<size_t>(w) +
+                 static_cast<size_t>(x)) * 4u;
+            if (idx + 3u >= rgba.size() || rgba[idx + 3u] < 96u)
+                continue;
+
+            const float r = rgba[idx + 0u] / 255.f;
+            const float g = rgba[idx + 1u] / 255.f;
+            const float b = rgba[idx + 2u] / 255.f;
+            const float maxC = std::max(r, std::max(g, b));
+            const float minC = std::min(r, std::min(g, b));
+            const float delta = maxC - minC;
+            const float luminance = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            const float saturation = maxC > 0.001f ? delta / maxC : 0.f;
+
+            // Ignore near-grey pixels and extreme highlights/shadows so the
+            // atmosphere follows the artwork's actual accent colours.
+            if (saturation < 0.10f || luminance < 0.055f || luminance > 0.94f)
+                continue;
+
+            float hue = 0.f;
+            if (delta > 0.0001f) {
+                if (maxC == r)
+                    hue = std::fmod((g - b) / delta, 6.f);
+                else if (maxC == g)
+                    hue = (b - r) / delta + 2.f;
+                else
+                    hue = (r - g) / delta + 4.f;
+                hue /= 6.f;
+                if (hue < 0.f)
+                    hue += 1.f;
+            }
+
+            int bin = static_cast<int>(hue * kBins) % kBins;
+            const float midLum =
+                1.f - std::min(1.f, std::abs(luminance - 0.52f) / 0.52f);
+            const float wgt =
+                (0.30f + 0.70f * saturation) *
+                (0.42f + 0.58f * midLum);
+
+            weight[bin] += wgt;
+            sumR[bin] += r * wgt;
+            sumG[bin] += g * wgt;
+            sumB[bin] += b * wgt;
+        }
+    }
+
+    auto bestBin = [&](int excluded, bool requireSeparation) {
+        int best = -1;
+        float bestWeight = 0.f;
+        for (int i = 0; i < kBins; ++i) {
+            if (i == excluded)
+                continue;
+            if (requireSeparation && excluded >= 0) {
+                const int d0 = std::abs(i - excluded);
+                const int d = std::min(d0, kBins - d0);
+                if (d < 2)
+                    continue;
+            }
+            if (weight[i] > bestWeight) {
+                bestWeight = weight[i];
+                best = i;
+            }
+        }
+        return best;
+    };
+
+    const int first = bestBin(-1, false);
+    int second = bestBin(first, true);
+    if (second < 0)
+        second = bestBin(first, false);
+
+    auto swatchFor = [&](int bin, const AmbientSwatch& fallback) {
+        if (bin < 0 || weight[bin] <= 0.0001f)
+            return fallback;
+        AmbientSwatch out{
+            sumR[bin] / weight[bin],
+            sumG[bin] / weight[bin],
+            sumB[bin] / weight[bin]
+        };
+        const float peak = std::max(out.r, std::max(out.g, out.b));
+        if (peak > 0.001f) {
+            const float boost = std::min(1.55f, 0.92f / peak);
+            out.r = std::clamp(out.r * boost, 0.f, 1.f);
+            out.g = std::clamp(out.g * boost, 0.f, 1.f);
+            out.b = std::clamp(out.b * boost, 0.f, 1.f);
+        }
+        return out;
+    };
+
+    primary = swatchFor(first, primary);
+    secondary = swatchFor(second, secondary);
+}
+
 struct DecodedPreview {
     uint64_t titleId = 0;
     std::string path;
     std::vector<uint8_t> rgba;
     int width = 0;
     int height = 0;
+    AmbientSwatch glowPrimary = defaultAmbientA();
+    AmbientSwatch glowSecondary = defaultAmbientB();
     bool hasAsset = false;
     bool decoded = false;
 };
@@ -260,6 +403,9 @@ void decodePreviewOnWorker(const std::shared_ptr<DecodedPreview>& out) {
     out->width = dw;
     out->height = dh;
     out->decoded = !out->rgba.empty();
+    if (out->decoded)
+        extractAmbientSwatches(out->rgba, dw, dh,
+                               out->glowPrimary, out->glowSecondary);
 }
 
 #ifdef SWITCHU_V81_FFMPEG
@@ -1087,6 +1233,11 @@ struct WaraPreviewRuntime {
     bool prewarmAttempted = false;
     bool prewarmOk = false;
 
+    AmbientSwatch currentGlowPrimary = defaultAmbientA();
+    AmbientSwatch currentGlowSecondary = defaultAmbientB();
+    AmbientSwatch nextGlowPrimary = defaultAmbientA();
+    AmbientSwatch nextGlowSecondary = defaultAmbientB();
+
 #ifdef SWITCHU_V81_FFMPEG
     Mp4PreviewDecoder videoDecoder;
     uint64_t videoRequestedTitle = 0;
@@ -1367,6 +1518,10 @@ void WaraWaraBackground::setPreviewActive(bool active) {
         r.nextIndex = 1;
         r.prewarmAttempted = false;
         r.prewarmOk = false;
+        r.currentGlowPrimary = defaultAmbientA();
+        r.currentGlowSecondary = defaultAmbientB();
+        r.nextGlowPrimary = defaultAmbientA();
+        r.nextGlowSecondary = defaultAmbientB();
 
 #ifdef SWITCHU_V81_FFMPEG
         r.videoRequestedTitle = 0;
@@ -1594,6 +1749,8 @@ void WaraWaraBackground::onUpdate(float dt) {
                 r.nextIndex = oldCurrent;
                 r.currentAvailable = true;
                 r.resolvedTitle = r.transitionTargetTitle;
+                r.currentGlowPrimary = r.nextGlowPrimary;
+                r.currentGlowSecondary = r.nextGlowSecondary;
 
                 // L'ancien current ne sera pas reutilise pendant au moins
                 // trois frames, ce qui couvre le double buffering du renderer.
@@ -1606,6 +1763,8 @@ void WaraWaraBackground::onUpdate(float dt) {
                 }
                 r.currentAvailable = false;
                 r.resolvedTitle = r.transitionTargetTitle;
+                r.currentGlowPrimary = defaultAmbientA();
+                r.currentGlowSecondary = defaultAmbientB();
             }
 
             r.nextAvailable = false;
@@ -1804,6 +1963,8 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
         const auto ready = r.ready;
         r.ready.reset();
+        r.nextGlowPrimary = ready->glowPrimary;
+        r.nextGlowSecondary = ready->glowSecondary;
 
         const bool uploaded = r.textures[r.nextIndex].upload(
             ren,
@@ -1944,61 +2105,75 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     }
 #endif
 
-    // V10 visual integration. The media stays readable but never overwhelms
-    // the HOME; the lower base is deliberately lighter than V9 and blends
-    // progressively into the still/video instead of forming a black strip.
-    const nxui::Color lowerBase(0.105f, 0.108f, 0.120f, 1.f);
-    const float fadeStartY = area.y + area.height * 0.45f;
-    const float solidStartY = area.y + area.height * 0.74f;
+    // V10.1 visual integration: the reference is substantially darker than
+    // the previous beta. Artwork stays visible, while UI and covers clearly win.
+    const nxui::Color lowerBase(0.095f, 0.098f, 0.110f, 1.f);
+    const float fadeStartY = area.y + area.height * 0.48f;
+    const float solidStartY = area.y + area.height * 0.79f;
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
-    if (previewVisualAlpha > 0.001f) {
-        const float a = std::clamp(previewVisualAlpha * m_opacity, 0.f, 1.f);
+    const float mediaFactor = std::clamp(previewVisualAlpha, 0.f, 1.f);
+    const float veilTop = (0.16f + 0.20f * mediaFactor) * baseAlpha;
+    const float veilBottom = (0.28f + 0.32f * mediaFactor) * baseAlpha;
 
-        // Semi-transparent dark veil across the media. Bright previews remain
-        // recognizable while text and covers keep visual priority.
-        ren.drawGradientRect(
-            area,
-            nxui::Color(0.012f, 0.010f, 0.024f, 0.14f * a),
-            nxui::Color(0.015f, 0.014f, 0.026f, 0.30f * a)
-        );
+    // This veil is always present. With a still/video it becomes strong enough
+    // to match the dark reference; without media it simply calms the theme.
+    ren.drawGradientRect(
+        area,
+        nxui::Color(0.006f, 0.008f, 0.014f, veilTop),
+        nxui::Color(0.008f, 0.010f, 0.018f, veilBottom)
+    );
 
-        // Very soft colour atmosphere; this is a tint, not an RGB effect.
-        ren.drawGradientRect(
-            area,
-            nxui::Color(0.17f, 0.045f, 0.24f, 0.045f * a),
-            nxui::Color(0.045f, 0.055f, 0.17f, 0.070f * a)
-        );
+    AmbientSwatch glowPrimary = r.currentGlowPrimary;
+    AmbientSwatch glowSecondary = r.currentGlowSecondary;
+    if (r.transitioning && r.nextAvailable) {
+        const float t = smoothStep01(r.fade);
+        glowPrimary = mixAmbient(r.currentGlowPrimary, r.nextGlowPrimary, t);
+        glowSecondary = mixAmbient(r.currentGlowSecondary, r.nextGlowSecondary, t);
+    } else if (!r.currentAvailable && r.nextAvailable) {
+        glowPrimary = r.nextGlowPrimary;
+        glowSecondary = r.nextGlowSecondary;
     }
 
-    // Diffuse violet/blue glows behind the carousel. Several low-alpha discs
-    // approximate a broad halo without visible LED points or hard edges.
-    const float glowAlpha = 0.90f * baseAlpha;
-    const nxui::Vec2 violetCenter {area.x + area.width * 0.42f,
-                                   area.y + area.height * 0.54f};
-    const nxui::Vec2 blueCenter {area.x + area.width * 0.62f,
-                                 area.y + area.height * 0.52f};
+    // A small coloured wash binds the background to the extracted artwork
+    // palette before the larger fog lights are drawn.
+    ren.drawGradientRect(
+        area,
+        nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
+                    0.028f * baseAlpha),
+        nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
+                    0.040f * baseAlpha)
+    );
 
-    ren.drawCircle(violetCenter, 330.f,
-                   nxui::Color(0.36f, 0.08f, 0.72f, 0.012f * glowAlpha), 72);
-    ren.drawCircle(violetCenter, 235.f,
-                   nxui::Color(0.42f, 0.11f, 0.82f, 0.018f * glowAlpha), 64);
-    ren.drawCircle(violetCenter, 145.f,
-                   nxui::Color(0.48f, 0.15f, 0.92f, 0.026f * glowAlpha), 56);
+    // Broad diffuse atmosphere, not LED dots. The two hues are extracted from
+    // the selected background image on the worker thread (fallback: violet/blue).
+    const nxui::Vec2 primaryCenter {area.x + area.width * 0.40f,
+                                    area.y + area.height * 0.50f};
+    const nxui::Vec2 secondaryCenter {area.x + area.width * 0.63f,
+                                      area.y + area.height * 0.48f};
 
-    ren.drawCircle(blueCenter, 320.f,
-                   nxui::Color(0.08f, 0.20f, 0.78f, 0.010f * glowAlpha), 72);
-    ren.drawCircle(blueCenter, 225.f,
-                   nxui::Color(0.10f, 0.28f, 0.92f, 0.017f * glowAlpha), 64);
-    ren.drawCircle(blueCenter, 140.f,
-                   nxui::Color(0.14f, 0.36f, 1.00f, 0.024f * glowAlpha), 56);
+    auto drawGlow = [&](const nxui::Vec2& center,
+                        const AmbientSwatch& c,
+                        float radiusScale) {
+        ren.drawCircle(center, 390.f * radiusScale,
+                       nxui::Color(c.r, c.g, c.b, 0.018f * baseAlpha), 80);
+        ren.drawCircle(center, 285.f * radiusScale,
+                       nxui::Color(c.r, c.g, c.b, 0.032f * baseAlpha), 72);
+        ren.drawCircle(center, 190.f * radiusScale,
+                       nxui::Color(c.r, c.g, c.b, 0.052f * baseAlpha), 64);
+        ren.drawCircle(center, 116.f * radiusScale,
+                       nxui::Color(c.r, c.g, c.b, 0.068f * baseAlpha), 56);
+    };
 
-    // The anthracite base belongs to the HOME composition, so it remains even
-    // when a title has no custom image/video.
+    drawGlow(primaryCenter, glowPrimary, 1.f);
+    drawGlow(secondaryCenter, glowSecondary, 0.94f);
+
+    // The lower information zone is anthracite rather than black and blends
+    // into the media so the title/actions feel embedded in the composition.
     ren.drawGradientRect(
         {area.x, fadeStartY, area.width, solidStartY - fadeStartY},
         lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(baseAlpha)
+        lowerBase.withAlpha(0.98f * baseAlpha)
     );
 
     ren.drawRect(

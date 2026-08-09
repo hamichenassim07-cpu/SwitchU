@@ -6,7 +6,7 @@
 
 class DateTimeWidget : public nxui::GlassWidget {
 public:
-    DateTimeWidget() = default;
+    DateTimeWidget();
     void setFont(nxui::Font* f) { m_font = f; }
     void setSmallFont(nxui::Font* sf) { m_smallFont = sf; }
     void setTextColor(const nxui::Color& c) { m_textColor = c; }

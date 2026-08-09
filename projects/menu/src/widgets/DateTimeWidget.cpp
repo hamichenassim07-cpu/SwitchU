@@ -31,6 +31,17 @@ float smooth01(float value) {
 }
 }
 
+DateTimeWidget::DateTimeWidget() {
+    // V10.1: the clock belongs to the same soft frosted-green visual family
+    // as the HOME category capsule. The app still applies its global theme,
+    // so the final pass below is intentionally subtle rather than opaque.
+    setCornerRadius(22.f);
+    setBaseColor(nxui::Color(0.46f, 0.62f, 0.56f, 0.22f));
+    setBorderColor(nxui::Color(0.86f, 0.98f, 0.92f, 0.24f));
+    setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.09f));
+    setPanelOpacity(0.82f);
+}
+
 nxui::Rect DateTimeWidget::homeTabsRect() const {
     return {kNavX, kNavY, kNavW, kNavH};
 }
@@ -121,7 +132,33 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     if (!m_font)
         return;
 
+    // Re-enable one light blur pass after the HOME builder's legacy
+    // setBlurEnabled(false); this takes effect from the next frame onward.
+    setBlurEnabled(true);
+    setBlurRadius(1.35f);
+    setBlurPasses(1);
+
     nxui::Rect cr = contentRect();
+
+    // Slightly stronger than the category bar so time/date stay readable over
+    // bright game artwork. This is a layered glass illusion, not an opaque card.
+    ren.drawRoundedRect(
+        cr,
+        nxui::Color(0.42f, 0.58f, 0.52f, 0.20f * m_opacity),
+        20.f
+    );
+    ren.drawRoundedRect(
+        {cr.x + 2.f, cr.y + 2.f, cr.width - 4.f, cr.height * 0.42f},
+        nxui::Color(0.94f, 1.00f, 0.97f, 0.055f * m_opacity),
+        18.f
+    );
+    ren.drawRoundedRectOutline(
+        cr,
+        nxui::Color(0.90f, 1.00f, 0.95f, 0.18f * m_opacity),
+        20.f,
+        1.f
+    );
+
     nxui::Font* dateFont =
         m_smallFont ? m_smallFont : m_font;
 
@@ -223,40 +260,40 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         kTabH
     };
 
-    if (m_homeTabsFocused) {
-        // Two very soft violet/blue passes make focus visible without turning
-        // the selector into a bright RGB control.
-        ren.drawRoundedRect(
-            {navRect.x - 4.f, navRect.y - 3.f,
-             navRect.width + 8.f, navRect.height + 6.f},
-            nxui::Color(0.18f, 0.08f, 0.34f, 0.10f * m_opacity),
-            27.f
-        );
-        ren.drawRoundedRectOutline(
-            navRect,
-            nxui::Color(0.46f, 0.48f, 1.f, 0.30f * m_opacity),
-            24.f,
-            1.5f
-        );
-    }
-
+    // V10.1: Jeux / Applications is now an indicator only. It never receives
+    // focus; L and R change category globally. The outer body uses a light
+    // frosted-green treatment inspired by the new reference images.
+    ren.drawRoundedRect(
+        {navRect.x, navRect.y + 2.f, navRect.width, navRect.height},
+        nxui::Color(0.01f, 0.025f, 0.020f, 0.18f * m_opacity),
+        24.f
+    );
     ren.drawRoundedRect(
         navRect,
-        nxui::Color(0.035f, 0.032f, 0.045f,
-                    (m_homeTabsFocused ? 0.70f : 0.55f) * m_opacity),
+        nxui::Color(0.58f, 0.73f, 0.67f, 0.28f * m_opacity),
         24.f
+    );
+    ren.drawRoundedRect(
+        {navRect.x + 2.f, navRect.y + 2.f, navRect.width - 4.f, navRect.height * 0.46f},
+        nxui::Color(0.92f, 1.00f, 0.96f, 0.075f * m_opacity),
+        22.f
     );
     ren.drawRoundedRectOutline(
         navRect,
-        nxui::Color(1.f, 1.f, 1.f,
-                    (m_homeTabsFocused ? 0.20f : 0.12f) * m_opacity),
+        nxui::Color(0.90f, 1.00f, 0.95f, 0.22f * m_opacity),
         24.f,
-        1.f
+        1.15f
     );
     ren.drawRoundedRect(
         activeRect,
-        nxui::Color(0.94f, 0.94f, 0.96f, 0.97f * m_opacity),
+        nxui::Color(0.90f, 0.96f, 0.92f, 0.93f * m_opacity),
         18.f
+    );
+    ren.drawRoundedRectOutline(
+        activeRect,
+        nxui::Color(1.f, 1.f, 1.f, 0.28f * m_opacity),
+        18.f,
+        1.f
     );
 
     auto& i18n = nxui::I18n::instance();
@@ -274,8 +311,8 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float gamesActive = 1.f - slide;
     const float appsActive = slide;
 
-    const nxui::Color inactive(0.95f, 0.94f, 0.98f, 0.76f * m_opacity);
-    const nxui::Color active(0.08f, 0.075f, 0.10f, m_opacity);
+    const nxui::Color inactive(0.96f, 0.99f, 0.97f, 0.84f * m_opacity);
+    const nxui::Color active(0.075f, 0.105f, 0.090f, m_opacity);
 
     auto mixColor = [](const nxui::Color& a,
                        const nxui::Color& b,

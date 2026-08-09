@@ -14,6 +14,8 @@ public:
 
     void setAnchor(float centerX, float topY, float screenWidth = 1280.f);
     void setText(const std::string& text, float screenWidth = 1280.f);
+    void setGameActionsVisible(bool visible);
+    bool gameActionsVisible() const { return m_showGameActions; }
     void hideAnimated(float screenWidth = 1280.f);
 
 protected:
@@ -33,4 +35,5 @@ private:
     float m_anchorCenterX = 640.f;
     bool m_layoutInitialized = false;
     bool m_hideOnCollapse = false;
+    bool m_showGameActions = false;
 };

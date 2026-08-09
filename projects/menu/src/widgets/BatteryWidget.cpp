@@ -46,8 +46,33 @@ void BatteryWidget::onContentUpdate(float dt) {
 }
 
 void BatteryWidget::onContentRender(nxui::Renderer& ren) {
+    // Re-enable one light blur pass after the HOME builder's legacy
+    // setBlurEnabled(false); this takes effect from the next frame onward.
+    setBlurEnabled(true);
+    setBlurRadius(1.35f);
+    setBlurPasses(1);
+
     const nxui::Rect cr = contentRect();
     const float op = opacity();
+
+    // V10.1: stronger frosted-green HUD treatment, matching the clock while
+    // keeping the battery itself crisp and high-contrast.
+    ren.drawRoundedRect(
+        cr,
+        nxui::Color(0.42f, 0.58f, 0.52f, 0.23f * op),
+        20.f
+    );
+    ren.drawRoundedRect(
+        {cr.x + 2.f, cr.y + 2.f, cr.width - 4.f, cr.height * 0.42f},
+        nxui::Color(0.94f, 1.00f, 0.97f, 0.065f * op),
+        18.f
+    );
+    ren.drawRoundedRectOutline(
+        cr,
+        nxui::Color(0.90f, 1.00f, 0.95f, 0.20f * op),
+        20.f,
+        1.f
+    );
     const float level = std::clamp(m_level, 0.f, 1.f);
 
     char buffer[16] = {};

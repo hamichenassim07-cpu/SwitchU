@@ -138,10 +138,10 @@ std::string WiiUMenuApp::accessibilityActionsFor(nxui::Widget* w) const {
     if (w->tag() == "glossy_icon") {
         auto* icon = static_cast<GlossyIcon*>(w);
         if (icon->titleId() == 0)
-            return i18n.tr("accessibility.actions.empty_slot", "Directional pad to navigate. ZL or ZR to change page.");
+            return i18n.tr("accessibility.actions.empty_slot", "Directional pad to navigate. L or R to change category.");
         return icon->isNotLaunchable()
-            ? i18n.tr("accessibility.actions.game_blocked", "A to show the reason. Y to move. ZL or ZR to change page.")
-            : i18n.tr("accessibility.actions.game_launchable", "A to launch. X for options. Y to move. ZL or ZR to change page.");
+            ? i18n.tr("accessibility.actions.game_blocked", "A to show the reason. Y to move. L or R to change category.")
+            : i18n.tr("accessibility.actions.game_launchable", "A to launch. X for options. Y to move. L or R to change category.");
     }
     if (m_settings && w == m_settings.get())
         return i18n.tr("accessibility.actions.settings", "Up and down to choose a category. A or right to enter. B to close.");
@@ -322,6 +322,8 @@ void WiiUMenuApp::enterEditMode() {
     m_editMode = true;
     m_editSourceIndex = m_grid ? m_grid->focusedGlobalIndex() : -1;
     m_editHeldTitle = icon->title();
+    if (m_titlePill)
+        m_titlePill->setGameActionsVisible(false);
     startEditGhost(icon);
     bindEditActions(icon);
     m_titlePill->setText(nxui::I18n::instance().tr("game.move_prefix", "Move: ") + m_editHeldTitle);
@@ -344,6 +346,7 @@ void WiiUMenuApp::exitEditMode() {
     auto* cur = focusManager().current();
     if (isEditableIcon(cur)) {
         auto* icon = static_cast<GlossyIcon*>(cur);
+        m_titlePill->setGameActionsVisible(true);
         m_titlePill->setText(icon->title());
         m_titlePill->setVisible(true);
     } else {
@@ -478,11 +481,110 @@ bool WiiUMenuApp::moveFocusedIcon(nxui::FocusDirection dir) {
     return true;
 }
 
+void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
+    if (!m_clock || !m_grid)
+        return;
+
+    if (m_lockScreenActive ||
+        (m_launchAnim && m_launchAnim->isPlaying()) ||
+        (m_dialog && m_dialog->isActive()) ||
+        (m_themeShop && m_themeShop->isActive()) ||
+        (m_settings && m_settings->isActive()) ||
+        (m_userSelect && m_userSelect->isActive())) {
+        return;
+    }
+
+    if (g_v10ApplicationsActive == applications)
+        return;
+
+    nxui::Widget* previousMainFocus = focusManager().current();
+    const bool wasGameFocused =
+        previousMainFocus && previousMainFocus->tag() == "glossy_icon";
+
+    g_v10ApplicationsActive = applications;
+    m_clock->setHomeApplicationsActive(applications);
+    m_grid->setShowApplications(applications);
+
+    nxui::Widget* gridTarget = m_grid->focusManager().current();
+
+    // Keep out-of-carousel navigation coherent even when L/R is pressed while
+    // the profile or a corner button owns focus.
+    for (auto& avatar : m_userAvatarButtons) {
+        if (avatar)
+            avatar->setCustomNavigation(
+                nxui::FocusDirection::DOWN,
+                gridTarget ? gridTarget : avatar.get()
+            );
+    }
+    for (auto& btn : m_sidebar.leftButtons()) {
+        if (btn)
+            btn->setCustomNavigation(
+                nxui::FocusDirection::UP,
+                gridTarget ? gridTarget : btn.get()
+            );
+    }
+    for (auto& btn : m_sidebar.rightButtons()) {
+        if (btn)
+            btn->setCustomNavigation(
+                nxui::FocusDirection::UP,
+                gridTarget ? gridTarget : btn.get()
+            );
+    }
+
+    if (gridTarget && gridTarget->tag() == "glossy_icon") {
+        auto* icon = static_cast<GlossyIcon*>(gridTarget);
+        WaraWaraBackground::notifySelectedGame(icon->titleId());
+
+        if (wasGameFocused) {
+            m_suppressNextNavigateSfx = true;
+            focusManager().setFocus(gridTarget);
+        }
+    } else {
+        WaraWaraBackground::notifySelectedGame(0);
+
+        // An empty Applications list must never leave the global focus parked
+        // on an invisible game from the previous category.
+        if (wasGameFocused) {
+            nxui::Widget* fallback = nullptr;
+            if (!m_userAvatarButtons.empty() && m_userAvatarButtons.front()->isVisible())
+                fallback = m_userAvatarButtons.front().get();
+            if (!fallback) {
+                for (auto& btn : m_sidebar.leftButtons()) {
+                    if (btn && btn->isVisible()) {
+                        fallback = btn.get();
+                        break;
+                    }
+                }
+            }
+            if (fallback) {
+                m_suppressNextNavigateSfx = true;
+                focusManager().setFocus(fallback);
+            }
+        }
+    }
+
+    if (m_titlePill) {
+        if (gridTarget && wasGameFocused) {
+            m_titlePill->setGameActionsVisible(true);
+        } else {
+            m_titlePill->setGameActionsVisible(false);
+            m_titlePill->hideAnimated();
+        }
+    }
+
+    updateCursor();
+    m_audio.playSfx(Sfx::PageChange);
+
+    DebugLog::log(
+        "[home-tabs] L/R active=%s visible=%d",
+        applications ? "Applications" : "Jeux",
+        m_grid->visibleCount()
+    );
+}
+
 void WiiUMenuApp::wireFocusCallback() {
-    // V10 category selector. Switch U cannot reliably distinguish every
-    // downloadable "app" from a game through NS records alone, so the
-    // Applications category is driven by explicit title IDs in
-    // sdmc:/config/SwitchU/applications.txt. No fake entries are generated.
+    // V10.1 categories are display-only: L selects Jeux, R selects
+    // Applications. The category capsule never enters the FocusManager.
     if (m_clock && m_grid) {
         g_v10ApplicationsActive = false;
         m_grid->setApplicationTitleIds(loadV10ApplicationTitleIds());
@@ -490,96 +592,14 @@ void WiiUMenuApp::wireFocusCallback() {
 
         m_clock->setHomeApplicationsActive(false);
         m_clock->setHomeTabsFocused(false);
-        m_clock->setFocusable(true);
-        m_clock->setTag("home_category_tabs");
-        m_clock->setAccessibilityLabel(
-            nxui::I18n::instance().tr(
-                "home.tabs.accessibility",
-                "Jeux et Applications"
-            )
-        );
-        m_clock->setAccessibilityRole(
-            nxui::I18n::instance().tr(
-                "accessibility.roles.tablist",
-                "tabs"
-            )
-        );
-
+        m_clock->setFocusable(false);
+        m_clock->setTag("home_category_indicator");
         m_clock->clearActions();
-
-        auto applyCategory = [this](bool applications) {
-            if (!m_clock || !m_grid)
-                return;
-
-            if (g_v10ApplicationsActive == applications)
-                return;
-
-            g_v10ApplicationsActive = applications;
-            m_clock->setHomeApplicationsActive(applications);
-            m_grid->setShowApplications(applications);
-
-            nxui::Widget* gridTarget =
-                m_grid->focusManager().current();
-
-            if (gridTarget) {
-                m_clock->setCustomNavigation(
-                    nxui::FocusDirection::DOWN,
-                    gridTarget
-                );
-
-                if (gridTarget->tag() == "glossy_icon") {
-                    auto* icon =
-                        static_cast<GlossyIcon*>(gridTarget);
-                    WaraWaraBackground::notifySelectedGame(
-                        icon->titleId()
-                    );
-                }
-            } else {
-                m_clock->setCustomNavigation(
-                    nxui::FocusDirection::DOWN,
-                    m_clock.get()
-                );
-                WaraWaraBackground::notifySelectedGame(0);
-            }
-
-            m_titlePill->hideAnimated();
-            updateCursor();
-            m_audio.playSfx(Sfx::PageChange);
-
-            DebugLog::log(
-                "[home-tabs] active=%s visible=%d",
-                applications ? "Applications" : "Jeux",
-                m_grid->visibleCount()
-            );
-        };
-
-        m_clock->addAction(
-            static_cast<uint64_t>(nxui::Button::DLeft),
-            [applyCategory]() { applyCategory(false); }
-        );
-        m_clock->addAction(
-            static_cast<uint64_t>(nxui::Button::DRight),
-            [applyCategory]() { applyCategory(true); }
-        );
-        m_clock->addAction(
-            static_cast<uint64_t>(nxui::Button::A),
-            [this]() {
-                m_audio.playSfx(Sfx::Activate);
-            }
-        );
-        m_clock->setCustomNavigation(
-            nxui::FocusDirection::LEFT,
-            m_clock.get()
-        );
-        m_clock->setCustomNavigation(
-            nxui::FocusDirection::RIGHT,
-            m_clock.get()
-        );
     }
 
     focusManager().onFocusChanged([this](nxui::Widget*, nxui::Widget* cur) {
         if (m_clock)
-            m_clock->setHomeTabsFocused(cur == m_clock.get());
+            m_clock->setHomeTabsFocused(false);
         updateCursor();
         announceFocusedWidget(cur);
 
@@ -676,48 +696,28 @@ void WiiUMenuApp::wireFocusCallback() {
                 )
             );
 
-            // V10 NAVIGATION
-            // Haut : vrai sélecteur Jeux / Applications.
-            // Un second appui vers le haut depuis ce sélecteur garde l'accès
-            // au profil utilisateur existant.
-            nxui::Widget* tabsTarget =
-                m_clock ? static_cast<nxui::Widget*>(m_clock.get()) : nullptr;
+            // V10.1 NAVIGATION
+            // Jeux / Applications is no longer focusable. Up from the carousel
+            // goes directly to the existing profile control; L/R owns categories.
             nxui::Widget* profileTarget = nullptr;
-
             if (!m_userAvatarButtons.empty())
                 profileTarget = m_userAvatarButtons.front().get();
 
-            if (tabsTarget) {
-                cur->setCustomNavigation(
-                    nxui::FocusDirection::UP,
-                    tabsTarget
-                );
-                tabsTarget->setCustomNavigation(
-                    nxui::FocusDirection::DOWN,
-                    cur
-                );
-
-                if (profileTarget) {
-                    tabsTarget->setCustomNavigation(
-                        nxui::FocusDirection::UP,
-                        profileTarget
-                    );
-                    for (auto& avatar : m_userAvatarButtons) {
-                        avatar->setCustomNavigation(
-                            nxui::FocusDirection::DOWN,
-                            tabsTarget
-                        );
-                    }
-                } else {
-                    tabsTarget->setCustomNavigation(
-                        nxui::FocusDirection::UP,
-                        tabsTarget
-                    );
-                }
-            } else if (profileTarget) {
+            if (profileTarget) {
                 cur->setCustomNavigation(
                     nxui::FocusDirection::UP,
                     profileTarget
+                );
+                for (auto& avatar : m_userAvatarButtons) {
+                    avatar->setCustomNavigation(
+                        nxui::FocusDirection::DOWN,
+                        cur
+                    );
+                }
+            } else {
+                cur->setCustomNavigation(
+                    nxui::FocusDirection::UP,
+                    cur
                 );
             }
 
@@ -782,6 +782,7 @@ void WiiUMenuApp::wireFocusCallback() {
             auto& i18n = nxui::I18n::instance();
 
             if (m_editMode) {
+                m_titlePill->setGameActionsVisible(false);
                 bindEditActions(icon);
                 m_editGhostTargetRect =
                     icon->focusRect();
@@ -816,15 +817,19 @@ void WiiUMenuApp::wireFocusCallback() {
             }
 
             if (icon->titleId() == 0) {
+                m_titlePill->setGameActionsVisible(false);
                 m_titlePill->hideAnimated();
                 return;
             }
 
+            m_titlePill->setGameActionsVisible(true);
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
         } else if (cur) {
             if (m_editMode)
                 exitEditMode();
+            if (m_titlePill)
+                m_titlePill->setGameActionsVisible(false);
 
             if (m_clock && cur == m_clock.get()) {
                 m_titlePill->hideAnimated();
@@ -1055,7 +1060,10 @@ void WiiUMenuApp::wireGlobalActions() {
     auto& root = rootBox();
 
     root.addAction(static_cast<uint64_t>(nxui::Button::L), [this]() {
-        m_accessibility.repeatLastAnnouncement();
+        setHomeApplicationsCategory(false);
+    });
+    root.addAction(static_cast<uint64_t>(nxui::Button::R), [this]() {
+        setHomeApplicationsCategory(true);
     });
 
     root.addAction(static_cast<uint64_t>(nxui::Button::ZL), [this]() {

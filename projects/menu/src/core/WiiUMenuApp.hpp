@@ -141,6 +141,7 @@ private:
     std::shared_ptr<GlossyIcon> makeIcon(const AppEntry& entry);
     void wireFocusCallback();
     void wireGlobalActions();
+    void setHomeApplicationsCategory(bool applications);
     void toggleAccessibilitySpeech();
     bool handleAccessibilityToggleCombo();
     bool isCurrentFocusableWidget(nxui::Widget* w) const;
