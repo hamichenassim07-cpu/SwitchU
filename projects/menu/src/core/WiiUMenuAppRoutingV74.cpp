@@ -51,6 +51,7 @@ void WiiUMenuApp::setStartupStatus(
 }
 #endif
 
+#ifdef SWITCHU_MENU
 void WiiUMenuApp::handleLockScreen(float dt) {
     // V9 memory ownership: while the lockscreen is visible the HOME preview
     // engine must own zero video/static preview textures.
@@ -233,6 +234,8 @@ void WiiUMenuApp::handleLockScreen(float dt) {
     );
     syncView();
 }
+
+#endif // SWITCHU_MENU: strong handleLockScreen
 
 #ifdef SWITCHU_MENU
 void WiiUMenuApp::handleSystemAction(SysAction a) {
