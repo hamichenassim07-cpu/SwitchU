@@ -21,13 +21,19 @@ void SystemMessages::pump() {
         return;
 
     for (auto a : actions) {
-        // V7.4: ApplicationSuspended/ApplicationExited ont maintenant leurs
-        // propres actions. Un HomeRequest recu alors que Switch U est deja
-        // actif est donc uniquement un HOME physique redondant.
         if (a == SysAction::HomeButton) {
-            DebugLog::log("[pump] physical HomeButton ignored while Switch U is active (lock=%d)",
-                          LockScreenView::isVisiblyActive() ? 1 : 0);
-            continue;
+            const bool requiredStateChange =
+                AppletLauncher::consumeRecentApplicationStateChange();
+
+            // Physical HOME presses are redundant while Switch U already owns
+            // the screen, both on HOME and on the lockscreen. Only the action
+            // paired with a fresh ApplicationSuspended/ApplicationExited
+            // state update is allowed through.
+            if (!requiredStateChange) {
+                DebugLog::log("[pump] physical HomeButton ignored while Switch U is active (lock=%d)",
+                              LockScreenView::isVisiblyActive() ? 1 : 0);
+                continue;
+            }
         }
         m_callback(a);
     }

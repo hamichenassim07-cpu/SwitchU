@@ -197,13 +197,8 @@ int main(int argc, char* argv[]) {
     auto startMode = readStartMode();
     auto sysStatus = readSystemStatus();
 
-    DebugLog::log("[menu] start mode=%d suspended=0x%016lX running=%d lockTarget=%s",
-                  (int)startMode,
-                  sysStatus.suspended_app_id,
-                  sysStatus.app_running,
-                  sysStatus.lock_return_target == switchu::smi::LockReturnTarget::Game
-                      ? "GAME"
-                      : "HOME");
+    DebugLog::log("[menu] start mode=%d  suspended=0x%016lX running=%d",
+                  (int)startMode, sysStatus.suspended_app_id, sysStatus.app_running);
 
     {
         std::string sdPath = fmt::format("{}/shaders/", SD_ASSETS);
@@ -247,9 +242,7 @@ int main(int argc, char* argv[]) {
 #else
         auto makeMenuActivity = [sysStatus, startMode](bool fromTutorial = false) -> std::unique_ptr<nxui::Activity> {
             auto activity = std::make_unique<WiiUMenuApp>();
-            activity->setStartupStatus(sysStatus.suspended_app_id,
-                                       sysStatus.app_running,
-                                       sysStatus.lock_return_target);
+            activity->setStartupStatus(sysStatus.suspended_app_id, sysStatus.app_running);
             activity->setStartupMode(startMode);
             activity->setTutorialStartupFade(fromTutorial);
             return activity;

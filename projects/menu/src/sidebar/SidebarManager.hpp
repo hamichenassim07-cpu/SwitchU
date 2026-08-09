@@ -44,10 +44,6 @@ public:
     nxui::Widget*  themeShopButton() const { return m_themeShopButton; }
 
 private:
-    void applyV9Layout(float progress);
-    void updateV9Navigation(bool expanded);
-    bool isSidebarButton(const nxui::Widget* widget) const;
-
     void loadAssets(nxui::GpuDevice& gpu, nxui::Renderer& ren,
                     const std::string& assetsBase,
                     const std::string& customIconsBase);
@@ -72,7 +68,4 @@ private:
     std::string m_loadedCustomIconsBase;
     bool m_assetsLoaded = false;
 
-    // V9 system shelf: only Settings + Controllers stay visible at rest.
-    float m_expandProgress = 0.f;
-    bool m_navigationExpanded = false;
 };

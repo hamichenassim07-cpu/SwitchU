@@ -2,41 +2,94 @@
 #include <nxui/core/Renderer.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
 namespace {
 
-float clamp01(float value) {
-    return std::clamp(value, 0.f, 1.f);
-}
+constexpr float kPi = 3.14159265358979323846f;
 
-nxui::Color mixColor(const nxui::Color& a,
-                     const nxui::Color& b,
-                     float t) {
-    t = clamp01(t);
+struct RingSegment {
+    float startAngle;
+    float endAngle;
+    nxui::Color color;
+};
+
+nxui::Vec2 pointOnCircle(const nxui::Vec2& center, float radius, float angle) {
     return {
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a + (b.a - a.a) * t
+        center.x + std::cos(angle) * radius,
+        center.y + std::sin(angle) * radius
     };
 }
 
-nxui::Color cardStageColor(float progress) {
-    // The resting state is a calm blue. Each A press moves the glass edge
-    // through cyan, deep blue-violet and finally fuchsia.
-    const nxui::Color idle(0.08f, 0.46f, 0.92f, 1.f);
-    const nxui::Color first(0.04f, 0.84f, 1.00f, 1.f);
-    const nxui::Color second(0.18f, 0.30f, 1.00f, 1.f);
-    const nxui::Color third(1.00f, 0.12f, 0.68f, 1.f);
+// V6.3: a segment is built as one non-overlapping mesh. The semicircular
+// endings meet the annular body on the same radial edge instead of placing a
+// transparent circle on top of it. This removes the brighter half-moons that
+// were visible at the ends in V6.2.
+void drawContinuousArc(nxui::Renderer& ren,
+                       const nxui::Vec2& center,
+                       float radius,
+                       float startAngle,
+                       float endAngle,
+                       const nxui::Color& color,
+                       float thickness,
+                       int sections,
+                       bool roundedEnds = true) {
+    if (radius <= 0.f || thickness <= 0.f || endAngle <= startAngle)
+        return;
 
-    progress = std::clamp(progress, 0.f, 3.f);
-    if (progress <= 1.f)
-        return mixColor(idle, first, progress);
-    if (progress <= 2.f)
-        return mixColor(first, second, progress - 1.f);
-    return mixColor(second, third, progress - 2.f);
+    sections = std::max(20, sections);
+    const float half = thickness * 0.5f;
+    const float innerRadius = std::max(0.5f, radius - half);
+    const float outerRadius = radius + half;
+
+    for (int i = 0; i < sections; ++i) {
+        const float t0 = static_cast<float>(i) / static_cast<float>(sections);
+        const float t1 = static_cast<float>(i + 1) / static_cast<float>(sections);
+        const float a0 = startAngle + (endAngle - startAngle) * t0;
+        const float a1 = startAngle + (endAngle - startAngle) * t1;
+
+        const nxui::Vec2 outer0 = pointOnCircle(center, outerRadius, a0);
+        const nxui::Vec2 outer1 = pointOnCircle(center, outerRadius, a1);
+        const nxui::Vec2 inner0 = pointOnCircle(center, innerRadius, a0);
+        const nxui::Vec2 inner1 = pointOnCircle(center, innerRadius, a1);
+
+        ren.drawTriangle(outer0, inner0, outer1, color);
+        ren.drawTriangle(inner0, inner1, outer1, color);
+    }
+
+    if (!roundedEnds)
+        return;
+
+    constexpr int kCapSections = 22;
+    auto drawCap = [&](float angle, bool startCap) {
+        const nxui::Vec2 capCenter = pointOnCircle(center, radius, angle);
+        const nxui::Vec2 radial{std::cos(angle), std::sin(angle)};
+        const nxui::Vec2 tangent{-std::sin(angle), std::cos(angle)};
+
+        // Outer radial edge -> inner radial edge. At the start the cap grows
+        // against the arc direction; at the end it grows with it.
+        for (int i = 0; i < kCapSections; ++i) {
+            const float u0 = static_cast<float>(i) / kCapSections;
+            const float u1 = static_cast<float>(i + 1) / kCapSections;
+            const float p0 = startCap ? -kPi * u0 : kPi * u0;
+            const float p1 = startCap ? -kPi * u1 : kPi * u1;
+
+            const nxui::Vec2 edge0{
+                capCenter.x + half * (std::cos(p0) * radial.x + std::sin(p0) * tangent.x),
+                capCenter.y + half * (std::cos(p0) * radial.y + std::sin(p0) * tangent.y)
+            };
+            const nxui::Vec2 edge1{
+                capCenter.x + half * (std::cos(p1) * radial.x + std::sin(p1) * tangent.x),
+                capCenter.y + half * (std::cos(p1) * radial.y + std::sin(p1) * tangent.y)
+            };
+            ren.drawTriangle(capCenter, edge0, edge1, color);
+        }
+    };
+
+    drawCap(startAngle, true);
+    drawCap(endAngle, false);
 }
 
 #ifdef NXUI_BACKEND_DEKO3D
@@ -57,7 +110,7 @@ void writeOrthoProjection(nxui::Renderer& ren, float width, float height) {
                                    nxui::GpuDevice::VS_UBO_SIZE);
 }
 
-bool beginCardGlowTarget(nxui::Renderer& ren) {
+bool beginRingGlowTarget(nxui::Renderer& ren) {
     auto& gpu = ren.gpu();
     if (!gpu.offscreenReady())
         return false;
@@ -77,7 +130,7 @@ bool beginCardGlowTarget(nxui::Renderer& ren) {
     return true;
 }
 
-void endCardGlowTarget(nxui::Renderer& ren) {
+void endRingGlowTarget(nxui::Renderer& ren) {
     ren.flush();
     auto& gpu = ren.gpu();
     auto cmd = gpu.cmdBuf();
@@ -99,154 +152,150 @@ void endCardGlowTarget(nxui::Renderer& ren) {
 
 void LockPressIndicator::onRender(nxui::Renderer& ren) {
     const nxui::Rect r = rect();
-    const float alpha = clamp01(opacity());
+    const float alpha = std::clamp(opacity(), 0.f, 1.f);
     if (alpha <= 0.001f || r.width <= 1.f || r.height <= 1.f)
         return;
 
-    // V7.4.4: the heavy offscreen glow must not run at rest. On real
-    // hardware it could leave a darkened composite over the whole lockscreen.
-    // The 3D card remains visible through its own frame; this indicator now
-    // wakes up only when the user has actually started the 3xA interaction.
-    const bool interactionActive =
-        (m_progress > 0) || (m_visualProgress > 0.02f) || (m_flash > 0.01f);
-    if (!interactionActive)
-        return;
-
-    const float breathe = 0.5f + 0.5f * std::sin(m_pulse * 1.38f);
-    const float flash = clamp01(m_flash);
-    const nxui::Color stage = cardStageColor(m_visualProgress);
-    const float radius = std::min(r.width, r.height) * 0.135f;
-    const bool projected = m_outlineCount >= 3;
-
-    auto drawProjectedLines = [&](float coordinateScale,
-                                  const nxui::Color& color,
-                                  float thickness) {
-        if (!projected)
-            return;
-        for (int i = 0; i < m_outlineCount; ++i) {
-            const int j = (i + 1) % m_outlineCount;
-            ren.drawLine(
-                {m_outline[i].x * coordinateScale,
-                 m_outline[i].y * coordinateScale},
-                {m_outline[j].x * coordinateScale,
-                 m_outline[j].y * coordinateScale},
-                color,
-                thickness * coordinateScale);
-        }
+    const nxui::Vec2 center = {
+        r.x + r.width * 0.5f,
+        r.y + r.height * 0.5f
     };
+    const float radius = std::min(r.width, r.height) * 0.405f;
+    const float breathe = 0.5f + 0.5f * std::sin(m_pulse * 1.62f);
+
+    const std::array<RingSegment, 3> segments = {{
+        {3.70f, 5.72f, nxui::Color(0.05f, 0.88f, 1.00f, 1.f)},
+        {1.82f, 3.08f, nxui::Color(0.30f, 0.42f, 1.00f, 1.f)},
+        {0.06f, 1.32f, nxui::Color(1.00f, 0.22f, 0.86f, 1.f)},
+    }};
+
+    float strongestFlash = 0.f;
+    bool hasActiveSegment = false;
+    for (int i = 0; i < 3; ++i) {
+        if (i < m_progress) {
+            hasActiveSegment = true;
+            if (i == m_progress - 1)
+                strongestFlash = std::clamp(m_flash, 0.f, 1.f);
+        }
+    }
 
     bool usedRealBlur = false;
 #ifdef NXUI_BACKEND_DEKO3D
-    if (beginCardGlowTarget(ren)) {
-        if (projected) {
-            // The old glow is preserved, but its source now follows the actual
-            // perspective silhouette instead of an axis-aligned rectangle.
-            drawProjectedLines(
-                0.5f,
-                stage.withAlpha((0.72f + 0.10f * breathe +
-                                 0.18f * flash) * alpha),
-                18.f + 4.f * flash);
-            drawProjectedLines(
-                0.5f,
-                nxui::Color(0.94f, 0.98f, 1.f,
-                            (0.18f + 0.16f * flash) * alpha),
-                4.0f);
-        } else {
-            const nxui::Rect halfRect = {
-                r.x * 0.5f,
-                r.y * 0.5f,
-                r.width * 0.5f,
-                r.height * 0.5f
-            };
-            const float halfRadius = radius * 0.5f;
+    // V6.5 real post-process glow. The validated ring geometry is rendered
+    // once into a transparent half-resolution target, blurred horizontally
+    // and vertically by the existing nxui pipeline, then recomposited behind
+    // the untouched sharp ring. Only the light changes; the ring shape does not.
+    if (hasActiveSegment && beginRingGlowTarget(ren)) {
+        const nxui::Vec2 glowCenter{center.x * 0.5f, center.y * 0.5f};
+        const float glowRadius = radius * 0.5f;
 
-            ren.drawRoundedRectOutline(
-                halfRect.expanded(3.5f),
-                stage.withAlpha((0.68f + 0.10f * breathe +
-                                 0.18f * flash) * alpha),
-                halfRadius + 3.5f,
-                15.f + 3.f * flash);
-            ren.drawRoundedRectOutline(
-                halfRect,
-                nxui::Color(0.94f, 0.98f, 1.f,
-                            (0.18f + 0.16f * flash) * alpha),
-                halfRadius,
-                3.2f);
+        for (int i = 0; i < 3; ++i) {
+            if (i >= m_progress)
+                continue;
+
+            const float localFlash = i == m_progress - 1
+                ? strongestFlash
+                : 0.f;
+            const auto& segment = segments[static_cast<std::size_t>(i)];
+            const float sourceThickness = (38.f + 7.f * localFlash) * 0.5f;
+
+            drawContinuousArc(
+                ren, glowCenter, glowRadius,
+                segment.startAngle, segment.endAngle,
+                segment.color.withAlpha(
+                    (0.72f + 0.12f * breathe + 0.14f * localFlash) * alpha),
+                sourceThickness, 112);
+
+            drawContinuousArc(
+                ren, glowCenter, glowRadius - 2.2f,
+                segment.startAngle + 0.025f,
+                segment.endAngle - 0.025f,
+                nxui::Color(0.92f, 0.98f, 1.f,
+                            (0.22f + 0.20f * localFlash) * alpha),
+                5.0f, 96, false);
         }
 
-        endCardGlowTarget(ren);
-        ren.applyBlur(2.50f, 2);
+        endRingGlowTarget(ren);
+        ren.applyBlur(2.65f, 2);
         const float compositeAlpha = std::clamp(
-            0.40f + 0.08f * breathe + 0.18f * flash,
-            0.f, 0.82f);
+            0.56f + 0.10f * breathe + 0.22f * strongestFlash,
+            0.f, 0.92f);
         ren.drawOffscreen(0,
-                          {0.f, 0.f,
-                           (float)ren.width() * 2.f,
-                           (float)ren.height() * 2.f},
+                          {0.f, 0.f, (float)ren.width(), (float)ren.height()},
                           nxui::Color::white().withAlpha(compositeAlpha * alpha));
         usedRealBlur = true;
     }
 #endif
 
-    if (!usedRealBlur) {
-        if (projected) {
-            drawProjectedLines(
-                1.f,
-                stage.withAlpha((0.040f + 0.035f * breathe +
-                                 0.065f * flash) * alpha),
-                27.f + 5.f * flash);
-            drawProjectedLines(
-                1.f,
-                stage.withAlpha((0.080f + 0.035f * breathe +
-                                 0.080f * flash) * alpha),
-                14.f + 3.f * flash);
-        } else {
-            ren.drawRoundedRectOutline(
-                r.expanded(12.f + 3.f * flash),
-                stage.withAlpha((0.025f + 0.030f * breathe +
-                                 0.055f * flash) * alpha),
-                radius + 12.f,
-                24.f + 5.f * flash);
-            ren.drawRoundedRectOutline(
-                r.expanded(6.f),
-                stage.withAlpha((0.055f + 0.035f * breathe +
-                                 0.070f * flash) * alpha),
-                radius + 6.f,
-                14.f + 3.f * flash);
+    for (int i = 0; i < 3; ++i) {
+        const bool active = i < m_progress;
+        const bool next = i == m_progress && m_progress < 3;
+        const float localFlash = active && i == m_progress - 1
+            ? std::clamp(m_flash, 0.f, 1.f)
+            : 0.f;
+        const RingSegment& segment = segments[static_cast<std::size_t>(i)];
+
+        const nxui::Color track = m_theme
+            ? m_theme->pageIndicator.withAlpha(
+                  (0.17f + (next ? 0.060f * breathe : 0.f)) * alpha)
+            : nxui::Color(0.22f, 0.27f, 0.48f,
+                          (0.17f + (next ? 0.060f * breathe : 0.f)) * alpha);
+
+        drawContinuousArc(ren, center, radius,
+                          segment.startAngle, segment.endAngle,
+                          track, 27.f, 108);
+
+        if (!active)
+            continue;
+
+        const float flashBoost = 1.f + localFlash * 0.07f;
+
+        // Portable fallback when offscreen post-processing is unavailable.
+        if (!usedRealBlur) {
+            drawContinuousArc(ren, center, radius,
+                              segment.startAngle, segment.endAngle,
+                              segment.color.withAlpha(
+                                  (0.045f + 0.022f * breathe +
+                                   0.050f * localFlash) * alpha),
+                              52.f * flashBoost, 116);
+            drawContinuousArc(ren, center, radius,
+                              segment.startAngle, segment.endAngle,
+                              segment.color.withAlpha(
+                                  (0.090f + 0.028f * breathe +
+                                   0.060f * localFlash) * alpha),
+                              42.f * flashBoost, 120);
+        }
+
+        // Main body: unchanged geometry and dimensions from the validated ring.
+        drawContinuousArc(ren, center, radius,
+                          segment.startAngle, segment.endAngle,
+                          segment.color.withAlpha(
+                              (0.90f + 0.08f * breathe) * alpha),
+                          34.f * flashBoost, 128);
+
+        // Thin inner reflection retained for material depth.
+        drawContinuousArc(ren, center, radius - 8.0f,
+                          segment.startAngle + 0.035f,
+                          segment.endAngle - 0.035f,
+                          nxui::Color(0.92f, 0.98f, 1.f,
+                                      (0.12f + 0.08f * breathe +
+                                       0.12f * localFlash) * alpha),
+                          3.2f, 104, false);
+
+        if (i == m_progress - 1) {
+            const float span = segment.endAngle - segment.startAngle;
+            const float phase = std::fmod(m_pulse * 0.28f, 1.f);
+            const float sheenStart = segment.startAngle +
+                span * (0.08f + 0.70f * phase);
+            const float sheenEnd = std::min(segment.endAngle - 0.04f,
+                                            sheenStart + span * 0.17f);
+            if (sheenEnd > sheenStart) {
+                drawContinuousArc(ren, center, radius - 4.5f,
+                                  sheenStart, sheenEnd,
+                                  nxui::Color(1.f, 1.f, 1.f,
+                                              (0.08f + 0.15f * localFlash) * alpha),
+                                  5.0f, 30, false);
+            }
         }
     }
-
-    if (projected) {
-        drawProjectedLines(
-            1.f,
-            nxui::Color(0.34f, 0.48f, 0.76f,
-                        (0.17f + 0.030f * breathe) * alpha),
-            2.4f);
-        drawProjectedLines(
-            1.f,
-            stage.withAlpha((0.68f + 0.13f * breathe +
-                             0.10f * flash) * alpha),
-            3.2f + 1.2f * flash);
-        return;
-    }
-
-    // Rectangle fallback kept for the no-game layout and older call sites.
-    ren.drawRoundedRectOutline(
-        r,
-        nxui::Color(0.34f, 0.48f, 0.76f,
-                    (0.20f + 0.035f * breathe) * alpha),
-        radius,
-        3.0f);
-    ren.drawRoundedRectOutline(
-        r,
-        stage.withAlpha((0.78f + 0.14f * breathe +
-                         0.08f * flash) * alpha),
-        radius,
-        4.0f + 1.5f * flash);
-    ren.drawRoundedRectOutline(
-        r.shrunk(3.4f),
-        nxui::Color(0.96f, 0.99f, 1.f,
-                    (0.12f + 0.10f * flash) * alpha),
-        std::max(2.f, radius - 3.4f),
-        1.25f);
 }

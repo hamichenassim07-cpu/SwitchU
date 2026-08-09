@@ -36,7 +36,6 @@ public:
     void setGreeting(const std::string& greeting);
     void setBatteryStatus(std::uint32_t percentage, bool charging);
     void setProgress(int progress, float flash);
-    void setReturnToGameOnUnlock(bool enabled) { m_returnToGameOnUnlock = enabled; }
     void setTransition(float opacity,
                        float reveal,
                        float unlockProgress,
@@ -56,7 +55,6 @@ private:
     void ensureProfile(nxui::Renderer& ren);
     void resetBackgroundAsset();
     void resetProfileAsset();
-    void updateStorageStatus();
 
     nxui::Font* m_fontNormal = nullptr;
     nxui::Font* m_fontSmall = nullptr;
@@ -67,7 +65,6 @@ private:
 
     nxui::GlassPanel m_profilePanel;
     nxui::GlassPanel m_connectionPanel;
-    nxui::GlassPanel m_storagePanel;
     LockPressIndicator m_progress;
 
     nxui::Texture* m_gameTexture = nullptr;
@@ -91,13 +88,9 @@ private:
     bool m_profileAttempted = false;
 
     float m_connectionPollTimer = 0.f;
-    float m_storagePollTimer = 0.f;
     float m_animationTime = 0.f;
     std::string m_audioStatus = "Haut-parleurs de la console";
     std::string m_controllerStatus = "État indisponible";
-    std::uint64_t m_sdTotalBytes = 0;
-    std::uint64_t m_sdFreeBytes = 0;
-    bool m_storageAvailable = false;
 
     std::string m_greeting = "Bon retour.";
     bool m_use12Hour = false;
@@ -105,7 +98,6 @@ private:
     bool m_batteryCharging = false;
     int m_pressCount = 0;
     float m_pressFlash = 0.f;
-    float m_visualPressProgress = 0.f;
     float m_viewOpacity = 1.f;
     float m_reveal = 1.f;
     float m_unlockProgress = 0.f;
@@ -114,5 +106,7 @@ private:
 
     bool m_musicSceneEntered = false;
     bool m_unlockAudioStarted = false;
-    bool m_returnToGameOnUnlock = false;
+    bool m_resumeHandoffPrepared = false;
+    bool m_resumeBlackFrameRendered = false;
+    bool m_resumeHandoffSent = false;
 };

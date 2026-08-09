@@ -4,7 +4,96 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
 #include <nxui/core/I18n.hpp>
+
+namespace {
+constexpr const char* kV10ApplicationsPath =
+    "sdmc:/config/SwitchU/applications.txt";
+
+bool g_v10ApplicationsActive = false;
+
+std::string trimV10(std::string value) {
+    auto notSpace = [](unsigned char c) {
+        return !std::isspace(c);
+    };
+
+    value.erase(
+        value.begin(),
+        std::find_if(value.begin(), value.end(), notSpace)
+    );
+    value.erase(
+        std::find_if(value.rbegin(), value.rend(), notSpace).base(),
+        value.end()
+    );
+    return value;
+}
+
+bool parseV10TitleId(const std::string& raw, uint64_t& out) {
+    std::string value = trimV10(raw);
+    if (value.empty())
+        return false;
+
+    const size_t hash = value.find('#');
+    if (hash != std::string::npos)
+        value = trimV10(value.substr(0, hash));
+
+    const size_t semicolon = value.find(';');
+    if (semicolon != std::string::npos)
+        value = trimV10(value.substr(0, semicolon));
+
+    if (value.rfind("0x", 0) == 0 || value.rfind("0X", 0) == 0)
+        value.erase(0, 2);
+
+    if (value.size() != 16)
+        return false;
+
+    for (char c : value) {
+        if (!std::isxdigit(static_cast<unsigned char>(c)))
+            return false;
+    }
+
+    try {
+        out = std::stoull(value, nullptr, 16);
+    } catch (...) {
+        out = 0;
+        return false;
+    }
+    return out != 0;
+}
+
+std::vector<uint64_t> loadV10ApplicationTitleIds() {
+    std::vector<uint64_t> ids;
+    std::ifstream file(kV10ApplicationsPath);
+    if (!file.is_open()) {
+        DebugLog::log(
+            "[home-tabs] %s absent -> Applications empty",
+            kV10ApplicationsPath
+        );
+        return ids;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        uint64_t titleId = 0;
+        if (parseV10TitleId(line, titleId))
+            ids.push_back(titleId);
+    }
+
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+
+    DebugLog::log(
+        "[home-tabs] loaded %d application title ids",
+        static_cast<int>(ids.size())
+    );
+    return ids;
+}
+} // namespace
 
 bool WiiUMenuApp::isEditableIcon(nxui::Widget* w) const {
     if (!w || w->tag() != "glossy_icon")
@@ -70,12 +159,12 @@ std::string WiiUMenuApp::accessibilityPositionFor(nxui::Widget* w) const {
     auto& i18n = nxui::I18n::instance();
     if (w->tag() == "glossy_icon" && m_grid) {
         const int global = m_grid->focusedGlobalIndex();
-        if (global >= 0) {
+        const int display = m_grid->displayPositionForGlobalIndex(global);
+        if (global >= 0 && display >= 0) {
             const int cols = std::max(1, m_grid->columns());
             const int rows = std::max(1, m_grid->rowsPerPage());
-            const int local = global % std::max(1, m_grid->iconsPerPage());
-            const int row = local / cols + 1;
-            const int col = local % cols + 1;
+            const int row = display / cols + 1;
+            const int col = display % cols + 1;
             return i18n.tr("accessibility.position.row", "row") + " " + std::to_string(row)
                  + " " + i18n.tr("accessibility.context.of", "of") + " " + std::to_string(rows)
                  + ". " + i18n.tr("accessibility.position.column", "column") + " " + std::to_string(col)
@@ -325,48 +414,31 @@ bool WiiUMenuApp::moveFocusedIcon(nxui::FocusDirection dir) {
     if (m_model.at(from).titleId == 0)
         return false;
 
-    int cols = std::max(1, m_grid->columns());
-    int rows = std::max(1, m_grid->rowsPerPage());
-    int perPage = std::max(1, m_grid->iconsPerPage());
-    int totalPages = std::max(1, m_grid->totalPages());
+    const int fromDisplay =
+        m_grid->displayPositionForGlobalIndex(from);
+    if (fromDisplay < 0)
+        return false;
 
-    int page = from / perPage;
-    int local = from % perPage;
-    int col = local % cols;
-    int row = local / cols;
-
-    int target = from;
+    int targetDisplay = fromDisplay;
     switch (dir) {
         case nxui::FocusDirection::LEFT:
-            if (col > 0)
-                target = from - 1;
-            else if (page > 0)
-                target = (page - 1) * perPage + row * cols + (cols - 1);
-            else
+            if (fromDisplay <= 0)
                 return false;
+            targetDisplay = fromDisplay - 1;
             break;
         case nxui::FocusDirection::RIGHT:
-            if (col < cols - 1)
-                target = from + 1;
-            else if (page + 1 < totalPages)
-                target = (page + 1) * perPage + row * cols;
-            else
+            if (fromDisplay + 1 >= m_grid->visibleCount())
                 return false;
+            targetDisplay = fromDisplay + 1;
             break;
         case nxui::FocusDirection::UP:
-            if (row > 0)
-                target = from - cols;
-            else
-                return false;
-            break;
         case nxui::FocusDirection::DOWN:
-            if (row + 1 < rows)
-                target = from + cols;
-            else
-                return false;
-            break;
+            // V10 HOME is a single horizontal row.
+            return false;
     }
 
+    const int target =
+        m_grid->globalIndexForDisplayPosition(targetDisplay);
     if (target < 0 || target >= m_model.count())
         return false;
     if (target == from)
@@ -407,7 +479,107 @@ bool WiiUMenuApp::moveFocusedIcon(nxui::FocusDirection dir) {
 }
 
 void WiiUMenuApp::wireFocusCallback() {
+    // V10 category selector. Switch U cannot reliably distinguish every
+    // downloadable "app" from a game through NS records alone, so the
+    // Applications category is driven by explicit title IDs in
+    // sdmc:/config/SwitchU/applications.txt. No fake entries are generated.
+    if (m_clock && m_grid) {
+        g_v10ApplicationsActive = false;
+        m_grid->setApplicationTitleIds(loadV10ApplicationTitleIds());
+        m_grid->setShowApplications(false);
+
+        m_clock->setHomeApplicationsActive(false);
+        m_clock->setHomeTabsFocused(false);
+        m_clock->setFocusable(true);
+        m_clock->setTag("home_category_tabs");
+        m_clock->setAccessibilityLabel(
+            nxui::I18n::instance().tr(
+                "home.tabs.accessibility",
+                "Jeux et Applications"
+            )
+        );
+        m_clock->setAccessibilityRole(
+            nxui::I18n::instance().tr(
+                "accessibility.roles.tablist",
+                "tabs"
+            )
+        );
+
+        m_clock->clearActions();
+
+        auto applyCategory = [this](bool applications) {
+            if (!m_clock || !m_grid)
+                return;
+
+            if (g_v10ApplicationsActive == applications)
+                return;
+
+            g_v10ApplicationsActive = applications;
+            m_clock->setHomeApplicationsActive(applications);
+            m_grid->setShowApplications(applications);
+
+            nxui::Widget* gridTarget =
+                m_grid->focusManager().current();
+
+            if (gridTarget) {
+                m_clock->setCustomNavigation(
+                    nxui::FocusDirection::DOWN,
+                    gridTarget
+                );
+
+                if (gridTarget->tag() == "glossy_icon") {
+                    auto* icon =
+                        static_cast<GlossyIcon*>(gridTarget);
+                    WaraWaraBackground::notifySelectedGame(
+                        icon->titleId()
+                    );
+                }
+            } else {
+                m_clock->setCustomNavigation(
+                    nxui::FocusDirection::DOWN,
+                    m_clock.get()
+                );
+                WaraWaraBackground::notifySelectedGame(0);
+            }
+
+            m_titlePill->hideAnimated();
+            updateCursor();
+            m_audio.playSfx(Sfx::PageChange);
+
+            DebugLog::log(
+                "[home-tabs] active=%s visible=%d",
+                applications ? "Applications" : "Jeux",
+                m_grid->visibleCount()
+            );
+        };
+
+        m_clock->addAction(
+            static_cast<uint64_t>(nxui::Button::Left),
+            [applyCategory]() { applyCategory(false); }
+        );
+        m_clock->addAction(
+            static_cast<uint64_t>(nxui::Button::Right),
+            [applyCategory]() { applyCategory(true); }
+        );
+        m_clock->addAction(
+            static_cast<uint64_t>(nxui::Button::A),
+            [this]() {
+                m_audio.playSfx(Sfx::Activate);
+            }
+        );
+        m_clock->setCustomNavigation(
+            nxui::FocusDirection::LEFT,
+            m_clock.get()
+        );
+        m_clock->setCustomNavigation(
+            nxui::FocusDirection::RIGHT,
+            m_clock.get()
+        );
+    }
+
     focusManager().onFocusChanged([this](nxui::Widget*, nxui::Widget* cur) {
+        if (m_clock)
+            m_clock->setHomeTabsFocused(cur == m_clock.get());
         updateCursor();
         announceFocusedWidget(cur);
 
@@ -451,10 +623,10 @@ void WiiUMenuApp::wireFocusCallback() {
             // gauche/droite reste toujours dans la rangée des jeux.
             // À la première ou à la dernière jaquette, la sélection reste
             // simplement sur place au lieu de tomber sur les boutons du bas.
-            const auto& gameIcons = m_grid->allIcons();
+            const auto gameIcons = m_grid->pageIcons();
 
             for (size_t i = 0; i < gameIcons.size(); ++i) {
-                auto* currentIcon = gameIcons[i].get();
+                auto* currentIcon = gameIcons[i];
 
                 if (!currentIcon)
                     continue;
@@ -463,10 +635,10 @@ void WiiUMenuApp::wireFocusCallback() {
                 nxui::Widget* rightTarget = currentIcon;
 
                 if (i > 0 && gameIcons[i - 1])
-                    leftTarget = gameIcons[i - 1].get();
+                    leftTarget = gameIcons[i - 1];
 
                 if (i + 1 < gameIcons.size() && gameIcons[i + 1])
-                    rightTarget = gameIcons[i + 1].get();
+                    rightTarget = gameIcons[i + 1];
 
                 currentIcon->setCustomNavigation(
                     nxui::FocusDirection::LEFT,
@@ -482,7 +654,7 @@ void WiiUMenuApp::wireFocusCallback() {
             auto* icon =
                 static_cast<GlossyIcon*>(cur);
 
-            constexpr float kSelectedScale = 1.12f;
+            constexpr float kSelectedScale = 1.045f;
 
             nxui::Rect baseRect =
                 icon->focusRect();
@@ -504,29 +676,49 @@ void WiiUMenuApp::wireFocusCallback() {
                 )
             );
 
-            // V9 NAVIGATION
-            // Haut : profil du joueur.
-            // Bas  : only the two visible shelf anchors at rest. Once one is
-            // focused, SidebarManager unfolds the other system functions.
+            // V10 NAVIGATION
+            // Haut : vrai sélecteur Jeux / Applications.
+            // Un second appui vers le haut depuis ce sélecteur garde l'accès
+            // au profil utilisateur existant.
+            nxui::Widget* tabsTarget =
+                m_clock ? static_cast<nxui::Widget*>(m_clock.get()) : nullptr;
             nxui::Widget* profileTarget = nullptr;
 
             if (!m_userAvatarButtons.empty())
-                profileTarget =
-                    m_userAvatarButtons.front().get();
+                profileTarget = m_userAvatarButtons.front().get();
 
-            if (profileTarget) {
+            if (tabsTarget) {
+                cur->setCustomNavigation(
+                    nxui::FocusDirection::UP,
+                    tabsTarget
+                );
+                tabsTarget->setCustomNavigation(
+                    nxui::FocusDirection::DOWN,
+                    cur
+                );
+
+                if (profileTarget) {
+                    tabsTarget->setCustomNavigation(
+                        nxui::FocusDirection::UP,
+                        profileTarget
+                    );
+                    for (auto& avatar : m_userAvatarButtons) {
+                        avatar->setCustomNavigation(
+                            nxui::FocusDirection::DOWN,
+                            tabsTarget
+                        );
+                    }
+                } else {
+                    tabsTarget->setCustomNavigation(
+                        nxui::FocusDirection::UP,
+                        tabsTarget
+                    );
+                }
+            } else if (profileTarget) {
                 cur->setCustomNavigation(
                     nxui::FocusDirection::UP,
                     profileTarget
                 );
-
-                for (auto& avatar :
-                     m_userAvatarButtons) {
-                    avatar->setCustomNavigation(
-                        nxui::FocusDirection::DOWN,
-                        cur
-                    );
-                }
             }
 
             nxui::Widget* bottomTarget = nullptr;
@@ -634,6 +826,11 @@ void WiiUMenuApp::wireFocusCallback() {
             if (m_editMode)
                 exitEditMode();
 
+            if (m_clock && cur == m_clock.get()) {
+                m_titlePill->hideAnimated();
+                return;
+            }
+
             for (auto& btn :
                  m_sidebar.leftButtons()) {
                 if (btn.get() == cur) {
@@ -696,7 +893,7 @@ void WiiUMenuApp::wireFocusCallback() {
 
             if (icon->titleId() != 0) {
                 constexpr float kSelectedScale =
-                    1.12f;
+                    1.045f;
 
                 nxui::Rect baseRect =
                     icon->focusRect();
@@ -1318,6 +1515,17 @@ void WiiUMenuApp::updateCursor() {
         return;
     }
 
+    if (m_clock && cur == m_clock.get()) {
+        m_cursor->setGradientEnabled(true);
+        m_cursor->moveTo(
+            m_clock->activeHomeTabRect().expanded(3.f),
+            21.f,
+            0.14f
+        );
+        m_cursor->setVisible(true);
+        return;
+    }
+
     nxui::Rect fr = cur->focusRect();
 
     if (cur->tag() == "glossy_icon") {
@@ -1326,7 +1534,7 @@ void WiiUMenuApp::updateCursor() {
         auto* icon =
             static_cast<GlossyIcon*>(cur);
 
-        constexpr float kSelectedScale = 1.12f;
+        constexpr float kSelectedScale = 1.045f;
 
         float visualExpand =
             fr.width *

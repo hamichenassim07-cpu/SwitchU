@@ -1,9 +1,9 @@
-// Switch U HOME V9.0 - preview MP4 H.264 asynchrone + rendu cinematographique.
+// Switch U HOME V10 - preview statique immediate + MP4 H.264 one-shot.
 //
-// La base V8.0A.2 reste intacte pour les backgrounds statiques. V8.1 ajoute
-// un decodeur MP4 dans un thread dedie, une petite file de frames CPU et trois
-// textures GPU persistantes. Le thread HOME ne lit ni ne decode la video et
-// ne fait aucun queue.waitIdle() pour une frame de preview.
+// Le background du jeu est la premiere couche normale. Apres 5 secondes sur
+// la meme selection, preview.mp4 est lu une seule fois puis le background
+// reapparait. Le decode reste asynchrone (NVTEGRA si disponible, fallback
+// logiciel), avec deux textures statiques et deux textures video reutilisees.
 #define SWITCHU_V80_BACKGROUND_STRONG 1
 #include "WaraWaraBackground.hpp"
 #include "core/DebugLog.hpp"
@@ -43,7 +43,7 @@ namespace {
 
 std::atomic<uint64_t> g_selectedGameTitle{0};
 
-constexpr float kPreviewDebounce = 0.12f;
+constexpr float kPreviewDebounce = 0.04f;
 constexpr float kPreviewFadeDuration = 0.32f;
 constexpr int kPreviewMaxWidth = 1280;
 constexpr int kPreviewMaxHeight = 720;
@@ -53,8 +53,9 @@ constexpr float kVideoDefaultMaxFps = 30.f;
 constexpr int kVideoStressMaxWidth = 1920;
 constexpr int kVideoStressMaxHeight = 1080;
 constexpr float kVideoStressMaxFps = 60.f;
+constexpr float kVideoStartDelay = 5.0f;
 constexpr float kVideoVisualZoom = 1.06f;
-constexpr float kVideoVerticalAnchor = 0.66f;
+constexpr float kVideoVerticalAnchor = 0.78f;
 constexpr const char* kVideoStressFlag =
     "sdmc:/config/SwitchU/video_1080p60.flag";
 constexpr const char* kVideoDisabledFlag =
@@ -146,13 +147,17 @@ nxui::Rect coverRect(int texW, int texH, const nxui::Rect& area) {
 
     const float w = static_cast<float>(texW);
     const float h = static_cast<float>(texH);
-    const float scale = std::max(area.width / w, area.height / h);
+    const float coverScale = std::max(area.width / w, area.height / h);
+    const float scale = coverScale * kVideoVisualZoom;
     const float drawW = w * scale;
     const float drawH = h * scale;
+    const float hiddenY = std::max(0.f, drawH - area.height);
 
+    // V10: static JPG/PNG and MP4 use the exact same raised framing so there
+    // is no vertical jump when the video fades in after five seconds.
     return {
         area.x + (area.width - drawW) * 0.5f,
-        area.y + (area.height - drawH) * 0.5f,
+        area.y - hiddenY * kVideoVerticalAnchor,
         drawW,
         drawH
     };
@@ -169,23 +174,7 @@ bool videoStress1080p60Enabled() {
 }
 
 nxui::Rect videoCoverRect(int texW, int texH, const nxui::Rect& area) {
-    if (texW <= 0 || texH <= 0)
-        return area;
-
-    const float w = static_cast<float>(texW);
-    const float h = static_cast<float>(texH);
-    const float coverScale = std::max(area.width / w, area.height / h);
-    const float scale = coverScale * kVideoVisualZoom;
-    const float drawW = w * scale;
-    const float drawH = h * scale;
-    const float hiddenY = std::max(0.f, drawH - area.height);
-
-    return {
-        area.x + (area.width - drawW) * 0.5f,
-        area.y - hiddenY * kVideoVerticalAnchor,
-        drawW,
-        drawH
-    };
+    return coverRect(texW, texH, area);
 }
 
 uint64_t previewImageMemoryUsed(nxui::Renderer& ren) {
@@ -279,6 +268,7 @@ enum class VideoDecodeStatus : int {
     Idle = 0,
     Opening,
     Playing,
+    Finished,
     NoFile,
     Failed,
 };
@@ -358,6 +348,15 @@ public:
         m_frames.pop_front();
         m_cv.notify_all();
         return static_cast<bool>(out);
+    }
+
+    bool hasQueuedFrames(uint64_t titleId) {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        for (const auto& frame : m_frames) {
+            if (frame && frame->titleId == titleId)
+                return true;
+        }
+        return false;
     }
 
     VideoDecodeStatus status() const {
@@ -694,16 +693,35 @@ private:
 
         while (isCurrent(serial)) {
             result = av_read_frame(format, packet);
-            if (result < 0) {
-                // Preview = boucle. On repart au debut et on vide les buffers.
-                if (av_seek_frame(format, streamIndex, 0,
-                                  AVSEEK_FLAG_BACKWARD) < 0) {
-                    break;
+            if (result == AVERROR_EOF) {
+                // V10: one-shot playback. Flush delayed decoder frames, then
+                // report a clean Finished state instead of seeking to frame 0.
+                avcodec_send_packet(codec, nullptr);
+                while (isCurrent(serial)) {
+                    const int receiveResult =
+                        avcodec_receive_frame(codec, decoded);
+                    if (receiveResult == AVERROR(EAGAIN) ||
+                        receiveResult == AVERROR_EOF)
+                        break;
+                    if (receiveResult < 0)
+                        break;
+                    if (!processDecodedFrame(decoded)) {
+                        cleanup();
+                        return;
+                    }
                 }
-                avcodec_flush_buffers(codec);
-                sampleAccumulator = 0.0;
-                continue;
+
+                cleanup();
+                if (isCurrent(serial))
+                    setStatusIfCurrent(
+                        serial,
+                        titleId,
+                        VideoDecodeStatus::Finished
+                    );
+                return;
             }
+            if (result < 0)
+                break;
 
             if (packet->stream_index != streamIndex) {
                 av_packet_unref(packet);
@@ -1051,6 +1069,9 @@ struct WaraPreviewRuntime {
     uint64_t nextTitle = 0;
 
     float stableTimer = 0.f;
+    // V10: independent selection timer. Unlike stableTimer, it keeps running
+    // after the static background has resolved so video can start at T+5 s.
+    float selectionTimer = 0.f;
     float fade = 0.f;
 
     bool transitioning = false;
@@ -1085,6 +1106,12 @@ struct WaraPreviewRuntime {
     bool videoPrewarmOk = false;
     bool videoFallbackRequired = false;
     bool videoDisabledLogged = false;
+
+    // One-shot state is reset only when selection changes.
+    bool videoAttemptedForSelection = false;
+    bool videoDecoderFinished = false;
+    bool videoFinishedForSelection = false;
+    bool videoReleaseWhenHidden = false;
 #endif
 };
 
@@ -1135,13 +1162,7 @@ void scheduleDecodeIfNeeded(WaraPreviewRuntime& r) {
         r.stableTimer < kPreviewDebounce)
         return;
 
-#ifdef SWITCHU_V81_FFMPEG
-    // Static JPG/PNG becomes a fallback instead of being decoded in parallel
-    // with a valid MP4. This is a major memory reduction on the HOME.
-    if (r.videoRequestedTitle == r.requestedTitle &&
-        !r.videoFallbackRequired)
-        return;
-#endif
+    // V10: the still image is the normal first stage, not a video fallback.
 
     r.decoding = std::make_shared<DecodedPreview>();
     r.decoding->titleId = r.requestedTitle;
@@ -1159,14 +1180,22 @@ void scheduleDecodeIfNeeded(WaraPreviewRuntime& r) {
 #ifdef SWITCHU_V81_FFMPEG
 void scheduleVideoIfNeeded(WaraPreviewRuntime& r) {
     if (r.requestedTitle == 0 ||
-        r.videoRequestedTitle == r.requestedTitle ||
-        r.stableTimer < kPreviewDebounce)
+        r.resolvedTitle != r.requestedTitle ||
+        r.videoAttemptedForSelection ||
+        r.selectionTimer < kVideoStartDelay)
         return;
+
+    // One attempt per selection. Returning to the same title later resets this
+    // flag because the selection itself changed away and back again.
+    r.videoAttemptedForSelection = true;
+    r.videoDecoderFinished = false;
+    r.videoFinishedForSelection = false;
 
     if (!videoPlaybackEnabled()) {
         r.videoDecoder.cancel();
         r.videoRequestedTitle = r.requestedTitle;
         r.videoFallbackRequired = true;
+        r.videoFinishedForSelection = true;
         if (!r.videoDisabledLogged) {
             r.videoDisabledLogged = true;
             DebugLog::log("[home-video] disabled by %s", kVideoDisabledFlag);
@@ -1180,6 +1209,7 @@ void scheduleVideoIfNeeded(WaraPreviewRuntime& r) {
         r.videoDecoder.cancel();
         r.videoRequestedTitle = r.requestedTitle;
         r.videoFallbackRequired = true;
+        r.videoFinishedForSelection = true;
         DebugLog::log("[home-video] no preview.mp4 for %016llX",
                       static_cast<unsigned long long>(r.requestedTitle));
         return;
@@ -1190,7 +1220,8 @@ void scheduleVideoIfNeeded(WaraPreviewRuntime& r) {
     r.videoStatusLoggedTitle = 0;
     r.videoStatusLogged = VideoDecodeStatus::Idle;
     r.videoDecoder.request(r.requestedTitle);
-    DebugLog::log("[home-video] request %016llX",
+    DebugLog::log("[home-video] request after %.1fs %016llX",
+                  kVideoStartDelay,
                   static_cast<unsigned long long>(r.requestedTitle));
 }
 
@@ -1204,12 +1235,22 @@ void pollVideoStatus(WaraPreviewRuntime& r) {
     r.videoStatusLoggedTitle = title;
     r.videoStatusLogged = status;
 
-    if (status == VideoDecodeStatus::NoFile) {
+    if (status == VideoDecodeStatus::Finished) {
+        if (title == r.requestedTitle) {
+            r.videoDecoderFinished = true;
+            DebugLog::log("[home-video] finished once %016llX",
+                          static_cast<unsigned long long>(title));
+        }
+    } else if (status == VideoDecodeStatus::NoFile) {
         r.videoFallbackRequired = true;
+        r.videoFinishedForSelection = true;
+        r.videoReleaseWhenHidden = true;
         DebugLog::log("[home-video] no preview.mp4 for %016llX",
                       static_cast<unsigned long long>(title));
     } else if (status == VideoDecodeStatus::Failed) {
         r.videoFallbackRequired = true;
+        r.videoFinishedForSelection = true;
+        r.videoReleaseWhenHidden = true;
         DebugLog::log("[home-video] decode failed %016llX -> static/theme fallback",
                       static_cast<unsigned long long>(title));
     }
@@ -1272,8 +1313,9 @@ void processReadyFallback(WaraPreviewRuntime& r) {
 } // namespace
 
 void WaraWaraBackground::notifySelectedGame(uint64_t titleId) {
-    if (titleId != 0)
-        g_selectedGameTitle.store(titleId, std::memory_order_relaxed);
+    // V10 also accepts 0 so an empty Applications category can explicitly
+    // return the HOME to its theme background.
+    g_selectedGameTitle.store(titleId, std::memory_order_relaxed);
 }
 
 void WaraWaraBackground::setPreviewActive(bool active) {
@@ -1316,6 +1358,7 @@ void WaraWaraBackground::setPreviewActive(bool active) {
         r.transitionTargetTitle = 0;
         r.nextTitle = 0;
         r.stableTimer = 0.f;
+        r.selectionTimer = 0.f;
         r.fade = 0.f;
         r.transitioning = false;
         r.currentAvailable = false;
@@ -1339,6 +1382,10 @@ void WaraWaraBackground::setPreviewActive(bool active) {
         r.videoPrewarmAttempted = false;
         r.videoPrewarmOk = false;
         r.videoFallbackRequired = false;
+        r.videoAttemptedForSelection = false;
+        r.videoDecoderFinished = false;
+        r.videoFinishedForSelection = false;
+        r.videoReleaseWhenHidden = false;
 #endif
 
         DebugLog::log("[home-preview] suspended for lockscreen; GPU preview memory released");
@@ -1351,6 +1398,13 @@ void WaraWaraBackground::setPreviewActive(bool active) {
     r.requestedTitle = 0;
     r.resolvedTitle = 0;
     r.stableTimer = 0.f;
+    r.selectionTimer = 0.f;
+#ifdef SWITCHU_V81_FFMPEG
+    r.videoAttemptedForSelection = false;
+    r.videoDecoderFinished = false;
+    r.videoFinishedForSelection = false;
+    r.videoReleaseWhenHidden = false;
+#endif
     DebugLog::log("[home-preview] resumed after lockscreen");
 }
 
@@ -1387,44 +1441,76 @@ void WaraWaraBackground::onUpdate(float dt) {
     const uint64_t selected =
         g_selectedGameTitle.load(std::memory_order_relaxed);
 
-    if (selected != 0 && selected != r.requestedTitle) {
+    if (selected != r.requestedTitle) {
         r.requestedTitle = selected;
         r.stableTimer = 0.f;
+        r.selectionTimer = 0.f;
 
-        // Une image decodee pour l'ancien focus n'a plus d'interet.
-        if (r.ready && r.ready->titleId != selected)
-            r.ready.reset();
+        // Cancel a half-finished static transition. The currently visible still
+        // remains as a temporary bridge until the new selection is decoded.
+        r.ready.reset();
+        r.nextAvailable = false;
+        r.nextTitle = 0;
+        r.transitionTargetTitle = 0;
+        r.fade = 0.f;
+        r.transitioning = false;
+
+        if (selected == 0) {
+            // Empty category: gently leave the previous still and return to the
+            // normal Switch U theme background.
+            if (r.currentAvailable) {
+                r.transitionTargetTitle = 0;
+                r.nextAvailable = false;
+                r.fade = 0.f;
+                r.transitioning = true;
+            } else {
+                r.resolvedTitle = 0;
+            }
+        }
 
 #ifdef SWITCHU_V81_FFMPEG
-        // On stoppe immediatement le decode de l'ancien jeu. Sa derniere frame
-        // peut rester visible pendant un tres court fondu de sortie.
+        // Any navigation immediately invalidates the previous playback. Its
+        // last visible frame may fade out, but its decoder is cancelled now.
         r.videoDecoder.cancel();
         r.videoRequestedTitle = 0;
         r.videoPendingFrame.reset();
         r.videoTargetOpacity = 0.f;
         r.videoFrameTimer = 0.f;
         r.videoFallbackRequired = !videoPlaybackEnabled();
-        r.videoPrewarmAttempted = false;
+        r.videoAttemptedForSelection = false;
+        r.videoDecoderFinished = false;
+        r.videoFinishedForSelection = false;
+        r.videoReleaseWhenHidden =
+            r.videoPrewarmOk || r.videoHasCurrent;
 #endif
 
-        DebugLog::log("[home-preview] focus -> %016llX",
-                      static_cast<unsigned long long>(selected));
+        if (selected != 0) {
+            DebugLog::log("[home-preview] focus -> %016llX",
+                          static_cast<unsigned long long>(selected));
+        } else {
+            DebugLog::log("[home-preview] focus cleared");
+        }
     }
 
-    if (r.requestedTitle != 0 && r.requestedTitle != r.resolvedTitle)
-        r.stableTimer += std::max(0.f, dt);
+    if (r.requestedTitle != 0) {
+        r.selectionTimer += std::max(0.f, dt);
+        if (r.requestedTitle != r.resolvedTitle)
+            r.stableTimer += std::max(0.f, dt);
+    }
 
     pollDecodeResult(r);
-#ifdef SWITCHU_V81_FFMPEG
-    scheduleVideoIfNeeded(r);
-    pollVideoStatus(r);
-#endif
     scheduleDecodeIfNeeded(r);
     processReadyFallback(r);
 
 #ifdef SWITCHU_V81_FFMPEG
+    scheduleVideoIfNeeded(r);
+    pollVideoStatus(r);
+
     if (r.videoFrameTimer > 0.f)
-        r.videoFrameTimer = std::max(0.f, r.videoFrameTimer - std::max(0.f, dt));
+        r.videoFrameTimer = std::max(
+            0.f,
+            r.videoFrameTimer - std::max(0.f, dt)
+        );
 
     if (r.videoRequestedTitle == r.requestedTitle &&
         r.videoRequestedTitle != 0 &&
@@ -1435,20 +1521,62 @@ void WaraWaraBackground::onUpdate(float dt) {
             r.videoPendingFrame = std::move(frame);
     }
 
+    // Finished means the decoder has reached the real end of the file. Wait
+    // until its small queue and the duration of the final uploaded frame have
+    // both drained before fading back to the still image.
+    if (r.videoDecoderFinished &&
+        r.videoRequestedTitle == r.requestedTitle &&
+        !r.videoPendingFrame &&
+        !r.videoDecoder.hasQueuedFrames(r.requestedTitle) &&
+        (!r.videoHasCurrent || r.videoFrameTimer <= 0.f) &&
+        !r.videoFinishedForSelection) {
+        r.videoFinishedForSelection = true;
+        r.videoTargetOpacity = 0.f;
+        r.videoReleaseWhenHidden = true;
+        DebugLog::log(
+            "[home-video] final frame drained -> background %016llX",
+            static_cast<unsigned long long>(r.requestedTitle)
+        );
+    }
+
     if (r.videoTargetOpacity > r.videoOpacity) {
         r.videoOpacity = std::min(
             r.videoTargetOpacity,
-            r.videoOpacity + std::max(0.f, dt) / kVideoFadeInDuration);
+            r.videoOpacity + std::max(0.f, dt) / kVideoFadeInDuration
+        );
     } else if (r.videoTargetOpacity < r.videoOpacity) {
         r.videoOpacity = std::max(
             r.videoTargetOpacity,
-            r.videoOpacity - std::max(0.f, dt) / kVideoFadeOutDuration);
+            r.videoOpacity - std::max(0.f, dt) / kVideoFadeOutDuration
+        );
     }
 
     if (r.videoOpacity <= 0.001f &&
-        r.videoTargetOpacity <= 0.001f &&
-        r.videoCurrentTitle != r.requestedTitle) {
-        r.videoHasCurrent = false;
+        r.videoTargetOpacity <= 0.001f) {
+        if (r.videoCurrentTitle != r.requestedTitle ||
+            r.videoFinishedForSelection)
+            r.videoHasCurrent = false;
+
+        // Release the stream pool only after the fade is invisible. This keeps
+        // normal navigation smooth while returning the memory budget to HOME.
+        if (r.videoReleaseWhenHidden && r.gpu) {
+            r.gpu->waitIdle();
+            for (auto& texture : r.videoTextures)
+                texture.releaseGpuResources();
+
+            r.videoDecoder.cancel();
+            r.videoPendingFrame.reset();
+            r.videoCurrentTitle = 0;
+            r.videoRequestedTitle = 0;
+            r.videoCurrentIndex = 0;
+            r.videoPrewarmAttempted = false;
+            r.videoPrewarmOk = false;
+            r.videoHasCurrent = false;
+            r.videoDecoderFinished = false;
+            r.videoReleaseWhenHidden = false;
+
+            DebugLog::log("[home-video] GPU stream released after playback/navigation");
+        }
     }
 #endif
 
@@ -1540,21 +1668,17 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
         r.videoPrewarmAttempted = true;
 
-        // A video title does not need the two static 720p textures resident.
-        if (r.prewarmOk || r.currentAvailable || r.nextAvailable) {
-            ren.gpu().waitIdle();
-            for (auto& texture : r.textures)
-                texture.releaseGpuResources();
-            r.prewarmAttempted = false;
-            r.prewarmOk = false;
-            r.currentAvailable = false;
-            r.nextAvailable = false;
-            r.transitioning = false;
-            r.transitionTargetTitle = 0;
-            r.nextTitle = 0;
-            r.fade = 0.f;
-            r.ready.reset();
-            DebugLog::log("[home-preview] static GPU textures released for video");
+        // V10 keeps the selected still alive under the MP4 so the end-of-video
+        // fade can reveal it immediately. To limit GPU pressure, only the spare
+        // static transition slot is released once the still is settled.
+        if (r.currentAvailable &&
+            !r.transitioning &&
+            r.nextIndex != r.currentIndex &&
+            r.textures[r.nextIndex].prewarmed()) {
+            r.textures[r.nextIndex].releaseGpuResources();
+            DebugLog::log(
+                "[home-preview] spare static slot released before video"
+            );
         }
 
         const bool requestedStress = videoStress1080p60Enabled();
@@ -1614,6 +1738,8 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
                 r.videoHasCurrent = false;
                 r.videoOpacity = 0.f;
                 r.videoTargetOpacity = 0.f;
+                r.videoDecoderFinished = false;
+                r.videoFinishedForSelection = false;
                 r.videoDecoder.request(r.requestedTitle);
                 r.videoRequestedTitle = r.requestedTitle;
             }
@@ -1629,6 +1755,8 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             // next update would immediately retry the same failed allocation.
             r.videoRequestedTitle = r.requestedTitle;
             r.videoFallbackRequired = true;
+            r.videoFinishedForSelection = true;
+            r.videoReleaseWhenHidden = false;
             DebugLog::log(
                 "[home-video] 720p GPU allocation failed -> static/theme fallback"
             );
@@ -1636,29 +1764,16 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     }
 #endif
 
-    // Static preview GPU memory is also lazy. It exists only when the selected
-    // title needs JPG/PNG fallback, never permanently beside video memory.
+    // Static preview GPU memory is lazy, but the still is now the primary
+    // preview stage and may remain resident underneath video playback.
     if (r.ready &&
         r.ready->titleId == r.requestedTitle &&
         r.ready->hasAsset &&
         r.ready->decoded &&
         !r.prewarmAttempted) {
 
-#ifdef SWITCHU_V81_FFMPEG
-        if (r.videoPrewarmOk || r.videoHasCurrent) {
-            ren.gpu().waitIdle();
-            for (auto& texture : r.videoTextures)
-                texture.releaseGpuResources();
-            r.videoPrewarmAttempted = false;
-            r.videoPrewarmOk = false;
-            r.videoHasCurrent = false;
-            r.videoCurrentTitle = 0;
-            r.videoOpacity = 0.f;
-            r.videoTargetOpacity = 0.f;
-            DebugLog::log("[home-video] GPU textures released for static fallback");
-        }
-#endif
-
+        // V10: static and video may coexist. The still is not a fallback; it
+        // remains the layer underneath the one-shot MP4.
         r.prewarmAttempted = true;
         r.prewarmOk =
             r.textures[0].prewarm(ren) &&
@@ -1829,43 +1944,63 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     }
 #endif
 
-    // V9 : traitement visuel proche de la reference. La video reste lisible
-    // en haut, prend une tres legere teinte violet/rose puis disparait dans
-    // un socle anthracite opaque. Le filtre ne modifie jamais le MP4 source.
-    const nxui::Color lowerBase(0.067f, 0.067f, 0.075f, 1.f);
-    const float fadeStartY = area.y + area.height * 0.42f;
-    const float solidStartY = area.y + area.height * 0.66f;
+    // V10 visual integration. The media stays readable but never overwhelms
+    // the HOME; the lower base is deliberately lighter than V9 and blends
+    // progressively into the still/video instead of forming a black strip.
+    const nxui::Color lowerBase(0.105f, 0.108f, 0.120f, 1.f);
+    const float fadeStartY = area.y + area.height * 0.45f;
+    const float solidStartY = area.y + area.height * 0.74f;
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
     if (previewVisualAlpha > 0.001f) {
         const float a = std::clamp(previewVisualAlpha * m_opacity, 0.f, 1.f);
 
-        // Voile sombre doux sur toute la preview pour garder le HUD lisible.
+        // Semi-transparent dark veil across the media. Bright previews remain
+        // recognizable while text and covers keep visual priority.
         ren.drawGradientRect(
             area,
-            nxui::Color(0.020f, 0.012f, 0.035f, 0.10f * a),
-            nxui::Color(0.018f, 0.014f, 0.028f, 0.26f * a)
+            nxui::Color(0.012f, 0.010f, 0.024f, 0.14f * a),
+            nxui::Color(0.015f, 0.014f, 0.026f, 0.30f * a)
         );
 
-        // Teinte couleur volontairement discrete.
+        // Very soft colour atmosphere; this is a tint, not an RGB effect.
         ren.drawGradientRect(
             area,
-            nxui::Color(0.20f, 0.055f, 0.24f, 0.055f * a),
-            nxui::Color(0.08f, 0.025f, 0.13f, 0.085f * a)
+            nxui::Color(0.17f, 0.045f, 0.24f, 0.045f * a),
+            nxui::Color(0.045f, 0.055f, 0.17f, 0.070f * a)
         );
     }
 
-    // Le socle du HOME appartient a la composition, pas seulement a la video.
-    // Il reste donc present aussi pour un jeu qui n'a qu'un background.jpg
-    // ou aucun asset personnalise.
+    // Diffuse violet/blue glows behind the carousel. Several low-alpha discs
+    // approximate a broad halo without visible LED points or hard edges.
+    const float glowAlpha = 0.90f * baseAlpha;
+    const nxui::Vec2 violetCenter {area.x + area.width * 0.42f,
+                                   area.y + area.height * 0.54f};
+    const nxui::Vec2 blueCenter {area.x + area.width * 0.62f,
+                                 area.y + area.height * 0.52f};
+
+    ren.drawCircle(violetCenter, 330.f,
+                   nxui::Color(0.36f, 0.08f, 0.72f, 0.012f * glowAlpha), 72);
+    ren.drawCircle(violetCenter, 235.f,
+                   nxui::Color(0.42f, 0.11f, 0.82f, 0.018f * glowAlpha), 64);
+    ren.drawCircle(violetCenter, 145.f,
+                   nxui::Color(0.48f, 0.15f, 0.92f, 0.026f * glowAlpha), 56);
+
+    ren.drawCircle(blueCenter, 320.f,
+                   nxui::Color(0.08f, 0.20f, 0.78f, 0.010f * glowAlpha), 72);
+    ren.drawCircle(blueCenter, 225.f,
+                   nxui::Color(0.10f, 0.28f, 0.92f, 0.017f * glowAlpha), 64);
+    ren.drawCircle(blueCenter, 140.f,
+                   nxui::Color(0.14f, 0.36f, 1.00f, 0.024f * glowAlpha), 56);
+
+    // The anthracite base belongs to the HOME composition, so it remains even
+    // when a title has no custom image/video.
     ren.drawGradientRect(
         {area.x, fadeStartY, area.width, solidStartY - fadeStartY},
         lowerBase.withAlpha(0.00f),
         lowerBase.withAlpha(baseAlpha)
     );
 
-    // A partir d'ici l'eventuelle video n'est plus visible du tout. Ce n'est
-    // pas du noir pur : le fond reste un gris-noir tres legerement releve.
     ren.drawRect(
         {area.x, solidStartY,
          area.width, area.y + area.height - solidStartY},

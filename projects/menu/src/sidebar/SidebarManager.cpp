@@ -26,9 +26,9 @@ std::string joinPath(const std::string& base, const std::string& name) {
 void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
                            const std::string& assetsBase,
                            const Actions& actions) {
-    // V9: the six functions still exist, but the HOME no longer shows a
-    // permanent toolbar. Settings and Controllers are the two corner anchors;
-    // focusing either one unfolds the complete system shelf.
+    // V10: keep all six system actions wired internally, but expose only the
+    // two quiet corner controls requested by the HOME design: Settings on the
+    // left and Controllers on the right. No expanding shelf remains.
     constexpr float btnSize = 58.f;
     constexpr float gap = 14.f;
     constexpr float startY = 624.f;
@@ -137,111 +137,41 @@ void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
         ordered[i]->setCustomNavigation(nxui::FocusDirection::RIGHT, right);
     }
 
-    m_expandProgress = 0.f;
-    m_navigationExpanded = false;
-    applyV9Layout(0.f);
-    updateV9Navigation(false);
+    // V10 fixed corner layout. The four legacy actions stay alive in the
+    // manager, but are deliberately hidden from the HOME until a later design.
+    constexpr float cornerY = 638.f;
+    constexpr float leftAnchorX = 34.f;
+    constexpr float rightAnchorX = 1280.f - 34.f - btnSize;
+
+    AppletButton* album = m_leftButtons[0].get();
+    AppletButton* mii = m_leftButtons[1].get();
+    AppletButton* settings = m_leftButtons[2].get();
+    AppletButton* controllers = m_rightButtons[0].get();
+    AppletButton* themes = m_rightButtons[1].get();
+    AppletButton* power = m_rightButtons[2].get();
+
+    settings->setRect({leftAnchorX, cornerY, btnSize, btnSize});
+    controllers->setRect({rightAnchorX, cornerY, btnSize, btnSize});
+
+    settings->setVisible(true);
+    settings->setOpacity(1.f);
+    controllers->setVisible(true);
+    controllers->setOpacity(1.f);
+
+    for (AppletButton* hidden : {album, mii, themes, power}) {
+        hidden->setVisible(false);
+        hidden->setOpacity(0.f);
+    }
+
+    settings->setCustomNavigation(nxui::FocusDirection::LEFT, settings);
+    settings->setCustomNavigation(nxui::FocusDirection::RIGHT, controllers);
+    controllers->setCustomNavigation(nxui::FocusDirection::LEFT, settings);
+    controllers->setCustomNavigation(nxui::FocusDirection::RIGHT, controllers);
+
 
     (void)gpu;
     (void)ren;
     (void)assetsBase;
-}
-
-bool SidebarManager::isSidebarButton(const nxui::Widget* widget) const {
-    if (!widget)
-        return false;
-    for (const auto& btn : m_leftButtons)
-        if (btn.get() == widget)
-            return true;
-    for (const auto& btn : m_rightButtons)
-        if (btn.get() == widget)
-            return true;
-    return false;
-}
-
-void SidebarManager::updateV9Navigation(bool expanded) {
-    if (m_leftButtons.size() < 3 || m_rightButtons.size() < 3)
-        return;
-
-    AppletButton* ordered[6] = {
-        m_leftButtons[0].get(),   // Album
-        m_leftButtons[1].get(),   // Mii
-        m_leftButtons[2].get(),   // Settings
-        m_rightButtons[0].get(),  // Controllers
-        m_rightButtons[1].get(),  // Themes
-        m_rightButtons[2].get(),  // Power
-    };
-
-    if (!expanded) {
-        AppletButton* settings = ordered[2];
-        AppletButton* controllers = ordered[3];
-        settings->setCustomNavigation(nxui::FocusDirection::LEFT, settings);
-        settings->setCustomNavigation(nxui::FocusDirection::RIGHT, controllers);
-        controllers->setCustomNavigation(nxui::FocusDirection::LEFT, settings);
-        controllers->setCustomNavigation(nxui::FocusDirection::RIGHT, controllers);
-        m_navigationExpanded = false;
-        return;
-    }
-
-    for (int i = 0; i < 6; ++i) {
-        ordered[i]->setCustomNavigation(
-            nxui::FocusDirection::LEFT,
-            ordered[std::max(0, i - 1)]
-        );
-        ordered[i]->setCustomNavigation(
-            nxui::FocusDirection::RIGHT,
-            ordered[std::min(5, i + 1)]
-        );
-    }
-    m_navigationExpanded = true;
-}
-
-void SidebarManager::applyV9Layout(float progress) {
-    if (m_leftButtons.size() < 3 || m_rightButtons.size() < 3)
-        return;
-
-    const float t = std::clamp(progress, 0.f, 1.f);
-    const float eased = t * t * (3.f - 2.f * t);
-
-    constexpr float btnSize = 58.f;
-    constexpr float expandedGap = 14.f;
-    constexpr float expandedY = 624.f;
-    constexpr float collapsedY = 638.f;
-    constexpr float leftAnchorX = 34.f;
-    constexpr float rightAnchorX = 1280.f - 34.f - btnSize;
-
-    const float groupW = 6.f * btnSize + 5.f * expandedGap;
-    const float expandedStartX = (1280.f - groupW) * 0.5f;
-
-    AppletButton* ordered[6] = {
-        m_leftButtons[0].get(),
-        m_leftButtons[1].get(),
-        m_leftButtons[2].get(),
-        m_rightButtons[0].get(),
-        m_rightButtons[1].get(),
-        m_rightButtons[2].get(),
-    };
-
-    for (int i = 0; i < 6; ++i) {
-        const bool leftSide = i <= 2;
-        const bool anchor = (i == 2 || i == 3);
-        const float collapsedX = leftSide ? leftAnchorX : rightAnchorX;
-        const float expandedX =
-            expandedStartX + static_cast<float>(i) * (btnSize + expandedGap);
-
-        const float x = collapsedX + (expandedX - collapsedX) * eased;
-        const float y = collapsedY + (expandedY - collapsedY) * eased;
-
-        ordered[i]->setRect({x, y, btnSize, btnSize});
-
-        if (anchor) {
-            ordered[i]->setVisible(true);
-            ordered[i]->setOpacity(1.f);
-        } else {
-            ordered[i]->setVisible(t > 0.015f);
-            ordered[i]->setOpacity(eased);
-        }
-    }
 }
 
 void SidebarManager::reloadAssets(nxui::GpuDevice& gpu, nxui::Renderer& ren,
@@ -394,24 +324,14 @@ void SidebarManager::tryLoadAnimation(nxui::GpuDevice& gpu,
 }
 
 void SidebarManager::update(float dt, nxui::Widget* focusedWidget) {
-    const bool wantsExpanded = isSidebarButton(focusedWidget);
-    const float speed = std::max(0.f, dt) / 0.18f;
-
-    if (wantsExpanded)
-        m_expandProgress = std::min(1.f, m_expandProgress + speed);
-    else
-        m_expandProgress = std::max(0.f, m_expandProgress - speed);
-
-    applyV9Layout(m_expandProgress);
-
-    if (wantsExpanded != m_navigationExpanded)
-        updateV9Navigation(wantsExpanded);
+    // V10: no shelf animation. Only animate the two visible corner icons.
+    (void)dt;
 
     for (auto& e : m_anims) {
         if (!e.button || !e.button->isVisible())
             continue;
 
-        bool focused = (focusedWidget == e.button);
+        const bool focused = (focusedWidget == e.button);
         e.anim.update(dt, focused);
 
         if (focused && e.anim.hasFrames()) {

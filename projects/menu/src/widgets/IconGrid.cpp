@@ -5,16 +5,12 @@
 #include <cmath>
 
 namespace {
-// V9: the focused cover is the visual anchor of the HOME. Five positions are
-// kept around that anchor; the two outer covers can naturally be clipped by
-// the screen edges, just like the reference layout.
+// V10: one hero cover + one single neighbour size. There is deliberately
+// no third "outer" size anymore: every non-selected visible cover is 230 px.
 constexpr int kVisibleIcons = 5;
-// V9 Beta: hierarchy inspired by the reference. The centre cover is the
-// hero element; neighbouring covers are deliberately much smaller.
 constexpr float kSelectedIconSize = 310.f;
-constexpr float kNeighborIconSize = 182.f;
-constexpr float kOuterIconSize = 136.f;
-constexpr float kCarouselStep = 258.f;
+constexpr float kNeighborIconSize = 230.f;
+constexpr float kCarouselGap = 12.f;
 constexpr float kCarouselBaselineY = 500.f;
 
 float iconSizeForDistance(float distance) {
@@ -23,12 +19,26 @@ float iconSizeForDistance(float distance) {
         return kSelectedIconSize +
                (kNeighborIconSize - kSelectedIconSize) * distance;
     }
-    if (distance <= 2.f) {
-        const float t = distance - 1.f;
-        return kNeighborIconSize +
-               (kOuterIconSize - kNeighborIconSize) * t;
-    }
-    return kOuterIconSize;
+    return kNeighborIconSize;
+}
+
+// Keep a real 12 px visual gap even while the selection animates between two
+// covers. A fixed centre-to-centre step cannot do that with 310/230 px cards.
+float carouselCenterOffset(float distance) {
+    const float sign = distance < 0.f ? -1.f : 1.f;
+    const float a = std::abs(distance);
+    const float firstStep =
+        kSelectedIconSize * 0.5f +
+        kNeighborIconSize * 0.5f +
+        kCarouselGap;
+    const float neighborStep =
+        kNeighborIconSize + kCarouselGap;
+
+    const float magnitude =
+        (a <= 1.f)
+            ? a * firstStep
+            : firstStep + (a - 1.f) * neighborStep;
+    return sign * magnitude;
 }
 
 // Plus le geste est rapide, plus la vitesse initiale est forte.
@@ -55,6 +65,56 @@ void IconGrid::setup(std::vector<std::shared_ptr<GlossyIcon>> icons,
     reconfigureLayout(cols, rows, cellW, cellH, padX, padY);
 }
 
+void IconGrid::setApplicationTitleIds(const std::vector<uint64_t>& titleIds) {
+    m_applicationTitleIds.clear();
+    for (uint64_t titleId : titleIds) {
+        if (titleId != 0)
+            m_applicationTitleIds.insert(titleId);
+    }
+
+    updateDisplayCount();
+    rebuildFocusRow();
+}
+
+void IconGrid::setShowApplications(bool showApplications) {
+    if (m_showApplications == showApplications)
+        return;
+
+    m_showApplications = showApplications;
+    m_scrollPosition = 0.f;
+    m_scrollVelocity = 0.f;
+    m_touchScrolling = false;
+    m_inertiaActive = false;
+    m_snapActive = false;
+    m_pendingSettledFocusIndex = -1;
+
+    updateDisplayCount();
+    rebuildFocusRow();
+}
+
+int IconGrid::firstVisibleGlobalIndex() const {
+    return m_displayIndices.empty() ? -1 : m_displayIndices.front();
+}
+
+int IconGrid::displayPositionForGlobalIndex(int globalIndex) const {
+    for (int i = 0; i < static_cast<int>(m_displayIndices.size()); ++i) {
+        if (m_displayIndices[i] == globalIndex)
+            return i;
+    }
+    return -1;
+}
+
+int IconGrid::globalIndexForDisplayPosition(int displayPosition) const {
+    if (displayPosition < 0 ||
+        displayPosition >= static_cast<int>(m_displayIndices.size()))
+        return -1;
+    return m_displayIndices[displayPosition];
+}
+
+bool IconGrid::isGlobalIndexVisible(int globalIndex) const {
+    return displayPositionForGlobalIndex(globalIndex) >= 0;
+}
+
 int IconGrid::visibleSlotCount() const {
     return std::max(
         1,
@@ -63,7 +123,7 @@ int IconGrid::visibleSlotCount() const {
 }
 
 float IconGrid::maxScrollPosition() const {
-    // V9: m_scrollPosition represents the item located under the exact
+    // V10: m_scrollPosition represents the item located under the exact
     // horizontal centre of the HOME, not the first item of a visible window.
     // The first and last games are therefore allowed to sit at screen centre.
     return static_cast<float>(
@@ -85,18 +145,33 @@ float IconGrid::desiredScrollPositionForFocus(
 }
 
 void IconGrid::updateDisplayCount() {
-    m_displayCount = 0;
+    m_displayIndices.clear();
+    m_displayIndices.reserve(m_allIcons.size());
 
-    for (const auto& icon : m_allIcons) {
-        if (icon && icon->titleId() != 0)
-            ++m_displayCount;
+    for (int i = 0; i < static_cast<int>(m_allIcons.size()); ++i) {
+        const auto& icon = m_allIcons[i];
+        if (!icon || icon->titleId() == 0)
+            continue;
+
+        const bool isApplication =
+            m_applicationTitleIds.find(icon->titleId()) !=
+            m_applicationTitleIds.end();
+
+        if (isApplication == m_showApplications)
+            m_displayIndices.push_back(i);
     }
 
-    m_scrollPosition = std::clamp(
-        m_scrollPosition,
-        0.f,
-        maxScrollPosition()
-    );
+    m_displayCount = static_cast<int>(m_displayIndices.size());
+
+    if (m_displayCount <= 0) {
+        m_scrollPosition = 0.f;
+    } else {
+        m_scrollPosition = std::clamp(
+            m_scrollPosition,
+            0.f,
+            maxScrollPosition()
+        );
+    }
 }
 
 void IconGrid::reconfigureLayout(int cols, int rows,
@@ -119,7 +194,7 @@ void IconGrid::reconfigureLayout(int cols, int rows,
 
     updateDisplayCount();
 
-    // V9: originX is the left edge of the centre slot itself.
+    // V10: originX is the left edge of the centre slot itself.
     m_originX =
         m_rect.x +
         m_rect.width * 0.5f -
@@ -138,17 +213,25 @@ void IconGrid::setPage(int page) {
 }
 
 void IconGrid::rebuildFocusRow() {
-    nxui::Widget* previousFocus =
-        m_focus.current();
+    nxui::Widget* previousFocus = m_focus.current();
 
     clearChildren();
+
+    // Hide everything first; only the active category is re-added below.
+    for (auto& icon : m_allIcons) {
+        if (icon)
+            icon->setVisible(false);
+    }
 
     std::vector<nxui::Widget*> focusItems;
     focusItems.reserve(m_displayCount);
 
-    for (int i = 0; i < m_displayCount; ++i) {
-        auto& icon = m_allIcons[i];
+    for (int globalIndex : m_displayIndices) {
+        if (globalIndex < 0 ||
+            globalIndex >= static_cast<int>(m_allIcons.size()))
+            continue;
 
+        auto& icon = m_allIcons[globalIndex];
         if (!icon)
             continue;
 
@@ -161,22 +244,25 @@ void IconGrid::rebuildFocusRow() {
 
     m_focus.setGrid(
         focusItems,
-        std::max(
-            1,
-            static_cast<int>(focusItems.size())
-        )
+        std::max(1, static_cast<int>(focusItems.size()))
     );
 
+    nxui::Widget* targetFocus = nullptr;
     if (previousFocus) {
         auto it = std::find(
             focusItems.begin(),
             focusItems.end(),
             previousFocus
         );
-
         if (it != focusItems.end())
-            m_focus.setFocus(previousFocus);
+            targetFocus = previousFocus;
     }
+
+    if (!targetFocus && !focusItems.empty())
+        targetFocus = focusItems.front();
+
+    if (targetFocus)
+        m_focus.setFocus(targetFocus);
 
     layoutCarousel();
 }
@@ -198,18 +284,27 @@ void IconGrid::layoutCarousel() {
     m_snapActive = false;
     m_scrollVelocity = 0.f;
 
-    int focused = focusedGlobalIndex();
+    const int focusedGlobal = focusedGlobalIndex();
+    int focusedDisplay = displayPositionForGlobalIndex(focusedGlobal);
 
-    if (focused < 0 ||
-        focused >= m_displayCount)
-        focused = 0;
+    if (focusedDisplay < 0 ||
+        focusedDisplay >= m_displayCount)
+        focusedDisplay = 0;
 
-    // V9: this is deliberately the focused index itself. No edge clamping to
-    // a four-cover window: game 0 and the last game remain perfectly centred.
-    m_scrollPosition =
-        desiredScrollPositionForFocus(focused);
+    // V10: controller navigation uses the same continuous scroll coordinate as
+    // touch. Moving focus therefore animates both covers at once: the old hero
+    // shrinks 310 -> 230 while the new one grows 230 -> 310. Repeated/held
+    // left-right presses simply retarget this snap without blocking input.
+    m_snapTarget = desiredScrollPositionForFocus(focusedDisplay);
 
-    layoutAtScrollPosition();
+    if (std::abs(m_snapTarget - m_scrollPosition) < 0.0025f) {
+        m_scrollPosition = m_snapTarget;
+        m_snapActive = false;
+        layoutAtScrollPosition();
+    } else {
+        m_snapActive = true;
+        layoutAtScrollPosition();
+    }
 }
 
 void IconGrid::layoutAtScrollPosition() {
@@ -237,17 +332,23 @@ void IconGrid::layoutAtScrollPosition() {
             visibleSlots / 2
     );
 
-    for (int i = 0; i < m_displayCount; ++i) {
-        auto& icon = m_allIcons[i];
+    for (int displayIndex = 0;
+         displayIndex < m_displayCount;
+         ++displayIndex) {
+        const int globalIndex = m_displayIndices[displayIndex];
+        if (globalIndex < 0 ||
+            globalIndex >= static_cast<int>(m_allIcons.size()))
+            continue;
 
+        auto& icon = m_allIcons[globalIndex];
         if (!icon)
             continue;
 
         const float logicalDistance =
-            static_cast<float>(i) - m_scrollPosition;
+            static_cast<float>(displayIndex) - m_scrollPosition;
         const float size = iconSizeForDistance(logicalDistance);
         const float centerX =
-            screenCenterX + logicalDistance * kCarouselStep;
+            screenCenterX + carouselCenterOffset(logicalDistance);
 
         icon->setRect({
             centerX - size * 0.5f,
@@ -262,7 +363,7 @@ void IconGrid::layoutAtScrollPosition() {
 
 bool IconGrid::canTouchScroll() const {
     // Even a short list can be dragged: the centre slot, not the number of
-    // simultaneously visible covers, is what defines selection in V9.
+    // simultaneously visible covers, is what defines selection in V10.
     return m_displayCount > 1;
 }
 
@@ -288,7 +389,7 @@ void IconGrid::dragTouchScroll(
         !canTouchScroll())
         return;
 
-    const float step = kCarouselStep;
+    const float step = kNeighborIconSize + kCarouselGap;
 
     if (step <= 0.f)
         return;
@@ -315,7 +416,7 @@ void IconGrid::endTouchScroll(
 
     m_touchScrolling = false;
 
-    const float step = kCarouselStep;
+    const float step = kNeighborIconSize + kCarouselGap;
 
     if (step <= 0.f) {
         startSnapToNearest();
@@ -370,8 +471,7 @@ void IconGrid::startSnapToNearest() {
 }
 
 void IconGrid::finishSnap() {
-    m_scrollPosition =
-        m_snapTarget;
+    m_scrollPosition = m_snapTarget;
 
     m_snapActive = false;
     m_inertiaActive = false;
@@ -379,38 +479,31 @@ void IconGrid::finishSnap() {
 
     layoutAtScrollPosition();
 
-    const int targetFocus =
+    const int targetDisplay =
         std::clamp(
-            static_cast<int>(
-                std::round(m_scrollPosition)
-            ),
+            static_cast<int>(std::round(m_scrollPosition)),
             0,
-            std::max(
-                0,
-                m_displayCount - 1
-            )
+            std::max(0, m_displayCount - 1)
         );
 
     m_pendingSettledFocusIndex =
-        targetFocus;
+        globalIndexForDisplayPosition(targetDisplay);
 }
 
 int IconGrid::consumeSettledFocusIndex() {
-    const int index =
-        m_pendingSettledFocusIndex;
-
+    const int globalIndex = m_pendingSettledFocusIndex;
     m_pendingSettledFocusIndex = -1;
 
-    if (index < 0 ||
-        index >= m_displayCount)
+    if (globalIndex < 0 ||
+        globalIndex >= static_cast<int>(m_allIcons.size()) ||
+        !isGlobalIndexVisible(globalIndex))
         return -1;
 
-    if (!m_allIcons[index] ||
-        !m_allIcons[index]->isFocusable())
+    if (!m_allIcons[globalIndex] ||
+        !m_allIcons[globalIndex]->isFocusable())
         return -1;
 
-    nxui::Widget* target =
-        m_allIcons[index].get();
+    nxui::Widget* target = m_allIcons[globalIndex].get();
 
     if (m_focus.current() == target)
         return -1;
@@ -418,7 +511,7 @@ int IconGrid::consumeSettledFocusIndex() {
     m_preserveScrollOnNextFocus = true;
     m_focus.setFocus(target);
 
-    return index;
+    return globalIndex;
 }
 
 int IconGrid::focusedGlobalIndex() const {
@@ -427,9 +520,11 @@ int IconGrid::focusedGlobalIndex() const {
     if (!current)
         return -1;
 
-    for (int i = 0; i < m_displayCount; ++i) {
-        if (m_allIcons[i].get() == current)
-            return i;
+    for (int globalIndex : m_displayIndices) {
+        if (globalIndex >= 0 &&
+            globalIndex < static_cast<int>(m_allIcons.size()) &&
+            m_allIcons[globalIndex].get() == current)
+            return globalIndex;
     }
 
     return -1;
@@ -437,25 +532,23 @@ int IconGrid::focusedGlobalIndex() const {
 
 bool IconGrid::focusGlobalIndex(int idx) {
     if (idx < 0 ||
-        idx >= m_displayCount)
+        idx >= static_cast<int>(m_allIcons.size()) ||
+        !isGlobalIndexVisible(idx))
         return false;
 
     if (!m_allIcons[idx] ||
         !m_allIcons[idx]->isFocusable())
         return false;
 
-    m_focus.setFocus(
-        m_allIcons[idx].get()
-    );
-
+    m_focus.setFocus(m_allIcons[idx].get());
     layoutCarousel();
     return true;
 }
 
 bool IconGrid::swapSlots(int a, int b) {
     if (a < 0 || b < 0 ||
-        a >= m_displayCount ||
-        b >= m_displayCount)
+        a >= static_cast<int>(m_allIcons.size()) ||
+        b >= static_cast<int>(m_allIcons.size()))
         return false;
 
     if (a == b)
@@ -482,11 +575,11 @@ std::vector<GlossyIcon*> IconGrid::pageIcons() const {
     std::vector<GlossyIcon*> out;
     out.reserve(m_displayCount);
 
-    for (int i = 0; i < m_displayCount; ++i) {
-        if (m_allIcons[i])
-            out.push_back(
-                m_allIcons[i].get()
-            );
+    for (int globalIndex : m_displayIndices) {
+        if (globalIndex >= 0 &&
+            globalIndex < static_cast<int>(m_allIcons.size()) &&
+            m_allIcons[globalIndex])
+            out.push_back(m_allIcons[globalIndex].get());
     }
 
     return out;
@@ -496,23 +589,21 @@ int IconGrid::hitTest(
     float screenX,
     float screenY
 ) const {
-    if (!m_rect.contains(
-            screenX,
-            screenY))
+    if (!m_rect.contains(screenX, screenY))
         return -1;
 
-    for (int i = 0; i < m_displayCount; ++i) {
-        if (!m_allIcons[i])
+    for (int globalIndex : m_displayIndices) {
+        if (globalIndex < 0 ||
+            globalIndex >= static_cast<int>(m_allIcons.size()) ||
+            !m_allIcons[globalIndex])
             continue;
 
         const nxui::Rect iconRect =
-            m_allIcons[i]->focusRect();
+            m_allIcons[globalIndex]->focusRect();
 
         if (iconRect.intersects(m_rect) &&
-            iconRect.contains(
-                screenX,
-                screenY))
-            return i;
+            iconRect.contains(screenX, screenY))
+            return globalIndex;
     }
 
     return -1;
@@ -540,17 +631,18 @@ void IconGrid::startAppearAnimation() {
 
     int order = 0;
 
-    for (int i = first;
-         i < last;
-         ++i) {
-        if (!m_allIcons[i])
+    for (int displayIndex = first;
+         displayIndex < last;
+         ++displayIndex) {
+        const int globalIndex =
+            globalIndexForDisplayPosition(displayIndex);
+        if (globalIndex < 0 ||
+            globalIndex >= static_cast<int>(m_allIcons.size()) ||
+            !m_allIcons[globalIndex])
             continue;
 
-        m_allIcons[i]->forceVisible();
-        m_allIcons[i]->startAppear(
-            order * 0.06f
-        );
-
+        m_allIcons[globalIndex]->forceVisible();
+        m_allIcons[globalIndex]->startAppear(order * 0.06f);
         ++order;
     }
 }

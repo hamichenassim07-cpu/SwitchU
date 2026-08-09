@@ -2,6 +2,7 @@
 #include <nxui/core/Renderer.hpp>
 #include <nxui/core/I18n.hpp>
 #include <algorithm>
+#include <cmath>
 #include <ctime>
 #include <cstdio>
 
@@ -9,6 +10,40 @@ namespace {
 constexpr float kTimeScale = 1.28f;
 constexpr float kDateScale = 1.12f;
 constexpr float kLineGap = 5.f;
+constexpr float kTabAnimSpeed = 9.0f;
+
+constexpr float kNavX = 455.f;
+constexpr float kNavY = 18.f;
+constexpr float kNavW = 370.f;
+constexpr float kNavH = 48.f;
+constexpr float kNavInset = 6.f;
+constexpr float kTabGap = 4.f;
+constexpr float kTabW = (kNavW - kNavInset * 2.f - kTabGap) * 0.5f;
+constexpr float kTabH = 36.f;
+
+float clamp01(float value) {
+    return std::clamp(value, 0.f, 1.f);
+}
+
+float smooth01(float value) {
+    value = clamp01(value);
+    return value * value * (3.f - 2.f * value);
+}
+}
+
+nxui::Rect DateTimeWidget::homeTabsRect() const {
+    return {kNavX, kNavY, kNavW, kNavH};
+}
+
+nxui::Rect DateTimeWidget::activeHomeTabRect() const {
+    const float gamesX = kNavX + kNavInset;
+    const float appsX = gamesX + kTabW + kTabGap;
+    return {
+        m_homeApplicationsActive ? appsX : gamesX,
+        kNavY + kNavInset,
+        kTabW,
+        kTabH
+    };
 }
 
 void DateTimeWidget::setUse12HourClock(bool enabled) {
@@ -21,6 +56,14 @@ void DateTimeWidget::setUse12HourClock(bool enabled) {
 }
 
 void DateTimeWidget::onContentUpdate(float dt) {
+    // V10: animate the category capsule every frame, independently from the
+    // once-per-second clock refresh.
+    const float target = m_homeApplicationsActive ? 1.f : 0.f;
+    const float amount = std::min(1.f, std::max(0.f, dt) * kTabAnimSpeed);
+    m_homeTabSlide += (target - m_homeTabSlide) * amount;
+    if (std::abs(target - m_homeTabSlide) < 0.001f)
+        m_homeTabSlide = target;
+
     m_timer += dt;
 
     if (m_timer < 1.f && !m_timeStr.empty())
@@ -119,7 +162,6 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Color secondary =
         m_secondaryColor.withAlpha(0.98f * m_opacity);
 
-    // Shadow + a tiny second pass make the existing font easier to read.
     ren.drawText(
         m_timeStr,
         {timeX + 1.1f, timeY + 1.2f},
@@ -168,26 +210,52 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         kDateScale
     );
 
-    // V9 top navigation scaffold, visually matching the reference. "Jeux" is
-    // the active HOME section; Applications is kept subtle until its filtering
-    // logic is wired in a later pass.
-    const nxui::Rect navRect {455.f, 18.f, 370.f, 48.f};
-    const nxui::Rect activeRect {461.f, 24.f, 146.f, 36.f};
+    // V10 centered HOME categories. There is intentionally no Nintendo eShop
+    // entry. The indicator is a real animated state controlled by the menu.
+    const nxui::Rect navRect = homeTabsRect();
+    const float gamesX = kNavX + kNavInset;
+    const float appsX = gamesX + kTabW + kTabGap;
+    const float slide = smooth01(m_homeTabSlide);
+    const nxui::Rect activeRect {
+        gamesX + (appsX - gamesX) * slide,
+        kNavY + kNavInset,
+        kTabW,
+        kTabH
+    };
+
+    if (m_homeTabsFocused) {
+        // Two very soft violet/blue passes make focus visible without turning
+        // the selector into a bright RGB control.
+        ren.drawRoundedRect(
+            {navRect.x - 4.f, navRect.y - 3.f,
+             navRect.width + 8.f, navRect.height + 6.f},
+            nxui::Color(0.18f, 0.08f, 0.34f, 0.10f * m_opacity),
+            27.f
+        );
+        ren.drawRoundedRectOutline(
+            navRect,
+            nxui::Color(0.46f, 0.48f, 1.f, 0.30f * m_opacity),
+            24.f,
+            1.5f
+        );
+    }
 
     ren.drawRoundedRect(
         navRect,
-        nxui::Color(0.035f, 0.032f, 0.045f, 0.52f * m_opacity),
+        nxui::Color(0.035f, 0.032f, 0.045f,
+                    (m_homeTabsFocused ? 0.70f : 0.55f) * m_opacity),
         24.f
     );
     ren.drawRoundedRectOutline(
         navRect,
-        nxui::Color(1.f, 1.f, 1.f, 0.12f * m_opacity),
+        nxui::Color(1.f, 1.f, 1.f,
+                    (m_homeTabsFocused ? 0.20f : 0.12f) * m_opacity),
         24.f,
         1.f
     );
     ren.drawRoundedRect(
         activeRect,
-        nxui::Color(0.94f, 0.94f, 0.96f, 0.96f * m_opacity),
+        nxui::Color(0.94f, 0.94f, 0.96f, 0.97f * m_opacity),
         18.f
     );
 
@@ -199,26 +267,43 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
 
     const nxui::Vec2 gamesSz = dateFont->measure(games);
     const nxui::Vec2 appsSz = dateFont->measure(apps);
+    const float gamesCenterX = gamesX + kTabW * 0.5f;
+    const float appsCenterX = appsX + kTabW * 0.5f;
+    const float textY = kNavY + (kNavH - gamesSz.y) * 0.5f;
+
+    const float gamesActive = 1.f - slide;
+    const float appsActive = slide;
+
+    const nxui::Color inactive(0.95f, 0.94f, 0.98f, 0.76f * m_opacity);
+    const nxui::Color active(0.08f, 0.075f, 0.10f, m_opacity);
+
+    auto mixColor = [](const nxui::Color& a,
+                       const nxui::Color& b,
+                       float t) {
+        t = clamp01(t);
+        return nxui::Color(
+            a.r + (b.r - a.r) * t,
+            a.g + (b.g - a.g) * t,
+            a.b + (b.b - a.b) * t,
+            a.a + (b.a - a.a) * t
+        );
+    };
 
     ren.drawText(
         games,
-        {activeRect.x + (activeRect.width - gamesSz.x) * 0.5f,
-         activeRect.y + (activeRect.height - gamesSz.y) * 0.5f},
+        {gamesCenterX - gamesSz.x * 0.5f, textY},
         dateFont,
-        nxui::Color(0.08f, 0.075f, 0.10f, m_opacity),
+        mixColor(inactive, active, gamesActive),
         1.f
     );
 
-    const float appsCenterX =
-        activeRect.x + activeRect.width +
-        (navRect.x + navRect.width - activeRect.x - activeRect.width) * 0.5f;
-
+    const float appsTextY =
+        kNavY + (kNavH - appsSz.y) * 0.5f;
     ren.drawText(
         apps,
-        {appsCenterX - appsSz.x * 0.5f,
-         navRect.y + (navRect.height - appsSz.y) * 0.5f},
+        {appsCenterX - appsSz.x * 0.5f, appsTextY},
         dateFont,
-        nxui::Color(0.95f, 0.94f, 0.98f, 0.72f * m_opacity),
+        mixColor(inactive, active, appsActive),
         1.f
     );
 }
