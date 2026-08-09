@@ -82,11 +82,18 @@ void WiiUMenuApp::handleLockScreen(float dt) {
         if (!m_lockScreenView)
             return;
 
+#ifdef SWITCHU_MENU
         const bool returnToGame =
             m_lockReturnTarget == switchu::smi::LockReturnTarget::Game &&
             m_launcher.suspendedTitleId() != 0;
+#else
+        const bool returnToGame = false;
+#endif
+        (void)returnToGame;
 
-        m_lockScreenView->setReturnToGameOnUnlock(returnToGame);
+        // LockScreenView no longer exposes a return-target setter. The actual
+        // GAME/HOME handoff is owned by this routing layer after the 1.20 s
+        // unlock transition, so the visual view only needs progress/transition.
         m_lockScreenView->setProgress(m_lockPressCount, m_lockPressFlash);
         m_lockScreenView->setTransition(m_lockScreenOpacity,
                                         m_lockScreenReveal,
@@ -105,9 +112,13 @@ void WiiUMenuApp::handleLockScreen(float dt) {
             m_lockUnlockProgress + dt / kFinalUnlockDuration
         );
 
+#ifdef SWITCHU_MENU
         const bool returnToGame =
             m_lockReturnTarget == switchu::smi::LockReturnTarget::Game &&
             m_launcher.suspendedTitleId() != 0;
+#else
+        const bool returnToGame = false;
+#endif
 
         if (returnToGame) {
             // Garder le lockscreen opaque jusqu'a la commande de reprise.
@@ -209,12 +220,16 @@ void WiiUMenuApp::handleLockScreen(float dt) {
     m_lockScreenOpacity = 1.f;
     m_audio.playSfx(Sfx::ConfirmPositive);
 
+#ifdef SWITCHU_MENU
+    const bool finalReturnToGame =
+        m_lockReturnTarget == switchu::smi::LockReturnTarget::Game &&
+        m_launcher.suspendedTitleId() != 0;
+#else
+    const bool finalReturnToGame = false;
+#endif
     DebugLog::log(
         "[lockscreen-route] third A -> final 1.20s target=%s",
-        (m_lockReturnTarget == switchu::smi::LockReturnTarget::Game &&
-         m_launcher.suspendedTitleId() != 0)
-            ? "GAME"
-            : "HOME"
+        finalReturnToGame ? "GAME" : "HOME"
     );
     syncView();
 }
