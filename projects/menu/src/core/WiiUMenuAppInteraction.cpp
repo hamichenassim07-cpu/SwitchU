@@ -554,11 +554,11 @@ void WiiUMenuApp::wireFocusCallback() {
         };
 
         m_clock->addAction(
-            static_cast<uint64_t>(nxui::Button::Left),
+            static_cast<uint64_t>(nxui::Button::DLeft),
             [applyCategory]() { applyCategory(false); }
         );
         m_clock->addAction(
-            static_cast<uint64_t>(nxui::Button::Right),
+            static_cast<uint64_t>(nxui::Button::DRight),
             [applyCategory]() { applyCategory(true); }
         );
         m_clock->addAction(
