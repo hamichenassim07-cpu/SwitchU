@@ -45,10 +45,30 @@ void UserAvatarButton::onContentRender(nxui::Renderer& ren) {
                                avatarRect,
                                radius,
                                nxui::Color::white().withAlpha(alpha));
-        return;
+    } else {
+        ren.drawRoundedRect(avatarRect,
+                            nxui::Color(0.42f, 0.42f, 0.50f, 0.42f * alpha),
+                            radius);
     }
 
-    ren.drawRoundedRect(avatarRect,
-                        nxui::Color(0.42f, 0.42f, 0.50f, 0.42f * alpha),
-                        radius);
+    if (!m_showFocusedNickname || !m_nicknameFont || m_nickname.empty())
+        return;
+
+    constexpr float kNicknameScale = 0.72f;
+    const float nicknameAlpha = m_focused ? 1.00f : 0.76f;
+    const nxui::Vec2 base = m_nicknameFont->measure(m_nickname);
+    const float textW = base.x * kNicknameScale;
+    const float x = rect().x + (rect().width - textW) * 0.5f;
+    const float y = rect().y + rect().height + 3.f;
+
+    ren.drawText(m_nickname,
+                 {x + 1.f, y + 1.2f},
+                 m_nicknameFont,
+                 nxui::Color(0.f, 0.f, 0.f, 0.58f * alpha * nicknameAlpha),
+                 kNicknameScale);
+    ren.drawText(m_nickname,
+                 {x, y},
+                 m_nicknameFont,
+                 nxui::Color(0.98f, 0.99f, 1.00f, 0.96f * alpha * nicknameAlpha),
+                 kNicknameScale);
 }

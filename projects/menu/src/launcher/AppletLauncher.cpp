@@ -127,6 +127,10 @@ void AppletLauncher::reboot() {
 
 void AppletLauncher::launchApplication(uint64_t titleId, AccountUid uid) {
     DebugLog::log("[launcher] tid=%016lX", titleId);
+    if (m_specialLaunchHandler && m_specialLaunchHandler(titleId)) {
+        DebugLog::log("[launcher] special HOME card handled locally: %016lX", titleId);
+        return;
+    }
     Result rc = switchu::menu::smi_cmd::launchApplication(titleId, uid);
     if (R_FAILED(rc)) {
         DebugLog::log("[launcher] FAIL: 0x%X", rc);
@@ -186,7 +190,10 @@ void AppletLauncher::launchUserPage(AccountUid) {}
 void AppletLauncher::enterSleep() {}
 void AppletLauncher::shutdown() {}
 void AppletLauncher::reboot() {}
-void AppletLauncher::launchApplication(uint64_t, AccountUid) {}
+void AppletLauncher::launchApplication(uint64_t titleId, AccountUid) {
+    if (m_specialLaunchHandler)
+        m_specialLaunchHandler(titleId);
+}
 Result AppletLauncher::resumeApplication() { return 0; }
 void AppletLauncher::terminateApplication() {}
 void AppletLauncher::checkRunningApplication() {}

@@ -5,17 +5,62 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <filesystem>
 #include <nxui/core/I18n.hpp>
+#include <nlohmann/json.hpp>
 
 namespace {
 constexpr const char* kV10ApplicationsPath =
     "sdmc:/config/SwitchU/applications.txt";
+constexpr const char* kV103CategoryOverridesPath =
+    "sdmc:/config/SwitchU/category_overrides.json";
+constexpr const char* kV103ForwarderCachePath =
+    "sdmc:/config/SwitchU/forwarder_cache.json";
+
+constexpr uint64_t kV103SystemAlbumTitleId  = 0xFFFFFFFFFFFFF101ULL;
+constexpr uint64_t kV103SystemMiiTitleId    = 0xFFFFFFFFFFFFF102ULL;
+constexpr uint64_t kV103SystemThemesTitleId = 0xFFFFFFFFFFFFF103ULL;
 
 bool g_v10ApplicationsActive = false;
+
+enum class V103CategoryOverride {
+    Automatic,
+    Game,
+    Application,
+};
+
+bool isV103SystemCard(uint64_t titleId) {
+    return titleId == kV103SystemAlbumTitleId ||
+           titleId == kV103SystemMiiTitleId ||
+           titleId == kV103SystemThemesTitleId;
+}
+
+// Sphaira's current forwarder builder deliberately allocates its generated
+// application IDs in the 0x05... range. This gives the HOME a zero-I/O fast
+// path for the user's Sphaira forwarders; RomFS marker probing remains the
+// generic fallback for other forwarder generators.
+bool isV103SphairaForwarderTitleId(uint64_t titleId) {
+    return (titleId & 0xFF00000000000000ULL) ==
+           0x0500000000000000ULL;
+}
+
+std::string titleIdToV103Hex(uint64_t titleId) {
+    char buffer[17] = {};
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%016llX",
+        static_cast<unsigned long long>(titleId)
+    );
+    return buffer;
+}
 
 std::string trimV10(std::string value) {
     auto notSpace = [](unsigned char c) {
@@ -66,33 +111,343 @@ bool parseV10TitleId(const std::string& raw, uint64_t& out) {
     return out != 0;
 }
 
-std::vector<uint64_t> loadV10ApplicationTitleIds() {
-    std::vector<uint64_t> ids;
+std::unordered_set<uint64_t> loadLegacyV10ApplicationTitleIds() {
+    std::unordered_set<uint64_t> ids;
     std::ifstream file(kV10ApplicationsPath);
-    if (!file.is_open()) {
-        DebugLog::log(
-            "[home-tabs] %s absent -> Applications empty",
-            kV10ApplicationsPath
-        );
+    if (!file.is_open())
         return ids;
-    }
 
     std::string line;
     while (std::getline(file, line)) {
         uint64_t titleId = 0;
         if (parseV10TitleId(line, titleId))
-            ids.push_back(titleId);
+            ids.insert(titleId);
+    }
+    return ids;
+}
+
+std::unordered_map<uint64_t, V103CategoryOverride> loadV103CategoryOverrides() {
+    std::unordered_map<uint64_t, V103CategoryOverride> overrides;
+    std::ifstream file(kV103CategoryOverridesPath);
+    if (!file.is_open())
+        return overrides;
+
+    try {
+        nlohmann::json j;
+        file >> j;
+        if (!j.is_object())
+            return overrides;
+
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (!it.value().is_string())
+                continue;
+            uint64_t titleId = 0;
+            if (!parseV10TitleId(it.key(), titleId))
+                continue;
+
+            const std::string mode = it.value().get<std::string>();
+            if (mode == "game")
+                overrides[titleId] = V103CategoryOverride::Game;
+            else if (mode == "application")
+                overrides[titleId] = V103CategoryOverride::Application;
+        }
+    } catch (...) {
+        DebugLog::log(
+            "[home-tabs] invalid category overrides: %s",
+            kV103CategoryOverridesPath
+        );
+    }
+    return overrides;
+}
+
+void saveV103CategoryOverride(uint64_t titleId, V103CategoryOverride mode) {
+    if (titleId == 0 || isV103SystemCard(titleId))
+        return;
+
+    auto overrides = loadV103CategoryOverrides();
+    if (mode == V103CategoryOverride::Automatic)
+        overrides.erase(titleId);
+    else
+        overrides[titleId] = mode;
+
+    std::error_code ec;
+    std::filesystem::create_directory("sdmc:/config", ec);
+    ec.clear();
+    std::filesystem::create_directory("sdmc:/config/SwitchU", ec);
+
+    nlohmann::json j = nlohmann::json::object();
+    std::vector<uint64_t> ordered;
+    ordered.reserve(overrides.size());
+    for (const auto& item : overrides)
+        ordered.push_back(item.first);
+    std::sort(ordered.begin(), ordered.end());
+
+    for (uint64_t tid : ordered) {
+        const auto it = overrides.find(tid);
+        if (it == overrides.end())
+            continue;
+        j[titleIdToV103Hex(tid)] =
+            it->second == V103CategoryOverride::Game
+                ? "game"
+                : "application";
     }
 
+    std::ofstream file(kV103CategoryOverridesPath, std::ios::trunc);
+    if (!file.is_open()) {
+        DebugLog::log(
+            "[home-tabs] unable to save category override tid=%016llX",
+            static_cast<unsigned long long>(titleId)
+        );
+        return;
+    }
+    file << j.dump(2);
+}
+
+std::unordered_map<uint64_t, bool> loadV103ForwarderCache() {
+    std::unordered_map<uint64_t, bool> cache;
+    std::ifstream file(kV103ForwarderCachePath);
+    if (!file.is_open())
+        return cache;
+
+    try {
+        nlohmann::json j;
+        file >> j;
+        if (!j.is_object())
+            return cache;
+
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            uint64_t titleId = 0;
+            if (!parseV10TitleId(it.key(), titleId) || !it.value().is_boolean())
+                continue;
+            cache[titleId] = it.value().get<bool>();
+        }
+    } catch (...) {
+        DebugLog::log(
+            "[home-tabs] invalid forwarder cache: %s",
+            kV103ForwarderCachePath
+        );
+    }
+    return cache;
+}
+
+void saveV103ForwarderCache(const std::unordered_map<uint64_t, bool>& cache) {
+    std::error_code ec;
+    std::filesystem::create_directory("sdmc:/config", ec);
+    ec.clear();
+    std::filesystem::create_directory("sdmc:/config/SwitchU", ec);
+
+    nlohmann::json j = nlohmann::json::object();
+    std::vector<uint64_t> ordered;
+    ordered.reserve(cache.size());
+    for (const auto& item : cache)
+        ordered.push_back(item.first);
+    std::sort(ordered.begin(), ordered.end());
+
+    for (uint64_t tid : ordered) {
+        const auto it = cache.find(tid);
+        if (it != cache.end())
+            j[titleIdToV103Hex(tid)] = it->second;
+    }
+
+    std::ofstream file(kV103ForwarderCachePath, std::ios::trunc);
+    if (file.is_open())
+        file << j.dump(2);
+}
+
+#ifdef SWITCHU_MENU
+bool readV103ForwarderMarker(
+    FsFileSystem& fs,
+    const char* path,
+    bool& mentionsNro
+) {
+    mentionsNro = false;
+    FsFile file{};
+    Result rc = fsFsOpenFile(&fs, path, FsOpenMode_Read, &file);
+    if (R_FAILED(rc))
+        return false;
+
+    s64 size = 0;
+    rc = fsFileGetSize(&file, &size);
+    if (R_FAILED(rc) || size <= 0 || size > 16384) {
+        fsFileClose(&file);
+        return true;
+    }
+
+    std::string data(static_cast<size_t>(size), '\0');
+    u64 bytesRead = 0;
+    rc = fsFileRead(
+        &file,
+        0,
+        data.data(),
+        static_cast<u64>(data.size()),
+        FsReadOption_None,
+        &bytesRead
+    );
+    fsFileClose(&file);
+
+    if (R_FAILED(rc))
+        return true;
+
+    data.resize(static_cast<size_t>(bytesRead));
+    std::transform(
+        data.begin(),
+        data.end(),
+        data.begin(),
+        [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        }
+    );
+    mentionsNro = data.find(".nro") != std::string::npos;
+    return true;
+}
+
+bool probeV103NroForwarder(uint64_t titleId, bool& definitive) {
+    definitive = false;
+    if (titleId == 0 || isV103SystemCard(titleId))
+        return false;
+
+    FsFileSystem dataFs{};
+    Result rc = fsOpenDataFileSystemByProgramId(&dataFs, titleId);
+    if (R_FAILED(rc)) {
+        DebugLog::log(
+            "[forwarder] RomFS unavailable tid=%016llX rc=0x%X",
+            static_cast<unsigned long long>(titleId),
+            rc
+        );
+        return false;
+    }
+
+    definitive = true;
+    bool markerExists = false;
+    bool markerMentionsNro = false;
+
+    for (const char* path : {"/nextNroPath", "/nextArgv"}) {
+        bool mentionsNro = false;
+        const bool exists = readV103ForwarderMarker(dataFs, path, mentionsNro);
+        markerExists = markerExists || exists;
+        markerMentionsNro = markerMentionsNro || mentionsNro;
+    }
+
+    fsFsClose(&dataFs);
+
+    const bool forwarder = markerExists && markerMentionsNro;
+    DebugLog::log(
+        "[forwarder] tid=%016llX detected=%d marker=%d",
+        static_cast<unsigned long long>(titleId),
+        forwarder ? 1 : 0,
+        markerExists ? 1 : 0
+    );
+    return forwarder;
+}
+#else
+bool probeV103NroForwarder(uint64_t, bool& definitive) {
+    definitive = false;
+    return false;
+}
+#endif
+
+std::vector<uint64_t> loadV10ApplicationTitleIds(
+    const GridModel& model,
+    bool allowForwarderProbe
+) {
+    std::unordered_set<uint64_t> apps = {
+        kV103SystemAlbumTitleId,
+        kV103SystemMiiTitleId,
+        kV103SystemThemesTitleId,
+    };
+
+    const auto legacy = loadLegacyV10ApplicationTitleIds();
+    apps.insert(legacy.begin(), legacy.end());
+
+    const auto overrides = loadV103CategoryOverrides();
+    auto cache = loadV103ForwarderCache();
+    bool cacheChanged = false;
+    // Keep category switching responsive. Sphaira forwarders are detected by
+    // their 0x05 Title ID with zero I/O; the generic RomFS fallback only probes
+    // a small number of plausible no-user utilities per visit and caches them.
+    int genericProbeBudget = allowForwarderProbe ? 8 : 0;
+
+    for (const auto& entry : model.entries()) {
+        const uint64_t tid = entry.titleId;
+        if (tid == 0 || isV103SystemCard(tid))
+            continue;
+
+        const auto overrideIt = overrides.find(tid);
+        if (overrideIt != overrides.end()) {
+            if (overrideIt->second == V103CategoryOverride::Game)
+                apps.erase(tid);
+            else if (overrideIt->second == V103CategoryOverride::Application)
+                apps.insert(tid);
+            continue;
+        }
+
+        // Legacy applications.txt is an explicit compatibility override and
+        // therefore wins over automatic forwarder detection.
+        if (legacy.count(tid))
+            continue;
+
+        if (isV103SphairaForwarderTitleId(tid)) {
+            apps.insert(tid);
+            continue;
+        }
+
+        const auto cacheIt = cache.find(tid);
+        if (cacheIt != cache.end()) {
+            if (cacheIt->second)
+                apps.insert(tid);
+            continue;
+        }
+
+        if (!allowForwarderProbe || genericProbeBudget <= 0)
+            continue;
+
+        // Most HOME games request/know a user; common forwarders and utility
+        // apps do not. This is only a probe filter, never a final category rule.
+        if (!entry.startupUserKnown || entry.startupUserAccount != 0)
+            continue;
+
+        --genericProbeBudget;
+        bool definitive = false;
+        const bool forwarder = probeV103NroForwarder(tid, definitive);
+        if (!definitive)
+            continue;
+
+        cache[tid] = forwarder;
+        cacheChanged = true;
+        if (forwarder)
+            apps.insert(tid);
+    }
+
+    // Manual Game must be applied last so it can override applications.txt.
+    for (const auto& item : overrides) {
+        if (item.second == V103CategoryOverride::Game)
+            apps.erase(item.first);
+        else if (item.second == V103CategoryOverride::Application)
+            apps.insert(item.first);
+    }
+
+    if (cacheChanged)
+        saveV103ForwarderCache(cache);
+
+    std::vector<uint64_t> ids(apps.begin(), apps.end());
     std::sort(ids.begin(), ids.end());
-    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
 
     DebugLog::log(
-        "[home-tabs] loaded %d application title ids",
-        static_cast<int>(ids.size())
+        "[home-tabs] applications=%d probe=%d",
+        static_cast<int>(ids.size()),
+        allowForwarderProbe ? 1 : 0
     );
     return ids;
 }
+
+V103CategoryOverride currentV103CategoryOverride(uint64_t titleId) {
+    const auto overrides = loadV103CategoryOverrides();
+    const auto it = overrides.find(titleId);
+    return it == overrides.end()
+        ? V103CategoryOverride::Automatic
+        : it->second;
+}
+
 } // namespace
 
 bool WiiUMenuApp::isEditableIcon(nxui::Widget* w) const {
@@ -494,25 +849,43 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
         return;
     }
 
-    if (g_v10ApplicationsActive == applications)
-        return;
-
+    // Capture the focus zone before changing the filter. Rebuilding IconGrid's
+    // focus row is allowed to change its internal focus; global focus must not.
     nxui::Widget* previousMainFocus = focusManager().current();
     const bool wasGameFocused =
         previousMainFocus && previousMainFocus->tag() == "glossy_icon";
     const nxui::Rect previousFocusRect =
         previousMainFocus ? previousMainFocus->focusRect() : nxui::Rect{};
 
+    // V10.3 refreshes classification whenever Applications is entered. The
+    // cache makes this cheap: already-inspected titles do zero RomFS I/O,
+    // while a newly installed forwarder can be discovered without recompiling
+    // or rebooting Switch U.
+    if (applications) {
+        m_grid->setApplicationTitleIds(
+            loadV10ApplicationTitleIds(m_model, true)
+        );
+    }
+
+    if (g_v10ApplicationsActive == applications) {
+        if (!wasGameFocused && previousMainFocus) {
+            m_suppressNextNavigateSfx = true;
+            focusManager().setFocus(previousMainFocus);
+            updateCursor();
+        }
+        return;
+    }
+
     g_v10ApplicationsActive = applications;
     m_clock->setHomeApplicationsActive(applications);
     m_grid->setShowApplications(applications);
 
-    // V10.2: L/R changes content, not navigation context. If the user was on
-    // a cover, pick the cover whose centre is closest to the previous cursor
-    // position instead of jumping to the first app (or to the profile).
+    // L/R changes content, never the navigation zone. If the user was on a
+    // cover, keep the nearest visual slot in the new category.
     nxui::Widget* gridTarget = m_grid->focusManager().current();
     if (wasGameFocused && m_grid->visibleCount() > 0) {
-        const float oldCenterX = previousFocusRect.x + previousFocusRect.width * 0.5f;
+        const float oldCenterX =
+            previousFocusRect.x + previousFocusRect.width * 0.5f;
         GlossyIcon* closest = nullptr;
         float closestDistance = 1.0e9f;
         for (auto* icon : m_grid->pageIcons()) {
@@ -532,8 +905,6 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
         }
     }
 
-    // Keep out-of-carousel navigation coherent even when L/R is pressed while
-    // the profile or a corner button owns focus.
     for (auto& avatar : m_userAvatarButtons) {
         if (avatar)
             avatar->setCustomNavigation(
@@ -556,29 +927,34 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
             );
     }
 
-    if (gridTarget && gridTarget->tag() == "glossy_icon") {
+    if (gridTarget && gridTarget->tag() == "glossy_icon" &&
+        m_grid->visibleCount() > 0) {
         auto* icon = static_cast<GlossyIcon*>(gridTarget);
         WaraWaraBackground::notifySelectedGame(icon->titleId());
 
         if (wasGameFocused) {
             m_suppressNextNavigateSfx = true;
             focusManager().setFocus(gridTarget);
+        } else if (previousMainFocus) {
+            // Profile / Paramètres / Manettes stays exactly where it was.
+            m_suppressNextNavigateSfx = true;
+            focusManager().setFocus(previousMainFocus);
         }
     } else {
         WaraWaraBackground::notifySelectedGame(0);
-
-        // Empty category: do NOT teleport to the profile. Keep the global
-        // focus/cursor where it was. L/R remains globally available, so the
-        // user can return to the populated category immediately.
-        if (wasGameFocused && previousMainFocus) {
+        if (previousMainFocus) {
             m_suppressNextNavigateSfx = true;
             focusManager().setFocus(previousMainFocus);
         }
     }
 
     if (m_titlePill) {
-        if (gridTarget && wasGameFocused) {
+        if (wasGameFocused && m_grid->visibleCount() > 0 &&
+            gridTarget && gridTarget->tag() == "glossy_icon") {
+            auto* icon = static_cast<GlossyIcon*>(gridTarget);
             m_titlePill->setGameActionsVisible(true);
+            m_titlePill->setText(icon->title());
+            m_titlePill->setVisible(true);
         } else {
             m_titlePill->setGameActionsVisible(false);
             m_titlePill->hideAnimated();
@@ -601,11 +977,58 @@ void WiiUMenuApp::wireFocusCallback() {
     if (m_titlePill)
         m_titlePill->setIconFont(&m_fontIcons);
 
-    // V10.1 categories are display-only: L selects Jeux, R selects
-    // Applications. The category capsule never enters the FocusManager.
+    // V10.3: Album / Mii / Thèmes are first-class carousel entries. They use
+    // reserved pseudo title IDs so the rest of IconGrid can treat them exactly
+    // like covers without confusing them with Horizon applications.
+    bool addedSystemCard = false;
+    auto ensureSystemCard =
+        [this, &addedSystemCard](uint64_t titleId, const std::string& title) {
+            if (findTitleIndex(titleId) >= 0)
+                return;
+
+            AppEntry entry;
+            entry.id = titleIdToV103Hex(titleId);
+            entry.title = title;
+            entry.titleId = titleId;
+            entry.userRequired = false;
+            entry.startupUserKnown = true;
+            entry.startupUserAccount = 0;
+            entry.startupUserAccountOption = 0;
+            m_model.addEntry(std::move(entry));
+            addedSystemCard = true;
+        };
+
+    auto& i18n = nxui::I18n::instance();
+    ensureSystemCard(
+        kV103SystemAlbumTitleId,
+        i18n.tr("sidebar.album", "Album")
+    );
+    ensureSystemCard(
+        kV103SystemMiiTitleId,
+        i18n.tr("sidebar.mii", "Mii")
+    );
+    ensureSystemCard(
+        kV103SystemThemesTitleId,
+        i18n.tr("sidebar.themes", "Thèmes")
+    );
+
+    if (addedSystemCard)
+        reflowHomeGrid();
+
+    for (auto& avatar : m_userAvatarButtons) {
+        if (avatar) {
+            avatar->setNicknameFont(&m_fontSmall);
+            avatar->setShowFocusedNickname(true);
+        }
+    }
+
+    // Categories are display-only: L selects Jeux, R selects Applications.
+    // The capsule never enters the FocusManager.
     if (m_clock && m_grid) {
         g_v10ApplicationsActive = false;
-        m_grid->setApplicationTitleIds(loadV10ApplicationTitleIds());
+        m_grid->setApplicationTitleIds(
+            loadV10ApplicationTitleIds(m_model, false)
+        );
         m_grid->setShowApplications(false);
 
         m_clock->setHomeApplicationsActive(false);
@@ -632,27 +1055,6 @@ void WiiUMenuApp::wireFocusCallback() {
 
         if (!suppressSfx)
             m_audio.playSfx(Sfx::Navigate);
-
-        auto placeTitleAbove =
-            [this](nxui::Widget* widget, float extraTop = 0.f) {
-                if (!widget || !m_titlePill)
-                    return;
-
-                nxui::Rect r = widget->focusRect();
-                float centerX =
-                    r.x + r.width * 0.5f;
-
-                float titleY =
-                    std::max(
-                        104.f,
-                        r.y - 64.f - extraTop
-                    );
-
-                m_titlePill->setAnchor(
-                    centerX,
-                    titleY
-                );
-            };
 
         if (cur && cur->tag() == "glossy_icon") {
             m_grid->focusManager().setFocus(cur);
@@ -854,49 +1256,26 @@ void WiiUMenuApp::wireFocusCallback() {
                 return;
             }
 
-            for (auto& btn :
-                 m_sidebar.leftButtons()) {
+            // V10.3: only carousel entries own the large central title.
+            // Paramètres and Manettes stay icon-only. Profile renders its
+            // nickname locally below the avatar.
+            for (auto& btn : m_sidebar.leftButtons()) {
                 if (btn.get() == cur) {
-                    placeTitleAbove(cur);
-                    m_titlePill->setText(
-                        btn->label()
-                    );
-                    m_titlePill->setVisible(true);
+                    m_titlePill->hideAnimated();
                     return;
                 }
             }
 
-            for (auto& btn :
-                 m_sidebar.rightButtons()) {
+            for (auto& btn : m_sidebar.rightButtons()) {
                 if (btn.get() == cur) {
-                    placeTitleAbove(cur);
-                    m_titlePill->setText(
-                        btn->label()
-                    );
-                    m_titlePill->setVisible(true);
+                    m_titlePill->hideAnimated();
                     return;
                 }
             }
 
-            for (auto& avatar :
-                 m_userAvatarButtons) {
+            for (auto& avatar : m_userAvatarButtons) {
                 if (avatar.get() == cur) {
-                    nxui::Rect r =
-                        avatar->focusRect();
-
-                    m_titlePill->setAnchor(
-                        r.x + r.width * 0.5f,
-                        r.y + r.height + 10.f
-                    );
-
-                    m_titlePill->setText(
-                        avatar->nickname()
-                    );
-
-                    m_titlePill->setVisible(
-                        !avatar->nickname().empty()
-                    );
-
+                    m_titlePill->hideAnimated();
                     return;
                 }
             }
@@ -1077,6 +1456,57 @@ bool WiiUMenuApp::handleAccessibilityToggleCombo() {
 void WiiUMenuApp::wireGlobalActions() {
     auto& root = rootBox();
 
+    // This handler survives app-list refreshes: even if IconGrid recreates the
+    // system cards, their pseudo title IDs are routed back to the existing
+    // Switch U system actions instead of being sent to Horizon as fake apps.
+    m_launcher.setSpecialLaunchHandler([this](uint64_t titleId) -> bool {
+        const auto& left = m_sidebar.leftButtons();
+        const auto& right = m_sidebar.rightButtons();
+        if (titleId == kV103SystemAlbumTitleId && left.size() >= 1 && left[0]) {
+            left[0]->activate();
+            return true;
+        }
+        if (titleId == kV103SystemMiiTitleId && left.size() >= 2 && left[1]) {
+            left[1]->activate();
+            return true;
+        }
+        if (titleId == kV103SystemThemesTitleId && right.size() >= 2 && right[1]) {
+            right[1]->activate();
+            return true;
+        }
+        return false;
+    });
+
+    // Bind the three hidden legacy system actions to their new carousel cards.
+    // We reuse the already-loaded sidebar textures, so no duplicate assets or
+    // extra GPU allocation is needed.
+    auto bindSystemCard =
+        [this](uint64_t titleId, const std::shared_ptr<AppletButton>& source) {
+            if (!source)
+                return;
+            const int index = findTitleIndex(titleId);
+            if (index < 0 || index >= static_cast<int>(m_grid->allIcons().size()))
+                return;
+
+            auto& card = m_grid->allIcons()[(size_t)index];
+            if (!card)
+                return;
+            card->setTexture(source->icon());
+            card->setNotLaunchable(false);
+            card->setOnActivate([source]() {
+                source->activate();
+            });
+            card->forceVisible();
+        };
+
+    const auto& leftSystemButtons = m_sidebar.leftButtons();
+    const auto& rightSystemButtons = m_sidebar.rightButtons();
+    if (leftSystemButtons.size() >= 2 && rightSystemButtons.size() >= 2) {
+        bindSystemCard(kV103SystemAlbumTitleId, leftSystemButtons[0]);
+        bindSystemCard(kV103SystemMiiTitleId, leftSystemButtons[1]);
+        bindSystemCard(kV103SystemThemesTitleId, rightSystemButtons[1]);
+    }
+
     root.addAction(static_cast<uint64_t>(nxui::Button::L), [this]() {
         setHomeApplicationsCategory(false);
     });
@@ -1165,36 +1595,123 @@ void WiiUMenuApp::wireGlobalActions() {
 
 #ifdef SWITCHU_MENU
     root.addAction(static_cast<uint64_t>(nxui::Button::X), [this]() {
-        if (m_editMode) return;
-        if (m_launcher.suspendedTitleId() == 0) return;
+        if (m_editMode)
+            return;
+        if ((m_dialog && m_dialog->isActive()) ||
+            (m_themeShop && m_themeShop->isActive()) ||
+            (m_settings && m_settings->isActive()) ||
+            (m_userSelect && m_userSelect->isActive())) {
+            return;
+        }
+
         auto* cur = focusManager().current();
-        if (!cur || cur->tag() != "glossy_icon") return;
+        if (!cur || cur->tag() != "glossy_icon")
+            return;
+
         auto* icon = static_cast<GlossyIcon*>(cur);
-        if (!m_launcher.isAppSuspended(icon->titleId())) return;
+        const uint64_t tid = icon->titleId();
+        if (tid == 0 || isV103SystemCard(tid))
+            return;
 
         m_audio.playSfx(Sfx::ModalShow);
         m_dialogReturnFocus = cur;
         auto& i18n = nxui::I18n::instance();
-        m_dialog->show(
-            i18n.tr("game.close_title", "Close game"),
-            i18n.tr("game.close_prefix", "Close") + std::string(" ") + icon->title()
-                + i18n.tr("game.close_suffix", "?\nUnsaved progress will be lost."),
-            {
-                {i18n.tr("button.cancel", "Cancel"), [this]() {}, true},
-                {i18n.tr("button.close", "Close"),  [this]() {
+
+        const auto currentMode = currentV103CategoryOverride(tid);
+        int initialSelected = 0;
+        if (currentMode == V103CategoryOverride::Game)
+            initialSelected = 1;
+        else if (currentMode == V103CategoryOverride::Application)
+            initialSelected = 2;
+
+        auto applyMode =
+            [this, tid](V103CategoryOverride mode) {
+                saveV103CategoryOverride(tid, mode);
+
+                // A manual choice must take effect immediately, without a
+                // reboot or a new compile.
+                m_grid->setApplicationTitleIds(
+                    loadV10ApplicationTitleIds(m_model, true)
+                );
+        
+                const auto appIds =
+                    loadV10ApplicationTitleIds(m_model, false);
+                const bool targetApplications =
+                    std::binary_search(appIds.begin(), appIds.end(), tid);
+
+                g_v10ApplicationsActive = targetApplications;
+                m_clock->setHomeApplicationsActive(targetApplications);
+                m_grid->setShowApplications(targetApplications);
+
+                const int index = findTitleIndex(tid);
+                if (index >= 0)
+                    m_grid->focusGlobalIndex(index);
+                if (auto* target = m_grid->focusManager().current()) {
+                    m_suppressNextNavigateSfx = true;
+                    focusManager().setFocus(target);
+                    m_dialogReturnFocus = target;
+                }
+
+                WaraWaraBackground::notifySelectedGame(tid);
+                if (m_titlePill) {
+                    m_titlePill->setGameActionsVisible(true);
+                    const int modelIndex = findTitleIndex(tid);
+                    if (modelIndex >= 0)
+                        m_titlePill->setText(m_model.at(modelIndex).title);
+                    m_titlePill->setVisible(true);
+                }
+                updateCursor();
+
+                DebugLog::log(
+                    "[home-tabs] manual category tid=%016llX mode=%d",
+                    static_cast<unsigned long long>(tid),
+                    static_cast<int>(mode)
+                );
+            };
+
+        std::vector<OverlayDialog::ButtonDef> buttons;
+        buttons.push_back({
+            i18n.tr("category.auto", "Automatique"),
+            [applyMode]() {
+                applyMode(V103CategoryOverride::Automatic);
+            },
+            true
+        });
+        buttons.push_back({
+            i18n.tr("category.game", "Jeu"),
+            [applyMode]() {
+                applyMode(V103CategoryOverride::Game);
+            },
+            true
+        });
+        buttons.push_back({
+            i18n.tr("category.application", "Application"),
+            [applyMode]() {
+                applyMode(V103CategoryOverride::Application);
+            },
+            true
+        });
+
+        if (m_launcher.isAppSuspended(tid)) {
+            buttons.push_back({
+                i18n.tr("button.close", "Fermer le jeu"),
+                [this]() {
                     m_launcher.terminateApplication();
                     m_launcher.setAppRunning(false);
                     m_launcher.setAppHasForeground(false);
                     m_launcher.setSuspendedTitleId(0);
                     for (auto& ic : m_grid->allIcons())
                         ic->setSuspended(false);
-                    if (auto* cur = m_grid->focusManager().current()) {
-                        auto* icon = static_cast<GlossyIcon*>(cur);
-                        m_titlePill->setText(icon->title());
-                    }
-                }, true}
-            },
-            1,
+                },
+                true
+            });
+        }
+
+        m_dialog->show(
+            i18n.tr("category.title", "Catégorie"),
+            icon->title(),
+            std::move(buttons),
+            initialSelected,
             {}
         );
         focusManager().setFocus(m_dialog.get());

@@ -9,12 +9,12 @@ constexpr float kV9TitleCenterX = 640.f;
 constexpr float kV9TitleTopY = 522.f;
 constexpr float kV9TitleScale = 1.42f;
 constexpr float kV9TitleMaxWidth = 900.f;
-constexpr float kV102SeparatorWidth = 248.f;
+constexpr float kV102SeparatorWidth = 264.f;
 constexpr float kV102SeparatorHeight = 2.2f;
 constexpr float kV102TitleToSeparatorGap = 18.f;
 constexpr float kV102SeparatorToActionsGap = 21.f;
-constexpr float kV102ActionLabelScale = 0.74f;
-constexpr float kV102ActionGlyphScale = 0.88f;
+constexpr float kV102ActionLabelScale = 0.79f;
+constexpr float kV102ActionGlyphScale = 0.93f;
 constexpr float kV102ActionGap = 8.f;
 constexpr float kV102PairGap = 42.f;
 
@@ -174,7 +174,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
 
     ren.pushClipRect(cr);
 
-    // V10.2: restore the V9 size, but make ONLY the game title visually
+    // V10.3: keep the V9 size, but make ONLY the carousel title visually
     // heavier. Sub-pixel duplicate passes emulate a semibold face without
     // enlarging the text or changing the rest of the HOME typography.
     ren.drawText(m_text,
@@ -203,7 +203,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
         const float separatorX = cr.x + (cr.width - kV102SeparatorWidth) * 0.5f;
         ren.drawRoundedRect(
             {separatorX, separatorY, kV102SeparatorWidth, kV102SeparatorHeight},
-            nxui::Color(0.94f, 0.97f, 1.00f, 0.42f * m_opacity * reveal),
+            nxui::Color(0.94f, 0.97f, 1.00f, 0.30f * m_opacity * reveal),
             1.1f
         );
 

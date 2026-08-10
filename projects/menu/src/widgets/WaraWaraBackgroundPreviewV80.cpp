@@ -7,6 +7,7 @@
 #define SWITCHU_V80_BACKGROUND_STRONG 1
 #include "WaraWaraBackground.hpp"
 #include "core/DebugLog.hpp"
+#include "launcher/AppListLoader.hpp"
 
 #include <nxui/core/ThreadPool.hpp>
 #include <nxui/third_party/stb/stb_image.h>
@@ -44,6 +45,12 @@ namespace {
 
 std::atomic<uint64_t> g_selectedGameTitle{0};
 
+// Reserved pseudo Title IDs used only inside Switch U's Applications carousel.
+// They never get passed to Horizon's application launcher.
+constexpr uint64_t kV103SystemAlbumId  = 0xFFFFFFFFFFFFF101ULL;
+constexpr uint64_t kV103SystemMiiId    = 0xFFFFFFFFFFFFF102ULL;
+constexpr uint64_t kV103SystemThemesId = 0xFFFFFFFFFFFFF103ULL;
+
 constexpr float kPreviewDebounce = 0.04f;
 constexpr float kPreviewFadeDuration = 0.32f;
 constexpr int kPreviewMaxWidth = 1280;
@@ -56,7 +63,8 @@ constexpr int kVideoStressMaxHeight = 1080;
 constexpr float kVideoStressMaxFps = 60.f;
 constexpr float kVideoStartDelay = 5.0f;
 constexpr float kVideoVisualZoom = 1.06f;
-constexpr float kVideoVerticalAnchor = 0.78f;
+constexpr float kVideoVerticalAnchor = 0.90f;
+constexpr float kV103MediaRaisePx = 22.f;
 constexpr const char* kVideoStressFlag =
     "sdmc:/config/SwitchU/video_1080p60.flag";
 constexpr const char* kVideoDisabledFlag =
@@ -158,7 +166,7 @@ nxui::Rect coverRect(int texW, int texH, const nxui::Rect& area) {
     // is no vertical jump when the video fades in after five seconds.
     return {
         area.x + (area.width - drawW) * 0.5f,
-        area.y - hiddenY * kVideoVerticalAnchor,
+        area.y - hiddenY * kVideoVerticalAnchor - kV103MediaRaisePx,
         drawW,
         drawH
     };
@@ -383,6 +391,92 @@ void extractAmbientSwatches(const std::vector<uint8_t>& rgba,
     secondary = swatchFor(second, secondary);
 }
 
+void extractAmbientFromSelectedIcon(uint64_t titleId,
+                                    AmbientSwatch& primary,
+                                    AmbientSwatch& secondary) {
+    primary = defaultAmbientA();
+    secondary = defaultAmbientB();
+
+    // Internal cards have no Horizon control icon, so sample the exact same
+    // PNG used by their former sidebar button. This keeps the glow literally
+    // tied to the card artwork rather than to the background.
+    const char* builtInIconPath = nullptr;
+    if (titleId == kV103SystemAlbumId)
+#ifdef SWITCHU_MENU
+        builtInIconPath = "romfs:/icons/album.png";
+#else
+        builtInIconPath = "sdmc:/switch/SwitchU/icons/album.png";
+#endif
+    else if (titleId == kV103SystemMiiId)
+#ifdef SWITCHU_MENU
+        builtInIconPath = "romfs:/icons/mii_editor.png";
+#else
+        builtInIconPath = "sdmc:/switch/SwitchU/icons/mii_editor.png";
+#endif
+    else if (titleId == kV103SystemThemesId)
+#ifdef SWITCHU_MENU
+        builtInIconPath = "romfs:/icons/themes.png";
+#else
+        builtInIconPath = "sdmc:/switch/SwitchU/icons/themes.png";
+#endif
+
+    if (builtInIconPath) {
+        int w = 0;
+        int h = 0;
+        int channels = 0;
+        uint8_t* pixels = stbi_load(builtInIconPath, &w, &h, &channels, 4);
+        if (pixels && w > 0 && h > 0) {
+            std::vector<uint8_t> rgba(
+                pixels,
+                pixels + static_cast<size_t>(w) * static_cast<size_t>(h) * 4u
+            );
+            stbi_image_free(pixels);
+            extractAmbientSwatches(rgba, w, h, primary, secondary);
+            return;
+        }
+        if (pixels)
+            stbi_image_free(pixels);
+
+        // Asset read failure: still use a card-specific palette, never media.
+        if (titleId == kV103SystemAlbumId) {
+            primary = {0.16f, 0.62f, 1.00f};
+            secondary = {0.28f, 0.82f, 0.90f};
+        } else if (titleId == kV103SystemMiiId) {
+            primary = {0.94f, 0.40f, 0.64f};
+            secondary = {0.36f, 0.78f, 0.86f};
+        } else {
+            primary = {0.66f, 0.22f, 1.00f};
+            secondary = {0.22f, 0.48f, 1.00f};
+        }
+        return;
+    }
+
+    const std::vector<uint8_t> iconData = AppListLoader::loadIconData(titleId);
+    if (iconData.empty())
+        return;
+
+    int w = 0;
+    int h = 0;
+    int channels = 0;
+    uint8_t* pixels = stbi_load_from_memory(
+        iconData.data(),
+        static_cast<int>(iconData.size()),
+        &w, &h, &channels, 4
+    );
+    if (!pixels || w <= 0 || h <= 0) {
+        if (pixels)
+            stbi_image_free(pixels);
+        return;
+    }
+
+    std::vector<uint8_t> rgba(
+        pixels,
+        pixels + static_cast<size_t>(w) * static_cast<size_t>(h) * 4u
+    );
+    stbi_image_free(pixels);
+    extractAmbientSwatches(rgba, w, h, primary, secondary);
+}
+
 struct DecodedPreview {
     uint64_t titleId = 0;
     std::string path;
@@ -419,6 +513,15 @@ void resizeRgbaNearest(const uint8_t* src,
 void decodePreviewOnWorker(const std::shared_ptr<DecodedPreview>& out) {
     if (!out || out->titleId == 0)
         return;
+
+    // V10.3: the ambient glow follows the selected HOME icon/cover, never the
+    // optional static/video background. Do this before looking for media so
+    // titles without a custom background still get the right atmosphere.
+    extractAmbientFromSelectedIcon(
+        out->titleId,
+        out->glowPrimary,
+        out->glowSecondary
+    );
 
     out->path = previewPathFor(out->titleId);
     if (out->path.empty()) {
@@ -459,9 +562,7 @@ void decodePreviewOnWorker(const std::shared_ptr<DecodedPreview>& out) {
     out->width = dw;
     out->height = dh;
     out->decoded = !out->rgba.empty();
-    if (out->decoded)
-        extractAmbientSwatches(out->rgba, dw, dh,
-                               out->glowPrimary, out->glowSecondary);
+    // Intentionally do not derive glow colours from this background.
 }
 
 #ifdef SWITCHU_V81_FFMPEG
@@ -1479,6 +1580,10 @@ void processReadyFallback(WaraPreviewRuntime& r) {
 
     const uint64_t title = r.ready->titleId;
     const bool hadAsset = r.ready->hasAsset;
+    const AmbientSwatch readyGlowPrimary = r.ready->glowPrimary;
+    const AmbientSwatch readyGlowSecondary = r.ready->glowSecondary;
+    r.nextGlowPrimary = readyGlowPrimary;
+    r.nextGlowSecondary = readyGlowSecondary;
     r.ready.reset();
 
 #ifdef SWITCHU_V81_FFMPEG
@@ -1509,6 +1614,8 @@ void processReadyFallback(WaraPreviewRuntime& r) {
         r.transitioning = true;
     } else {
         r.resolvedTitle = title;
+        r.currentGlowPrimary = readyGlowPrimary;
+        r.currentGlowSecondary = readyGlowSecondary;
     }
 
     DebugLog::log(hadAsset
@@ -1819,8 +1926,8 @@ void WaraWaraBackground::onUpdate(float dt) {
                 }
                 r.currentAvailable = false;
                 r.resolvedTitle = r.transitionTargetTitle;
-                r.currentGlowPrimary = defaultAmbientA();
-                r.currentGlowSecondary = defaultAmbientB();
+                r.currentGlowPrimary = r.nextGlowPrimary;
+                r.currentGlowSecondary = r.nextGlowSecondary;
             }
 
             r.nextAvailable = false;
@@ -2161,16 +2268,16 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     }
 #endif
 
-    // V10.1 visual integration: the reference is substantially darker than
-    // the previous beta. Artwork stays visible, while UI and covers clearly win.
+    // V10.3 visual integration: keep the reference dark without crushing the media.
+    // Artwork/video remain readable while the lower anthracite zone still anchors the UI.
     const nxui::Color lowerBase(0.095f, 0.098f, 0.110f, 1.f);
-    const float fadeStartY = area.y + area.height * 0.48f;
-    const float solidStartY = area.y + area.height * 0.79f;
+    const float fadeStartY = area.y + area.height * 0.42f;
+    const float solidStartY = area.y + area.height * 0.73f;
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
     const float mediaFactor = std::clamp(previewVisualAlpha, 0.f, 1.f);
-    const float veilTop = (0.16f + 0.20f * mediaFactor) * baseAlpha;
-    const float veilBottom = (0.28f + 0.32f * mediaFactor) * baseAlpha;
+    const float veilTop = (0.075f + 0.105f * mediaFactor) * baseAlpha;
+    const float veilBottom = (0.14f + 0.17f * mediaFactor) * baseAlpha;
 
     // This veil is always present. With a still/video it becomes strong enough
     // to match the dark reference; without media it simply calms the theme.
@@ -2196,12 +2303,12 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         area,
         nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                    0.028f * baseAlpha),
+                    0.044f * baseAlpha),
         nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                    0.040f * baseAlpha)
+                    0.060f * baseAlpha)
     );
 
-    // V10.2: TRUE GPU glow. The V10.1 circles were visible geometry with low
+    // V10.3: TRUE GPU glow. The V10.1 circles were visible geometry with low
     // alpha; now they are only high-energy light sources rendered to the same
     // half-resolution offscreen pipeline used by the V7.4.4 lockscreen glow,
     // then Gaussian-blurred and composited back behind the carousel.
@@ -2225,33 +2332,33 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
         emitLightMass(area.x + area.width * 0.36f,
                       area.y + area.height * 0.47f,
-                      glowPrimary, 0.54f * baseAlpha, 1.22f);
+                      glowPrimary, 0.72f * baseAlpha, 1.30f);
         emitLightMass(area.x + area.width * 0.66f,
                       area.y + area.height * 0.45f,
-                      glowSecondary, 0.48f * baseAlpha, 1.08f);
+                      glowSecondary, 0.64f * baseAlpha, 1.18f);
 
         endHomeGlowTargetV102(ren);
-        ren.applyBlur(3.65f, 2);
+        ren.applyBlur(4.35f, 2);
         ren.drawOffscreen(
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.72f * baseAlpha)
+            nxui::Color::white().withAlpha(0.88f * baseAlpha)
         );
         realGlow = true;
     }
 #endif
 
     if (!realGlow) {
-        const nxui::Vec2 p {area.x + area.width * 0.38f,
-                            area.y + area.height * 0.48f};
-        const nxui::Vec2 q {area.x + area.width * 0.64f,
-                            area.y + area.height * 0.46f};
-        ren.drawCircle(p, 250.f,
-                       nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                                   0.070f * baseAlpha), 72);
-        ren.drawCircle(q, 235.f,
-                       nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                                   0.064f * baseAlpha), 72);
+        // Non-deko fallback deliberately avoids visible circles/geometric blobs.
+        // It is only a broad colour fog; the real build uses the GPU blur above.
+        ren.drawGradientRect(
+            {area.x, area.y + area.height * 0.24f,
+             area.width, area.height * 0.50f},
+            nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
+                        0.055f * baseAlpha),
+            nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
+                        0.075f * baseAlpha)
+        );
     }
 
     // The lower information zone is anthracite rather than black and blends

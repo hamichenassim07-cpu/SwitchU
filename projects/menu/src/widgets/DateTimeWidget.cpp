@@ -37,9 +37,9 @@ DateTimeWidget::DateTimeWidget() {
     // translucent rectangles. Wide category glass is rendered explicitly in
     // onContentRender with the same captured backdrop.
     setCornerRadius(22.f);
-    setBaseColor(nxui::Color(0.48f, 0.72f, 0.62f, 0.30f));
-    setBorderColor(nxui::Color(0.88f, 1.00f, 0.94f, 0.28f));
-    setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.14f));
+    setBaseColor(nxui::Color(0.56f, 0.66f, 0.82f, 0.22f));
+    setBorderColor(nxui::Color(0.92f, 0.97f, 1.00f, 0.40f));
+    setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.22f));
     setPanelOpacity(0.90f);
     setLiquidGlassEnabled(true);
     setLiquidGlassShaderEnabled(true);
@@ -247,30 +247,30 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         kTabH
     };
 
-    // V10.2: real refractive/frosted glass. Reuse the capture already made
+    // V10.3 Option C: assertive refractive/frosted glass. Reuse the capture already made
     // by the clock GlassWidget when possible, avoiding a second full-screen
     // backdrop copy in the same frame.
     ren.captureToOffscreen(true);
     ren.drawLiquidGlass(
         0, navRect, 24.f,
-        nxui::Color(0.50f, 0.80f, 0.66f, 0.48f),
-        0.93f * m_opacity, 0.f
+        nxui::Color(0.60f, 0.72f, 0.92f, 0.48f),
+        0.96f * m_opacity, 0.f
     );
     ren.drawRoundedRectOutline(
         navRect,
-        nxui::Color(0.91f, 1.00f, 0.96f, 0.24f * m_opacity),
+        nxui::Color(0.91f, 0.97f, 1.00f, 0.30f * m_opacity),
         24.f, 1.f
     );
 
     // The active category is a brighter internal lens, not a focus cursor.
     ren.drawLiquidGlass(
         0, activeRect, 18.f,
-        nxui::Color(0.86f, 1.00f, 0.92f, 0.82f),
-        0.82f * m_opacity, 0.f
+        nxui::Color(0.72f, 0.86f, 1.00f, 0.66f),
+        0.92f * m_opacity, 0.f
     );
     ren.drawRoundedRectOutline(
         activeRect,
-        nxui::Color(1.f, 1.f, 1.f, 0.22f * m_opacity),
+        nxui::Color(1.f, 1.f, 1.f, 0.42f * m_opacity),
         18.f, 1.f
     );
 
@@ -289,8 +289,8 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float gamesActive = 1.f - slide;
     const float appsActive = slide;
 
-    const nxui::Color inactive(0.96f, 0.99f, 0.97f, 0.84f * m_opacity);
-    const nxui::Color active(0.075f, 0.105f, 0.090f, m_opacity);
+    const nxui::Color inactive(0.92f, 0.96f, 0.96f, 0.74f * m_opacity);
+    const nxui::Color active(1.00f, 1.00f, 1.00f, 1.00f * m_opacity);
 
     auto mixColor = [](const nxui::Color& a,
                        const nxui::Color& b,
@@ -304,21 +304,38 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         );
     };
 
+    const nxui::Color tabShadow(0.0f, 0.0f, 0.0f, 0.62f * m_opacity);
+    const nxui::Color gamesColor = mixColor(inactive, active, gamesActive);
+    ren.drawText(
+        games,
+        {gamesCenterX - gamesSz.x * 0.5f + 1.f, textY + 1.3f},
+        dateFont,
+        tabShadow,
+        1.f
+    );
     ren.drawText(
         games,
         {gamesCenterX - gamesSz.x * 0.5f, textY},
         dateFont,
-        mixColor(inactive, active, gamesActive),
+        gamesColor,
         1.f
     );
 
     const float appsTextY =
         kNavY + (kNavH - appsSz.y) * 0.5f;
+    const nxui::Color appsColor = mixColor(inactive, active, appsActive);
+    ren.drawText(
+        apps,
+        {appsCenterX - appsSz.x * 0.5f + 1.f, appsTextY + 1.3f},
+        dateFont,
+        tabShadow,
+        1.f
+    );
     ren.drawText(
         apps,
         {appsCenterX - appsSz.x * 0.5f, appsTextY},
         dateFont,
-        mixColor(inactive, active, appsActive),
+        appsColor,
         1.f
     );
 }

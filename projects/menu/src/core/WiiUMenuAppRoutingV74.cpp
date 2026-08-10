@@ -9,6 +9,7 @@
 #endif
 
 #include <algorithm>
+#include <filesystem>
 
 namespace {
 
@@ -295,6 +296,48 @@ void WiiUMenuApp::handleSystemAction(SysAction a) {
             break;
 
         case SysAction::WakeUp: {
+            // V10.3 HOME POWER: the daemon suppresses the immediate Horizon
+            // sleep sequence only on the active HOME and drops this one-shot
+            // marker before reusing the existing WakeUp notification channel.
+            // A genuine wake has no marker and follows the untouched V7.4.4
+            // lockscreen route below.
+            static constexpr const char* kHomePowerRequestPath =
+                "sdmc:/config/SwitchU/power_button_request.flag";
+            std::error_code powerEc;
+            const bool homePowerRequest =
+                std::filesystem::exists(kHomePowerRequestPath, powerEc);
+            if (homePowerRequest) {
+                powerEc.clear();
+                std::filesystem::remove(kHomePowerRequestPath, powerEc);
+
+                const bool plainHome =
+                    !m_lockScreenActive &&
+                    !(m_launchAnim && m_launchAnim->isPlaying()) &&
+                    !(m_dialog && m_dialog->isActive()) &&
+                    !(m_themeShop && m_themeShop->isActive()) &&
+                    !(m_settings && m_settings->isActive()) &&
+                    !(m_userSelect && m_userSelect->isActive());
+
+                if (plainHome) {
+                    auto& powerButtons = m_sidebar.rightButtons();
+                    if (powerButtons.size() >= 3 && powerButtons[2]) {
+                        DebugLog::log(
+                            "[home-power] physical POWER -> existing Switch U power dialog"
+                        );
+                        powerButtons[2]->activate();
+                        return;
+                    }
+                }
+
+                // Lockscreen/overlay or unavailable hidden Power button: keep
+                // normal console semantics instead of trapping POWER.
+                DebugLog::log(
+                    "[home-power] not on plain HOME -> forwarding normal sleep"
+                );
+                m_launcher.enterSleep();
+                return;
+            }
+
             // V7.4.3 direct : le vieux pump ne transmet pas notif.payload.
             // On relit donc le SystemStatus du daemon au reveil. Le daemon
             // contient la destination capturee AVANT la mise en veille.
