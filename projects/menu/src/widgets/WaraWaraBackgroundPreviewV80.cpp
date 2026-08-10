@@ -2268,7 +2268,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     }
 #endif
 
-    // V10.3 visual integration: keep the reference dark without crushing the media.
+    // V10.3 visual integration: keep the reference dark without crushing the media. V10.3B softens the veil after user feedback.
     // Artwork/video remain readable while the lower anthracite zone still anchors the UI.
     const nxui::Color lowerBase(0.095f, 0.098f, 0.110f, 1.f);
     const float fadeStartY = area.y + area.height * 0.42f;
@@ -2276,8 +2276,8 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
     const float mediaFactor = std::clamp(previewVisualAlpha, 0.f, 1.f);
-    const float veilTop = (0.075f + 0.105f * mediaFactor) * baseAlpha;
-    const float veilBottom = (0.14f + 0.17f * mediaFactor) * baseAlpha;
+    const float veilTop = (0.020f + 0.045f * mediaFactor) * baseAlpha;
+    const float veilBottom = (0.060f + 0.085f * mediaFactor) * baseAlpha;
 
     // This veil is always present. With a still/video it becomes strong enough
     // to match the dark reference; without media it simply calms the theme.
@@ -2303,9 +2303,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         area,
         nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                    0.044f * baseAlpha),
+                    0.016f * baseAlpha),
         nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                    0.060f * baseAlpha)
+                    0.024f * baseAlpha)
     );
 
     // V10.3: TRUE GPU glow. The V10.1 circles were visible geometry with low
@@ -2332,17 +2332,17 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
         emitLightMass(area.x + area.width * 0.36f,
                       area.y + area.height * 0.47f,
-                      glowPrimary, 0.72f * baseAlpha, 1.30f);
+                      glowPrimary, 0.28f * baseAlpha, 1.18f);
         emitLightMass(area.x + area.width * 0.66f,
                       area.y + area.height * 0.45f,
-                      glowSecondary, 0.64f * baseAlpha, 1.18f);
+                      glowSecondary, 0.24f * baseAlpha, 1.10f);
 
         endHomeGlowTargetV102(ren);
         ren.applyBlur(4.35f, 2);
         ren.drawOffscreen(
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.88f * baseAlpha)
+            nxui::Color::white().withAlpha(0.52f * baseAlpha)
         );
         realGlow = true;
     }
@@ -2355,9 +2355,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             {area.x, area.y + area.height * 0.24f,
              area.width, area.height * 0.50f},
             nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                        0.055f * baseAlpha),
+                        0.020f * baseAlpha),
             nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                        0.075f * baseAlpha)
+                        0.030f * baseAlpha)
         );
     }
 

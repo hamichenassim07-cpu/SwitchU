@@ -253,24 +253,24 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     ren.captureToOffscreen(true);
     ren.drawLiquidGlass(
         0, navRect, 24.f,
-        nxui::Color(0.60f, 0.72f, 0.92f, 0.48f),
+        nxui::Color(0.70f, 0.84f, 0.98f, 0.60f),
         0.96f * m_opacity, 0.f
     );
     ren.drawRoundedRectOutline(
         navRect,
-        nxui::Color(0.91f, 0.97f, 1.00f, 0.30f * m_opacity),
+        nxui::Color(0.96f, 0.99f, 1.00f, 0.44f * m_opacity),
         24.f, 1.f
     );
 
     // The active category is a brighter internal lens, not a focus cursor.
     ren.drawLiquidGlass(
         0, activeRect, 18.f,
-        nxui::Color(0.72f, 0.86f, 1.00f, 0.66f),
+        nxui::Color(0.82f, 0.92f, 1.00f, 0.82f),
         0.92f * m_opacity, 0.f
     );
     ren.drawRoundedRectOutline(
         activeRect,
-        nxui::Color(1.f, 1.f, 1.f, 0.42f * m_opacity),
+        nxui::Color(1.f, 1.f, 1.f, 0.58f * m_opacity),
         18.f, 1.f
     );
 
@@ -289,7 +289,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float gamesActive = 1.f - slide;
     const float appsActive = slide;
 
-    const nxui::Color inactive(0.92f, 0.96f, 0.96f, 0.74f * m_opacity);
+    const nxui::Color inactive(0.94f, 0.98f, 0.99f, 0.88f * m_opacity);
     const nxui::Color active(1.00f, 1.00f, 1.00f, 1.00f * m_opacity);
 
     auto mixColor = [](const nxui::Color& a,
@@ -304,7 +304,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         );
     };
 
-    const nxui::Color tabShadow(0.0f, 0.0f, 0.0f, 0.62f * m_opacity);
+    const nxui::Color tabShadow(0.0f, 0.0f, 0.0f, 0.44f * m_opacity);
     const nxui::Color gamesColor = mixColor(inactive, active, gamesActive);
     ren.drawText(
         games,

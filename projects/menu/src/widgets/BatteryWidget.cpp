@@ -21,10 +21,10 @@ constexpr float kPercentageScale = 0.98f;
 
 BatteryWidget::BatteryWidget() {
     setCornerRadius(22.f);
-    setBaseColor(nxui::Color(0.58f, 0.70f, 0.88f, 0.26f));
-    setBorderColor(nxui::Color(0.90f, 0.97f, 1.00f, 0.36f));
-    setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.15f));
-    setPanelOpacity(0.92f);
+    setBaseColor(nxui::Color(0.70f, 0.84f, 0.98f, 0.34f));
+    setBorderColor(nxui::Color(0.96f, 0.99f, 1.00f, 0.50f));
+    setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.22f));
+    setPanelOpacity(0.96f);
     setLiquidGlassEnabled(true);
     setLiquidGlassShaderEnabled(true);
     setForceLiquidGlass(true);
