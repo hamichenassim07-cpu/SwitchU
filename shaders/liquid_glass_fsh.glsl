@@ -1,5 +1,13 @@
-// Liquid glass fragment shader for deko3d.
-// Based on the OverShifted/LiquidGlass superellipse refraction pass.
+// Switch U HOME V10.4 - Liquid Glass Engine C2
+// deko3d / uam fragment shader
+//
+// Goals of this pass:
+// - unmistakable edge refraction / lensing
+// - soft + heavy frost sampling from the captured HOME backdrop
+// - subtle RGB dispersion only around the bevel
+// - Fresnel rim, directional specular and inner shadow
+// - very slow liquid micro-warp
+// - deliberate diagnostic mode when refractionIntensity >= 0.95
 #version 460
 
 layout (location = 0) in vec2 fragUV;
@@ -7,173 +15,226 @@ layout (location = 1) in vec4 fragColor;
 
 layout (binding = 0) uniform sampler2D tex;
 
-// FsUniforms layout (matches nxui::FsUniforms struct):
-//   int  useTexture;      // offset  0
-//   float param1..param3; // offset  4, 8, 12
-//   float extra[48];      // offset 16
+// FsUniforms layout (matches nxui::FsUniforms):
+//   int useTexture; float param1..param3; float extra[48]
 layout (std140, binding = 1) uniform FsUniforms {
     int   useTexture;
-    float lg_refractionIntensity;   // overall refraction strength (0..1)
-    float lg_blurIntensity;         // blur contribution (0..2)
-    float lg_noiseIntensity;        // noise dithering (0..1)
-    // extra[0..47] — packed as vec4s for std140 alignment
-    vec4  lg_pack0;   // x=glowIntensity, y=saturation, z=opacity, w=roughness
-    vec4  lg_pack1;   // x=animSpeed, y=time, z=powerFactor, w=fPower
-    vec4  lg_pack2;   // x=refA, y=refB, z=refC, w=refD
-    vec4  lg_pack3;   // x=glowWeight, y=glowBias, z=glowEdge0, w=glowEdge1
-    vec4  lg_tintColor;      // rgba tint
-    vec4  lg_panelRect;      // x, y, width, height in screen pixels
-    vec4  lg_screenSize;     // x=screenW, y=screenH, z=shadeAmount, w=0
+    float lg_refractionIntensity;
+    float lg_blurIntensity;
+    float lg_noiseIntensity;
+
+    vec4  lg_pack0;      // x=glow, y=saturation, z=body/reflect strength, w=roughness
+    vec4  lg_pack1;      // x=animSpeed, y=time, z=powerFactor, w=fPower
+    vec4  lg_pack2;      // x=refA, y=refB, z=refC, w=refD
+    vec4  lg_pack3;      // x=glowWeight, y=glowBias, z=glowEdge0, w=glowEdge1
+    vec4  lg_tintColor;
+    vec4  lg_panelRect;  // x,y,w,h in 1280x720 screen pixels
+    vec4  lg_screenSize; // x=screenW, y=screenH, z=shade, w=reserved
 };
 
 layout (location = 0) out vec4 outColor;
 
-const float M_E = 2.718281828459045;
-const float M_PI = 3.14159265359;
+const float PI = 3.14159265358979323846;
 
-float sdSuperellipse(vec2 p, vec2 r, float n) {
-    vec2 pa = abs(p);
-    vec2 safeR = max(r, vec2(0.00001));
-    vec2 q = pa / safeR;
-    float num = pow(q.x, n) + pow(q.y, n) - 1.0;
-    vec2 grad = vec2(
-        n * pow(max(q.x, 0.00001), n - 1.0) / safeR.x,
-        n * pow(max(q.y, 0.00001), n - 1.0) / safeR.y
-    );
-    float den = length(grad) + 0.00001;
-    return num / den;
+float saturate1(float v) { return clamp(v, 0.0, 1.0); }
+
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
 }
 
-float refractionCurve(float x) {
-    float a = lg_pack2.x;
-    float b = lg_pack2.y;
-    float c = lg_pack2.z;
-    float d = lg_pack2.w;
-    return 1.0 - b * pow(c * M_E, -d * x - a);
+float sdRoundedRectPx(vec2 p, vec2 halfSize, float radius) {
+    radius = clamp(radius, 1.0, min(halfSize.x, halfSize.y));
+    vec2 q = abs(p) - halfSize + radius;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
 }
 
-float rand(vec2 co) {
-    return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+vec3 applySaturation(vec3 c, float amount) {
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    return mix(vec3(l), c, amount);
 }
 
-vec3 applySaturation(vec3 color, float saturation) {
-    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-    return mix(vec3(luma), color, saturation);
+vec3 screenBlend(vec3 base, vec3 blend) {
+    return 1.0 - (1.0 - base) * (1.0 - blend);
 }
 
-vec4 sampleBlurred(vec2 uv, vec2 texelSize, float blurRadius) {
-    if (blurRadius <= 0.001) {
-        return texture(tex, uv);
-    }
-
-    vec2 off1 = texelSize * blurRadius * 1.3846153846;
-    vec2 off2 = texelSize * blurRadius * 3.2307692308;
-
-    vec4 color = texture(tex, uv) * 0.2270270270;
-    color += texture(tex, uv + vec2(off1.x, 0.0)) * 0.3162162162;
-    color += texture(tex, uv - vec2(off1.x, 0.0)) * 0.3162162162;
-    color += texture(tex, uv + vec2(off2.x, 0.0)) * 0.0702702703;
-    color += texture(tex, uv - vec2(off2.x, 0.0)) * 0.0702702703;
-    color += texture(tex, uv + vec2(0.0, off1.y)) * 0.3162162162;
-    color += texture(tex, uv - vec2(0.0, off1.y)) * 0.3162162162;
-    color += texture(tex, uv + vec2(0.0, off2.y)) * 0.0702702703;
-    color += texture(tex, uv - vec2(0.0, off2.y)) * 0.0702702703;
-    return color * 0.5;
+vec4 sampleSoft(vec2 uv, vec2 texel, float radiusPx) {
+    vec2 o = texel * max(radiusPx, 0.01);
+    vec4 c = texture(tex, uv) * 0.40;
+    c += texture(tex, uv + vec2( o.x, 0.0)) * 0.15;
+    c += texture(tex, uv + vec2(-o.x, 0.0)) * 0.15;
+    c += texture(tex, uv + vec2(0.0,  o.y)) * 0.15;
+    c += texture(tex, uv + vec2(0.0, -o.y)) * 0.15;
+    return c;
 }
 
-vec3 screenBlend(vec3 base, vec3 tint) {
-    return 1.0 - (1.0 - base) * (1.0 - tint);
-}
-
-float computeGlow(vec2 uv) {
-    return sin(atan(uv.y * 2.0 - 1.0, uv.x * 2.0 - 1.0) - 0.5);
+vec4 sampleHeavy(vec2 uv, vec2 texel, float radiusPx) {
+    vec2 o = texel * max(radiusPx, 0.01);
+    vec2 d = o * 0.72;
+    vec4 c = texture(tex, uv) * 0.22;
+    c += texture(tex, uv + vec2( o.x, 0.0)) * 0.10;
+    c += texture(tex, uv + vec2(-o.x, 0.0)) * 0.10;
+    c += texture(tex, uv + vec2(0.0,  o.y)) * 0.10;
+    c += texture(tex, uv + vec2(0.0, -o.y)) * 0.10;
+    c += texture(tex, uv + vec2( d.x,  d.y)) * 0.095;
+    c += texture(tex, uv + vec2(-d.x,  d.y)) * 0.095;
+    c += texture(tex, uv + vec2( d.x, -d.y)) * 0.095;
+    c += texture(tex, uv + vec2(-d.x, -d.y)) * 0.095;
+    return c;
 }
 
 void main() {
-    float refrIntensity  = lg_refractionIntensity;
-    float blurIntensity  = lg_blurIntensity;
-    float noiseIntensity = lg_noiseIntensity;
-    float glowIntensity  = lg_pack0.x;
-    float saturation     = lg_pack0.y;
-    float reflectionStrength = lg_pack0.z;
-    float roughness      = lg_pack0.w;
-    float animSpeed      = lg_pack1.x;
-    float time           = lg_pack1.y;
-    float powerFactor    = lg_pack1.z;
-    float fPower         = lg_pack1.w;
-    float glowWeight     = lg_pack3.x;
-    float glowBias       = lg_pack3.y;
-    float glowEdge0      = lg_pack3.z;
-    float glowEdge1      = lg_pack3.w;
-    float unavailableShade = clamp(lg_screenSize.z, 0.0, 1.0);
+    float refrIntensity = clamp(lg_refractionIntensity, 0.0, 1.25);
+    float blurControl   = clamp(lg_blurIntensity / 8.0, 0.0, 1.0);
+    float noiseAmount   = clamp(lg_noiseIntensity, 0.0, 0.10);
+    float glowAmount    = max(lg_pack0.x, 0.0);
+    float saturation    = clamp(lg_pack0.y, 0.0, 1.6);
+    float bodyStrength  = clamp(lg_pack0.z, 0.0, 1.0);
+    float roughness     = clamp(lg_pack0.w, 0.0, 0.08);
+    float animSpeed     = max(lg_pack1.x, 0.0);
+    float time          = lg_pack1.y;
+    float powerFactor   = clamp(lg_pack1.z, 2.0, 12.0);
+    float fPower        = clamp(lg_pack1.w, 0.5, 2.5);
+    float shadeAmount   = clamp(lg_screenSize.z, 0.0, 1.0);
 
-    vec2 panelSize = max(lg_panelRect.zw, vec2(1.0));
-    float panelMinSide = max(1.0, min(panelSize.x, panelSize.y));
-    vec2 panelAspect = panelSize / panelMinSide;
+    // The debug flag is intentionally encoded by HomeLiquidGlassStyle using
+    // refraction >= .95, so no renderer ABI change is needed.
+    float debugMode = step(0.95, refrIntensity);
 
-    vec2 center = vec2(0.5);
-    vec2 p = (fragUV - center) * 2.0 * panelAspect;
+    vec2 panelSize = max(lg_panelRect.zw, vec2(2.0));
+    vec2 halfSize  = panelSize * 0.5;
+    vec2 localPx   = (fragUV - 0.5) * panelSize;
 
-    float d = sdSuperellipse(p, panelAspect, powerFactor);
-
-    if (d > 0.0)
+    // Rounded-rect SDF in PIXELS. The powerFactor influences the apparent
+    // corner radius a little so existing tuning still has a visible role.
+    float cornerFactor = clamp(0.54 + powerFactor * 0.040, 0.62, 0.93);
+    float cornerRadius = min(halfSize.x, halfSize.y) * cornerFactor;
+    float d = sdRoundedRectPx(localPx, halfSize, cornerRadius);
+    float aa = max(fwidth(d), 0.75);
+    float shape = 1.0 - smoothstep(-aa, aa, d);
+    if (shape <= 0.001)
         discard;
 
-    float dist = -d;
+    float insidePx = max(-d, 0.0);
+    float bevelPx = clamp(min(halfSize.x, halfSize.y) * (0.34 + 0.04 * fPower), 7.0, 20.0);
+    float edge = 1.0 - smoothstep(0.0, bevelPx, insidePx);
+    float edge2 = edge * edge;
 
-    float refScale = pow(refractionCurve(dist), fPower);
-    vec2 sampleP = p * mix(1.0, refScale, refrIntensity);
+    // True SDF normal around the panel contour.
+    const float gradStep = 1.35;
+    float dx = sdRoundedRectPx(localPx + vec2(gradStep, 0.0), halfSize, cornerRadius)
+             - sdRoundedRectPx(localPx - vec2(gradStep, 0.0), halfSize, cornerRadius);
+    float dy = sdRoundedRectPx(localPx + vec2(0.0, gradStep), halfSize, cornerRadius)
+             - sdRoundedRectPx(localPx - vec2(0.0, gradStep), halfSize, cornerRadius);
+    vec2 normal2 = normalize(vec2(dx, dy) + vec2(1e-5));
 
-    float waveTime = time * animSpeed;
-    vec2 roughOffset = vec2(
-        sin((p.y + waveTime) * 14.0),
-        cos((p.x - waveTime) * 12.0)
-    ) * roughness * 0.05;
-    sampleP += roughOffset;
+    // Slow microscopic liquid motion. It moves only the sampled backdrop, not
+    // the widget geometry, so the HUD remains perfectly stable.
+    float phase = time * animSpeed;
+    vec2 wave = vec2(
+        sin(localPx.y * 0.045 + phase * 0.73) + 0.46 * sin(localPx.y * 0.091 - phase * 0.41),
+        cos(localPx.x * 0.041 - phase * 0.67) + 0.42 * cos(localPx.x * 0.083 + phase * 0.38)
+    );
+    wave *= (roughness * 24.0 + debugMode * 0.85);
 
-    vec2 localUV = (sampleP / panelAspect) * 0.5 + 0.5;
+    // Edge refraction is deliberately much stronger than centre distortion.
+    // This produces the visible "bending line" test expected from real glass.
+    float edgeRefPx = (2.0 + 13.5 * refrIntensity) * pow(edge2, 0.82);
+    edgeRefPx *= mix(1.0, 1.70, debugMode);
+    vec2 edgeRefraction = normal2 * edgeRefPx;
 
-    vec2 panelPos  = lg_panelRect.xy;
-    vec2 panelPixelSize = lg_panelRect.zw;
-    vec2 screenPx  = panelPos + localUV * panelPixelSize;
-    vec2 screenUV  = screenPx / lg_screenSize.xy;
+    // Convex lens: gently pull inner pixels toward the panel centre.
+    vec2 centreVector = -localPx / max(min(halfSize.x, halfSize.y), 1.0);
+    float centreLens = (0.55 + 2.35 * refrIntensity) * (1.0 - edge) * (1.0 - edge);
+    vec2 lensOffset = centreVector * centreLens;
 
-    screenUV = clamp(screenUV, 0.0, 1.0);
+    vec2 screenPx = lg_panelRect.xy + fragUV * panelSize;
+    vec2 sampledPx = screenPx + edgeRefraction + lensOffset + wave;
+    vec2 screenUV = sampledPx / max(lg_screenSize.xy, vec2(1.0));
+    screenUV = clamp(screenUV, vec2(0.001), vec2(0.999));
 
-    vec2 texelSize = 1.0 / max(lg_screenSize.xy, vec2(1.0));
-    vec4 original = texture(tex, screenUV);
-    vec4 blurred = sampleBlurred(screenUV, texelSize, blurIntensity);
-    float blurMix = clamp(blurIntensity / 10.0, 0.0, 1.0);
-    vec4 color = mix(original, blurred, blurMix);
+    // Captured backdrop is half-resolution (640x360), so one source texel
+    // corresponds to two full-screen pixels.
+    vec2 texel = 2.0 / max(lg_screenSize.xy, vec2(1.0));
 
-    float n = (rand((gl_FragCoord.xy + waveTime * 61.0) * 1e-3) - 0.5) * noiseIntensity;
-    color.rgb += vec3(n);
+    // Two frost bands from the same captured backdrop. Heavy frost dominates
+    // the bevel, while the centre remains clearer and more lens-like.
+    float softRadius  = mix(0.75, 2.65, blurControl);
+    float heavyRadius = mix(2.8, 7.8, blurControl);
+    vec4 soft  = sampleSoft(screenUV, texel, softRadius);
+    vec4 heavy = sampleHeavy(screenUV, texel, heavyRadius);
+    float frostMix = clamp(edge * (0.58 + 0.34 * blurControl) + blurControl * 0.16, 0.0, 0.92);
+    vec3 glass = mix(soft.rgb, heavy.rgb, frostMix);
 
-    float glow = computeGlow(fragUV);
-    float glowMask = smoothstep(glowEdge0, glowEdge1, dist);
-    float glowMul = glow * glowWeight * glowIntensity * glowMask + 1.0 + glowBias;
-    color.rgb *= glowMul;
+    // Chromatic dispersion only in the refractive rim. In diagnostic mode it
+    // becomes intentionally exaggerated, making shader activation obvious.
+    float chromaPx = (0.35 + 1.85 * refrIntensity) * pow(edge, 1.45);
+    chromaPx *= mix(1.0, 3.6, debugMode);
+    vec2 chromaUV = normal2 * chromaPx / max(lg_screenSize.xy, vec2(1.0));
+    vec3 split;
+    split.r = texture(tex, clamp(screenUV + chromaUV, vec2(0.001), vec2(0.999))).r;
+    split.g = texture(tex, screenUV).g;
+    split.b = texture(tex, clamp(screenUV - chromaUV, vec2(0.001), vec2(0.999))).b;
+    glass = mix(glass, split, edge * mix(0.20, 0.78, debugMode));
 
-    float edgeReflection = 1.0 - smoothstep(0.0, 0.32, dist);
-    float topReflection = pow(clamp(1.0 - fragUV.y, 0.0, 1.0), 2.2);
-    float reflectionMask = edgeReflection * (0.55 + 0.45 * topReflection);
-    vec3 reflectionTint = mix(vec3(0.94, 0.97, 1.0), clamp(lg_tintColor.rgb, 0.0, 1.0), 0.06);
-    float reflection = clamp(reflectionStrength * (0.08 + glowIntensity * 0.06) * reflectionMask,
-                             0.0, 0.42);
-    color.rgb = mix(color.rgb, screenBlend(color.rgb, reflectionTint), reflection);
+    glass = applySaturation(glass, saturation);
 
-    vec3 bodyTint = mix(vec3(0.96, 0.98, 1.0), clamp(lg_tintColor.rgb, 0.0, 1.0), 0.12);
-    color.rgb = mix(color.rgb, color.rgb * bodyTint, clamp(lg_tintColor.a * 0.08, 0.0, 0.08));
-    color.rgb = applySaturation(color.rgb, saturation);
+    // Very light cool body tint. The backdrop must remain recognisable through
+    // the panel; this is glass, not an opaque blue rectangle.
+    vec3 tint = clamp(lg_tintColor.rgb, 0.0, 1.25);
+    vec3 neutralTint = mix(vec3(0.985, 0.995, 1.015), tint, 0.18);
+    float tintMix = clamp(0.025 + bodyStrength * 0.10, 0.0, 0.16);
+    glass = mix(glass, glass * neutralTint, tintMix);
 
-    if (unavailableShade > 0.001) {
-        float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
-        vec3 desaturated = mix(color.rgb, vec3(luma), unavailableShade * 0.18);
-        vec3 veilColor = vec3(0.82, 0.84, 0.88);
-        color.rgb = mix(color.rgb, desaturated * veilColor, unavailableShade * 0.32);
+    // Bevel normal + Fresnel / specular model.
+    float bevelSlope = edge * edge * 1.28;
+    vec3 N = normalize(vec3(normal2 * bevelSlope, 1.0));
+    vec3 V = vec3(0.0, 0.0, 1.0);
+    vec3 L = normalize(vec3(-0.68, -0.74, 0.88));
+    vec3 H = normalize(L + V);
+
+    float fresnel = pow(clamp(1.0 - N.z, 0.0, 1.0), 2.15);
+    float specular = pow(max(dot(N, H), 0.0), mix(34.0, 22.0, debugMode));
+    float frontRim = pow(max(dot(normal2, normalize(vec2(-0.72, -0.69))), 0.0), 2.0);
+    float backRim  = pow(max(dot(normal2, normalize(vec2( 0.72,  0.69))), 0.0), 2.4);
+
+    vec3 coolWhite = vec3(0.93, 0.975, 1.06);
+    float rimEnergy = edge * (0.10 + glowAmount * 0.13)
+                    + fresnel * (0.30 + glowAmount * 0.38)
+                    + specular * (0.18 + glowAmount * 0.34)
+                    + frontRim * edge * 0.10;
+    glass = screenBlend(glass, coolWhite * clamp(rimEnergy, 0.0, 0.72));
+
+    // Opposite side receives a soft inner shadow, which creates thickness.
+    float innerShadow = backRim * edge * (0.085 + 0.075 * bodyStrength);
+    glass *= (1.0 - innerShadow);
+
+    // Directional moving sheen. Very subtle in normal mode.
+    float angle = atan(normal2.y, normal2.x);
+    float sheenPhase = angle - 0.62 + phase * 0.055;
+    float sheen = (0.5 + 0.5 * sin(sheenPhase)) * edge;
+    float sheenWeight = clamp(lg_pack3.x, 0.0, 1.0);
+    float sheenBias = clamp(lg_pack3.y, -0.2, 0.2);
+    glass *= 1.0 + sheen * sheenWeight * glowAmount * 0.075 + sheenBias * 0.10;
+
+    // Tiny material grain prevents sterile plastic-looking gradients.
+    float grain = hash21(gl_FragCoord.xy + vec2(phase * 7.0, phase * 3.0)) - 0.5;
+    glass += grain * noiseAmount * 0.42;
+
+    if (shadeAmount > 0.001) {
+        float lum = dot(glass, vec3(0.2126, 0.7152, 0.0722));
+        vec3 muted = mix(glass, vec3(lum), shadeAmount * 0.18);
+        glass = mix(glass, muted * vec3(0.84, 0.86, 0.90), shadeAmount * 0.30);
     }
 
-    color.a = 1.0;
+    // Diagnostic mode also leaves a very thin cyan/magenta rim. If this is
+    // visible, the V10.4 shader is unquestionably the code being executed.
+    if (debugMode > 0.5) {
+        vec3 diagTint = mix(vec3(1.0, 0.18, 0.82), vec3(0.10, 0.92, 1.0), step(0.0, normal2.x));
+        glass = mix(glass, diagTint, edge * 0.18);
+    }
 
-    outColor = color * fragColor;
+    glass = clamp(glass, 0.0, 1.0);
+    outColor = vec4(glass, shape) * fragColor;
 }

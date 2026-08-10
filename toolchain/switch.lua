@@ -58,7 +58,12 @@ rule("switch")
         end
     end)
 
-    -- Shaders: compile GLSL -> DKSH via uam before linking 
+    -- Shaders: compile GLSL -> DKSH via uam before linking.
+    -- V10.4: liquid_glass_fsh is ALWAYS rebuilt. The repository contains a
+    -- precompiled DKSH, and relying only on mtimes can silently keep that old
+    -- binary after a source overlay. Removing/rebuilding this one shader makes
+    -- the runtime material deterministic: if uam cannot compile it, the build
+    -- fails instead of shipping an older Liquid Glass pass.
     before_build(function(target)
         local shaderdir = path.join(os.projectdir(), "shaders")
         if not os.isdir(shaderdir) then return end
@@ -73,9 +78,13 @@ rule("switch")
         for _, src in ipairs(os.files(path.join(shaderdir, "*.glsl"))) do
             local base = path.basename(src)
             local out  = path.join(outdir, base .. ".dksh")
+            local force_v104_liquid_glass = (base == "liquid_glass_fsh")
 
-            -- skip if up-to-date
-            if os.isfile(out) and os.mtime(out) >= os.mtime(src) then
+            if force_v104_liquid_glass then
+                if os.isfile(out) then
+                    os.rm(out)
+                end
+            elseif os.isfile(out) and os.mtime(out) >= os.mtime(src) then
                 goto continue
             end
 
@@ -86,8 +95,17 @@ rule("switch")
                 raise("shader filename must end with _vsh or _fsh: " .. base)
             end
 
-            cprint("${color.build.target}compiling shader${clear} %s", path.filename(src))
+            if force_v104_liquid_glass then
+                cprint("${bright cyan}compiling Liquid Glass V10.4${clear} %s", path.filename(src))
+            else
+                cprint("${color.build.target}compiling shader${clear} %s", path.filename(src))
+            end
+
             os.vrunv(uam, {"-s", stage, "-o", out, src})
+
+            if force_v104_liquid_glass and not os.isfile(out) then
+                raise("Liquid Glass V10.4 shader compilation did not produce: " .. out)
+            end
 
             ::continue::
         end

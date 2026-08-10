@@ -11,7 +11,7 @@ constexpr int kVisibleIcons = 5;
 constexpr float kSelectedIconSize = 310.f;
 constexpr float kNeighborIconSize = 230.f;
 constexpr float kCarouselGap = 12.f;
-constexpr float kCarouselBaselineY = 500.f;
+constexpr float kCarouselBaselineY = 512.f;
 
 float iconSizeForDistance(float distance) {
     distance = std::abs(distance);

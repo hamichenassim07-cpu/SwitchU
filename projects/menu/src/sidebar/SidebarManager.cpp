@@ -29,7 +29,7 @@ void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
     // V10: keep all six system actions wired internally, but expose only the
     // two quiet corner controls requested by the HOME design: Settings on the
     // left and Controllers on the right. No expanding shelf remains.
-    constexpr float btnSize = 58.f;
+    constexpr float btnSize = 66.f;
     constexpr float gap = 14.f;
     constexpr float startY = 624.f;
 
@@ -139,9 +139,9 @@ void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
 
     // V10 fixed corner layout. The four legacy actions stay alive in the
     // manager, but are deliberately hidden from the HOME until a later design.
-    constexpr float cornerY = 638.f;
-    constexpr float leftAnchorX = 34.f;
-    constexpr float rightAnchorX = 1280.f - 34.f - btnSize;
+    constexpr float cornerY = 632.f;
+    constexpr float leftAnchorX = 28.f;
+    constexpr float rightAnchorX = 1280.f - 28.f - btnSize;
 
     AppletButton* album = m_leftButtons[0].get();
     AppletButton* mii = m_leftButtons[1].get();

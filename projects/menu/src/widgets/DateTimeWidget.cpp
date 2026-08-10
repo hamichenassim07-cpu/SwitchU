@@ -13,14 +13,14 @@ constexpr float kDateScale = 1.12f;
 constexpr float kLineGap = 5.f;
 constexpr float kTabAnimSpeed = 9.0f;
 
-constexpr float kNavX = 455.f;
+constexpr float kNavX = 440.f;
 constexpr float kNavY = 18.f;
-constexpr float kNavW = 370.f;
-constexpr float kNavH = 48.f;
-constexpr float kNavInset = 6.f;
-constexpr float kTabGap = 4.f;
+constexpr float kNavW = 400.f;
+constexpr float kNavH = 54.f;
+constexpr float kNavInset = 7.f;
+constexpr float kTabGap = 6.f;
 constexpr float kTabW = (kNavW - kNavInset * 2.f - kTabGap) * 0.5f;
-constexpr float kTabH = 36.f;
+constexpr float kTabH = 40.f;
 
 float clamp01(float value) {
     return std::clamp(value, 0.f, 1.f);
@@ -49,7 +49,7 @@ DateTimeWidget::DateTimeWidget() {
 
 void DateTimeWidget::onRender(nxui::Renderer& ren) {
     const nxui::LiquidGlassSettings saved = ren.liquidGlassSettings();
-    switchu::homeui::applyLiquidGlassV102(ren);
+    switchu::homeui::applyLiquidGlassV105(ren);
     nxui::GlassWidget::onRender(ren);
     ren.liquidGlassSettings() = saved;
 }
@@ -247,31 +247,35 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         kTabH
     };
 
-    // V10.3 Option C: assertive refractive/frosted glass. Reuse the capture already made
-    // by the clock GlassWidget when possible, avoiding a second full-screen
-    // backdrop copy in the same frame.
+    // V10.4 C2: the whole category switch remains real refractive glass.
+    // The active side adds a milky-white lens on top, so the current category
+    // stays unmistakable even when the backdrop is bright or very colourful.
     ren.captureToOffscreen(true);
     ren.drawLiquidGlass(
         0, navRect, 24.f,
-        nxui::Color(0.70f, 0.84f, 0.98f, 0.60f),
-        0.96f * m_opacity, 0.f
+        nxui::Color(0.70f, 0.82f, 0.98f, 0.46f),
+        0.98f * m_opacity, 0.f
     );
     ren.drawRoundedRectOutline(
         navRect,
-        nxui::Color(0.96f, 0.99f, 1.00f, 0.44f * m_opacity),
+        nxui::Color(0.98f, 1.00f, 1.00f, 0.38f * m_opacity),
         24.f, 1.f
     );
 
-    // The active category is a brighter internal lens, not a focus cursor.
     ren.drawLiquidGlass(
         0, activeRect, 18.f,
-        nxui::Color(0.82f, 0.92f, 1.00f, 0.82f),
-        0.92f * m_opacity, 0.f
+        nxui::Color(1.00f, 1.00f, 1.00f, 0.96f),
+        0.98f * m_opacity, 0.f
+    );
+    ren.drawRoundedRect(
+        activeRect.shrunk(1.4f),
+        nxui::Color(1.00f, 1.00f, 1.00f, 0.62f * m_opacity),
+        16.8f
     );
     ren.drawRoundedRectOutline(
         activeRect,
-        nxui::Color(1.f, 1.f, 1.f, 0.58f * m_opacity),
-        18.f, 1.f
+        nxui::Color(1.f, 1.f, 1.f, 0.92f * m_opacity),
+        18.f, 1.2f
     );
 
     auto& i18n = nxui::I18n::instance();
@@ -289,8 +293,8 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float gamesActive = 1.f - slide;
     const float appsActive = slide;
 
-    const nxui::Color inactive(0.94f, 0.98f, 0.99f, 0.88f * m_opacity);
-    const nxui::Color active(1.00f, 1.00f, 1.00f, 1.00f * m_opacity);
+    const nxui::Color inactive(0.985f, 0.99f, 1.00f, 0.98f * m_opacity);
+    const nxui::Color active(0.045f, 0.052f, 0.065f, 0.98f * m_opacity);
 
     auto mixColor = [](const nxui::Color& a,
                        const nxui::Color& b,
@@ -304,13 +308,15 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         );
     };
 
-    const nxui::Color tabShadow(0.0f, 0.0f, 0.0f, 0.44f * m_opacity);
+    const nxui::Color darkShadow(0.0f, 0.0f, 0.0f, 0.38f * m_opacity);
+    const nxui::Color lightShadow(1.0f, 1.0f, 1.0f, 0.18f * m_opacity);
     const nxui::Color gamesColor = mixColor(inactive, active, gamesActive);
+    const nxui::Color gamesShadow = mixColor(darkShadow, lightShadow, gamesActive);
     ren.drawText(
         games,
         {gamesCenterX - gamesSz.x * 0.5f + 1.f, textY + 1.3f},
         dateFont,
-        tabShadow,
+        gamesShadow,
         1.f
     );
     ren.drawText(
@@ -324,11 +330,12 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float appsTextY =
         kNavY + (kNavH - appsSz.y) * 0.5f;
     const nxui::Color appsColor = mixColor(inactive, active, appsActive);
+    const nxui::Color appsShadow = mixColor(darkShadow, lightShadow, appsActive);
     ren.drawText(
         apps,
         {appsCenterX - appsSz.x * 0.5f + 1.f, appsTextY + 1.3f},
         dateFont,
-        tabShadow,
+        appsShadow,
         1.f
     );
     ren.drawText(

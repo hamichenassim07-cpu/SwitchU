@@ -514,9 +514,9 @@ void decodePreviewOnWorker(const std::shared_ptr<DecodedPreview>& out) {
     if (!out || out->titleId == 0)
         return;
 
-    // V10.3: the ambient glow follows the selected HOME icon/cover, never the
-    // optional static/video background. Do this before looking for media so
-    // titles without a custom background still get the right atmosphere.
+        // V10.5 hybrid source: if a custom background exists, the ambient glow
+    // should follow that overall mood; otherwise it falls back to the selected
+    // icon/cover so titles without media still get a meaningful atmosphere.
     extractAmbientFromSelectedIcon(
         out->titleId,
         out->glowPrimary,
@@ -562,7 +562,15 @@ void decodePreviewOnWorker(const std::shared_ptr<DecodedPreview>& out) {
     out->width = dw;
     out->height = dh;
     out->decoded = !out->rgba.empty();
-    // Intentionally do not derive glow colours from this background.
+
+    if (out->decoded && !out->rgba.empty()) {
+        AmbientSwatch bgPrimary = defaultAmbientA();
+        AmbientSwatch bgSecondary = defaultAmbientB();
+        extractAmbientSwatches(out->rgba, out->width, out->height,
+                               bgPrimary, bgSecondary);
+        out->glowPrimary = mixAmbient(out->glowPrimary, bgPrimary, 0.78f);
+        out->glowSecondary = mixAmbient(out->glowSecondary, bgSecondary, 0.78f);
+    }
 }
 
 #ifdef SWITCHU_V81_FFMPEG
@@ -2298,14 +2306,19 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         glowSecondary = r.nextGlowSecondary;
     }
 
+    const float glowTime = std::chrono::duration<float>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const float slowDriftX = std::sin(glowTime * 0.18f) * 16.f;
+    const float slowDriftY = std::cos(glowTime * 0.15f) * 9.f;
+
     // A small coloured wash binds the background to the extracted artwork
     // palette before the larger fog lights are drawn.
     ren.drawGradientRect(
         area,
         nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                    0.016f * baseAlpha),
+                    0.022f * baseAlpha),
         nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                    0.024f * baseAlpha)
+                    0.032f * baseAlpha)
     );
 
     // V10.3: TRUE GPU glow. The V10.1 circles were visible geometry with low
@@ -2330,19 +2343,27 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
                            nxui::Color(c.r, c.g, c.b, strength * 0.60f), 44);
         };
 
-        emitLightMass(area.x + area.width * 0.36f,
-                      area.y + area.height * 0.47f,
-                      glowPrimary, 0.28f * baseAlpha, 1.18f);
-        emitLightMass(area.x + area.width * 0.66f,
-                      area.y + area.height * 0.45f,
-                      glowSecondary, 0.24f * baseAlpha, 1.10f);
+        emitLightMass(area.x + area.width * 0.35f + slowDriftX,
+                      area.y + area.height * 0.47f + slowDriftY,
+                      glowPrimary, 0.34f * baseAlpha, 1.22f);
+        emitLightMass(area.x + area.width * 0.67f - slowDriftX * 0.65f,
+                      area.y + area.height * 0.44f - slowDriftY * 0.55f,
+                      glowSecondary, 0.30f * baseAlpha, 1.14f);
+
+        // Quiet anthracite anchor glows behind the lower corner controls.
+        emitLightMass(area.x + area.width * 0.10f,
+                      area.y + area.height * 0.86f,
+                      {0.30f, 0.32f, 0.36f}, 0.11f * baseAlpha, 0.92f);
+        emitLightMass(area.x + area.width * 0.90f,
+                      area.y + area.height * 0.86f,
+                      {0.30f, 0.32f, 0.36f}, 0.11f * baseAlpha, 0.92f);
 
         endHomeGlowTargetV102(ren);
         ren.applyBlur(4.35f, 2);
         ren.drawOffscreen(
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.52f * baseAlpha)
+            nxui::Color::white().withAlpha(0.62f * baseAlpha)
         );
         realGlow = true;
     }
@@ -2355,10 +2376,21 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             {area.x, area.y + area.height * 0.24f,
              area.width, area.height * 0.50f},
             nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                        0.020f * baseAlpha),
+                        0.028f * baseAlpha),
             nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                        0.030f * baseAlpha)
+                        0.040f * baseAlpha)
         );
+        ren.drawGradientRect(
+            {area.x, area.y + area.height * 0.76f, area.width * 0.18f, area.height * 0.18f},
+            nxui::Color(0.20f, 0.21f, 0.24f, 0.045f * baseAlpha),
+            nxui::Color(0.20f, 0.21f, 0.24f, 0.0f)
+        );
+        ren.drawGradientRect(
+            {area.right() - area.width * 0.18f, area.y + area.height * 0.76f, area.width * 0.18f, area.height * 0.18f},
+            nxui::Color(0.20f, 0.21f, 0.24f, 0.0f),
+            nxui::Color(0.20f, 0.21f, 0.24f, 0.045f * baseAlpha)
+        );
+        
     }
 
     // The lower information zone is anthracite rather than black and blends

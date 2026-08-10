@@ -6,15 +6,15 @@
 
 namespace {
 constexpr float kV9TitleCenterX = 640.f;
-constexpr float kV9TitleTopY = 522.f;
+constexpr float kV9TitleTopY = 536.f;
 constexpr float kV9TitleScale = 1.42f;
 constexpr float kV9TitleMaxWidth = 900.f;
-constexpr float kV102SeparatorWidth = 264.f;
+constexpr float kV102SeparatorWidth = 282.f;
 constexpr float kV102SeparatorHeight = 2.2f;
-constexpr float kV102TitleToSeparatorGap = 18.f;
-constexpr float kV102SeparatorToActionsGap = 21.f;
-constexpr float kV102ActionLabelScale = 0.79f;
-constexpr float kV102ActionGlyphScale = 0.93f;
+constexpr float kV102TitleToSeparatorGap = 21.f;
+constexpr float kV102SeparatorToActionsGap = 24.f;
+constexpr float kV102ActionLabelScale = 0.83f;
+constexpr float kV102ActionGlyphScale = 0.97f;
 constexpr float kV102ActionGap = 8.f;
 constexpr float kV102PairGap = 42.f;
 
@@ -203,7 +203,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
         const float separatorX = cr.x + (cr.width - kV102SeparatorWidth) * 0.5f;
         ren.drawRoundedRect(
             {separatorX, separatorY, kV102SeparatorWidth, kV102SeparatorHeight},
-            nxui::Color(0.94f, 0.97f, 1.00f, 0.30f * m_opacity * reveal),
+            nxui::Color(0.94f, 0.97f, 1.00f, 0.22f * m_opacity * reveal),
             1.1f
         );
 

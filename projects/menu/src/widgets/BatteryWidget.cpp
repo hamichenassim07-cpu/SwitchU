@@ -33,7 +33,7 @@ BatteryWidget::BatteryWidget() {
 
 void BatteryWidget::onRender(nxui::Renderer& ren) {
     const nxui::LiquidGlassSettings saved = ren.liquidGlassSettings();
-    switchu::homeui::applyLiquidGlassV102(ren);
+    switchu::homeui::applyLiquidGlassV105(ren);
     nxui::GlassWidget::onRender(ren);
     ren.liquidGlassSettings() = saved;
 }

@@ -1018,7 +1018,7 @@ void WiiUMenuApp::wireFocusCallback() {
     for (auto& avatar : m_userAvatarButtons) {
         if (avatar) {
             avatar->setNicknameFont(&m_fontSmall);
-            avatar->setShowFocusedNickname(true);
+            avatar->setShowFocusedNickname(false);
         }
     }
 
@@ -1256,9 +1256,10 @@ void WiiUMenuApp::wireFocusCallback() {
                 return;
             }
 
-            // V10.3: only carousel entries own the large central title.
-            // Paramètres and Manettes stay icon-only. Profile renders its
-            // nickname locally below the avatar.
+            // V10.5: only carousel entries own the large central title.
+            // Paramètres and Manettes stay icon-only. Profile goes back to the
+            // original Switch U behaviour: its nickname is shown by the shared
+            // title pill instead of being rendered locally below the avatar.
             for (auto& btn : m_sidebar.leftButtons()) {
                 if (btn.get() == cur) {
                     m_titlePill->hideAnimated();
@@ -1275,7 +1276,9 @@ void WiiUMenuApp::wireFocusCallback() {
 
             for (auto& avatar : m_userAvatarButtons) {
                 if (avatar.get() == cur) {
-                    m_titlePill->hideAnimated();
+                    m_titlePill->setGameActionsVisible(false);
+                    m_titlePill->setText(avatar->nickname());
+                    m_titlePill->setVisible(true);
                     return;
                 }
             }
