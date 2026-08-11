@@ -2284,14 +2284,14 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
     // V10.3 visual integration: keep the reference dark without crushing the media. V10.3B softens the veil after user feedback.
     // Artwork/video remain readable while the lower anthracite zone still anchors the UI.
-    const nxui::Color lowerBase(0.095f, 0.098f, 0.110f, 1.f);
-    const float fadeStartY = area.y + area.height * 0.46f;
-    const float solidStartY = area.y + area.height * 0.77f;
+    const nxui::Color lowerBase(0.105f, 0.108f, 0.120f, 1.f);
+    const float fadeStartY = area.y + area.height * 0.50f;
+    const float solidStartY = area.y + area.height * 0.80f;
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
     const float mediaFactor = std::clamp(previewVisualAlpha, 0.f, 1.f);
-    const float veilTop = (0.006f + 0.016f * mediaFactor) * baseAlpha;
-    const float veilBottom = (0.018f + 0.030f * mediaFactor) * baseAlpha;
+    const float veilTop = (0.003f + 0.008f * mediaFactor) * baseAlpha;
+    const float veilBottom = (0.010f + 0.015f * mediaFactor) * baseAlpha;
 
     // This veil is always present. With a still/video it becomes strong enough
     // to match the dark reference; without media it simply calms the theme.
@@ -2388,21 +2388,20 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         {area.x, fadeStartY, area.width, solidStartY - fadeStartY},
         lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(0.90f * baseAlpha)
+        lowerBase.withAlpha(0.78f * baseAlpha)
     );
 
     ren.drawRect(
         {area.x, solidStartY,
          area.width, area.y + area.height - solidStartY},
-        lowerBase.withAlpha(0.95f * baseAlpha)
+        lowerBase.withAlpha(0.88f * baseAlpha)
     );
 
-    // V10.7: only the currently focused lower control gets an anchor light.
-    // The emitter starts OUTSIDE the frame so the light appears to come from
-    // the physical bottom-left / bottom-right corner and spill inward.
-    const int cornerSide = g_cornerControlFocus.load(std::memory_order_relaxed);
+    // V10.8: quiet anchor lights remain part of the scene at all times.
+    // They are intentionally a touch weaker than V10.7 and originate from
+    // outside the bottom corners instead of sitting directly behind buttons.
 #ifdef NXUI_BACKEND_DEKO3D
-    if (cornerSide != 0 && baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
+    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
         constexpr float hs = 0.5f;
         auto emitCornerSpill = [&](bool right) {
             const float dir = right ? -1.f : 1.f;
@@ -2412,29 +2411,27 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             const AmbientSwatch greyB{0.27f, 0.29f, 0.34f};
 
             ren.drawCircle({edgeX * hs, edgeY * hs}, 178.f * hs,
-                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.42f * baseAlpha), 56);
+                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.30f * baseAlpha), 56);
             ren.drawCircle({(edgeX + dir * 78.f) * hs, (edgeY - 34.f) * hs}, 142.f * hs,
-                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.28f * baseAlpha), 52);
+                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.20f * baseAlpha), 52);
             ren.drawCircle({(edgeX + dir * 160.f) * hs, (edgeY - 72.f) * hs}, 112.f * hs,
-                           nxui::Color(greyB.r, greyB.g, greyB.b, 0.18f * baseAlpha), 48);
+                           nxui::Color(greyB.r, greyB.g, greyB.b, 0.13f * baseAlpha), 48);
         };
-        emitCornerSpill(cornerSide > 0);
+        emitCornerSpill(false);
+        emitCornerSpill(true);
         endHomeGlowTargetV102(ren);
         ren.applyBlur(5.1f, 2);
         ren.drawOffscreen(
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.72f * baseAlpha)
+            nxui::Color::white().withAlpha(0.54f * baseAlpha)
         );
     }
 #else
-    if (cornerSide < 0) {
-        ren.drawCircle({area.x - 36.f, (area.y + area.height) + 28.f},
-                       190.f, nxui::Color(0.40f, 0.42f, 0.48f, 0.15f * baseAlpha), 56);
-    } else if (cornerSide > 0) {
-        ren.drawCircle({area.right() + 36.f, (area.y + area.height) + 28.f},
-                       190.f, nxui::Color(0.40f, 0.42f, 0.48f, 0.15f * baseAlpha), 56);
-    }
+    ren.drawCircle({area.x - 36.f, (area.y + area.height) + 28.f},
+                   190.f, nxui::Color(0.40f, 0.42f, 0.48f, 0.10f * baseAlpha), 56);
+    ren.drawCircle({area.right() + 36.f, (area.y + area.height) + 28.f},
+                   190.f, nxui::Color(0.40f, 0.42f, 0.48f, 0.10f * baseAlpha), 56);
 #endif
 
     ren.flush();

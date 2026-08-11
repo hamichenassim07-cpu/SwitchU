@@ -60,6 +60,14 @@ nxui::Rect DateTimeWidget::homeTabsRect() const {
     return {kNavX, kNavY, kNavW, kNavH};
 }
 
+void DateTimeWidget::setHomeApplicationsActive(bool active) {
+    if (m_homeApplicationsActive == active)
+        return;
+
+    m_homeApplicationsActive = active;
+    m_homeTabPop = 1.f;
+}
+
 nxui::Rect DateTimeWidget::activeHomeTabRect() const {
     const float gamesX = kNavX + kNavInset;
     const float appsX = gamesX + kTabW + kTabGap;
@@ -88,6 +96,10 @@ void DateTimeWidget::onContentUpdate(float dt) {
     m_homeTabSlide += (target - m_homeTabSlide) * amount;
     if (std::abs(target - m_homeTabSlide) < 0.001f)
         m_homeTabSlide = target;
+
+    m_homeTabPop += (0.f - m_homeTabPop) * std::min(1.f, std::max(0.f, dt) * 9.5f);
+    if (std::abs(m_homeTabPop) < 0.001f)
+        m_homeTabPop = 0.f;
 
     m_timer += dt;
 
@@ -213,12 +225,22 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float gamesX = kNavX + kNavInset;
     const float appsX = gamesX + kTabW + kTabGap;
     const float slide = smooth01(m_homeTabSlide);
-    const nxui::Rect activeRect {
+    nxui::Rect activeRect {
         gamesX + (appsX - gamesX) * slide,
         kNavY + kNavInset,
         kTabW,
         kTabH
     };
+
+    // V10.8: bubble-like tab response. The active lens swells softly and
+    // relaxes back after each L/R category switch, instead of only sliding.
+    const float pop = clamp01(m_homeTabPop);
+    const float expandX = 8.f * pop;
+    const float expandY = 3.5f * pop;
+    activeRect.x -= expandX * 0.5f;
+    activeRect.y -= expandY * 0.5f;
+    activeRect.width += expandX;
+    activeRect.height += expandY;
 
     // V10.4 C2: the whole category switch remains real refractive glass.
     // The active side adds a milky-white lens on top, so the current category

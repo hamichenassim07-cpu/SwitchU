@@ -106,11 +106,11 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     // left of the battery widget without a background capsule.
     const nxui::Color wifiOn = m_textColor.withAlpha(0.95f * op);
     const nxui::Color wifiOff = m_textColor.withAlpha(0.18f * op);
-    const float wifiX = cr.x - 45.f;
+    const float wifiX = cr.x - 50.f;
     const float wifiY = cr.y + cr.height * 0.5f + 8.f;
 
     auto drawWifiArc = [&](float radius, bool active, float thickness) {
-        constexpr int segments = 18;
+        constexpr int segments = 40;
         constexpr float startA = 3.78f;
         constexpr float endA = 5.64f;
         nxui::Vec2 prev{
@@ -133,11 +133,11 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const bool bar1 = m_wifiConnected && m_wifiStrength >= 1u;
     const bool bar2 = m_wifiConnected && m_wifiStrength >= 2u;
     const bool bar3 = m_wifiConnected && m_wifiStrength >= 3u;
-    ren.drawCircle({wifiX, wifiY - 1.f}, 3.2f,
+    ren.drawCircle({wifiX, wifiY - 1.f}, 3.5f,
                    m_wifiConnected ? wifiOn : wifiOff, 14);
-    drawWifiArc(10.0f, bar1, 2.6f);
-    drawWifiArc(17.0f, bar2, 2.6f);
-    drawWifiArc(24.0f, bar3, 2.6f);
+    drawWifiArc(11.0f, bar1, 2.8f);
+    drawWifiArc(18.5f, bar2, 2.8f);
+    drawWifiArc(26.0f, bar3, 2.8f);
 
     if (!m_wifiRadioEnabled) {
         ren.drawLine({wifiX - 16.f, wifiY - 23.f},
@@ -174,12 +174,12 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
         // The charge state is now carried entirely by the fill. It stays
         // visible while its green luminosity pulses, so the real level can
         // always be read.
-        const float blink = 0.48f + 0.52f *
-            (0.5f + 0.5f * std::sin(m_chargeAnim * 5.3f));
+        const float blink = 0.42f + 0.58f *
+            (0.5f + 0.5f * std::sin(m_chargeAnim * 5.8f));
         nxui::Color fillColor;
         if (m_charging) {
             fillColor = nxui::Color(0.22f, 1.00f, 0.48f,
-                                    (0.52f + 0.46f * blink) * op);
+                                    (0.46f + 0.52f * blink) * op);
         } else if (level <= 0.20f) {
             fillColor = nxui::Color(1.f, 0.26f, 0.24f, 0.96f * op);
         } else {
@@ -191,7 +191,7 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
         if (m_charging) {
             ren.drawRoundedRect(fill.expanded(1.0f),
                                 nxui::Color(0.22f, 1.f, 0.48f,
-                                            (0.025f + 0.055f * blink) * op),
+                                            (0.030f + 0.080f * blink) * op),
                                 std::min(4.8f, fill.width * 0.5f));
         }
     }

@@ -2142,10 +2142,29 @@ void WiiUMenuApp::updateCursor() {
         // No purple/blue SelectionCursor is drawn over carousel entries.
         m_cursor->setVisible(false);
         return;
-    } else {
-        m_cursor->setGradientEnabled(false);
-        m_cursor->moveTo(fr.expanded(4.f));
     }
+
+    m_cursor->setGradientEnabled(false);
+
+    const bool isProfile = std::find_if(
+        m_userAvatarButtons.begin(), m_userAvatarButtons.end(),
+        [cur](const auto& avatar) { return avatar.get() == cur; }
+    ) != m_userAvatarButtons.end();
+
+    bool isCornerControl = false;
+    for (auto& btn : m_sidebar.leftButtons())
+        isCornerControl = isCornerControl || (btn.get() == cur);
+    for (auto& btn : m_sidebar.rightButtons())
+        isCornerControl = isCornerControl || (btn.get() == cur);
+
+    const float radius = isProfile
+        ? std::max(fr.width, fr.height) * 0.5f
+        : 18.f;
+
+    if (isProfile || isCornerControl)
+        m_cursor->moveTo(fr.expanded(4.f), radius, 0.01f);
+    else
+        m_cursor->moveTo(fr.expanded(4.f), radius, 0.10f);
 
     m_cursor->setVisible(true);
 }

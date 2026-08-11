@@ -16,7 +16,7 @@ public:
     // V10 HOME category selector. The widget keeps rendering the clock in its
     // historical top-left box while also owning the centered Jeux/Applications
     // capsule used as a focus target by WiiUMenuAppInteraction.cpp.
-    void setHomeApplicationsActive(bool active) { m_homeApplicationsActive = active; }
+    void setHomeApplicationsActive(bool active);
     bool homeApplicationsActive() const { return m_homeApplicationsActive; }
     void setHomeTabsFocused(bool focused) { m_homeTabsFocused = focused; }
     nxui::Rect activeHomeTabRect() const;
@@ -41,4 +41,5 @@ private:
     bool m_homeApplicationsActive = false;
     bool m_homeTabsFocused = false;
     float m_homeTabSlide = 0.f;
+    float m_homeTabPop = 0.f;
 };

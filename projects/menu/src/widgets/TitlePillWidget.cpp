@@ -9,7 +9,7 @@ constexpr float kV9TitleCenterX = 640.f;
 constexpr float kV9TitleTopY = 536.f;
 constexpr float kV9TitleScale = 1.42f;
 constexpr float kV9TitleMaxWidth = 900.f;
-constexpr float kV102SeparatorWidth = 340.f;
+constexpr float kV102SeparatorWidth = 364.f;
 constexpr float kV102SeparatorHeight = 2.2f;
 constexpr float kV102TitleToSeparatorGap = 21.f;
 constexpr float kV102SeparatorToActionsGap = 24.f;
@@ -339,7 +339,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
         const float firstW = aW + kV102ActionGap + launchW;
         const float secondW = yW + kV102ActionGap + moveW;
         const float rowW = firstW + kV102PairGap + secondW;
-        float x = cr.x + (cr.width - rowW) * 0.5f;
+        float x = m_anchorCenterX - rowW * 0.5f;
         const float rowY = separatorY + kV102SeparatorHeight +
                            kV102SeparatorToActionsGap;
 
