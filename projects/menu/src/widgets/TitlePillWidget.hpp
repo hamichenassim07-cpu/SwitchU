@@ -17,6 +17,11 @@ public:
     void setText(const std::string& text, float screenWidth = 1280.f);
     void setGameActionsVisible(bool visible);
     bool gameActionsVisible() const { return m_showGameActions; }
+
+    // V10.6 profile mode. The implementation below reuses the exact
+    // TitlePillWidget behaviour from Switch U master for profile focus.
+    void setProfileOriginalMode(bool enabled);
+    bool profileOriginalMode() const { return m_profileOriginalMode; }
     void hideAnimated(float screenWidth = 1280.f);
 
 protected:
@@ -38,4 +43,5 @@ private:
     bool m_layoutInitialized = false;
     bool m_hideOnCollapse = false;
     bool m_showGameActions = false;
+    bool m_profileOriginalMode = false;
 };

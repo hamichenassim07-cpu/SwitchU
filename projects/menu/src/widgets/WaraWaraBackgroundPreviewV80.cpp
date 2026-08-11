@@ -2308,8 +2308,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
     const float glowTime = std::chrono::duration<float>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    const float slowDriftX = std::sin(glowTime * 0.18f) * 16.f;
-    const float slowDriftY = std::cos(glowTime * 0.15f) * 9.f;
+    const float slowDriftX = std::sin(glowTime * 0.26f) * 38.f;
+    const float slowDriftY = std::cos(glowTime * 0.21f) * 20.f;
+    const float glowBreath = 0.92f + 0.08f * (0.5f + 0.5f * std::sin(glowTime * 0.34f));
 
     // A small coloured wash binds the background to the extracted artwork
     // palette before the larger fog lights are drawn.
@@ -2345,18 +2346,11 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
         emitLightMass(area.x + area.width * 0.35f + slowDriftX,
                       area.y + area.height * 0.47f + slowDriftY,
-                      glowPrimary, 0.34f * baseAlpha, 1.22f);
+                      glowPrimary, 0.37f * glowBreath * baseAlpha, 1.24f);
         emitLightMass(area.x + area.width * 0.67f - slowDriftX * 0.65f,
                       area.y + area.height * 0.44f - slowDriftY * 0.55f,
-                      glowSecondary, 0.30f * baseAlpha, 1.14f);
+                      glowSecondary, 0.33f * glowBreath * baseAlpha, 1.17f);
 
-        // Quiet anthracite anchor glows behind the lower corner controls.
-        emitLightMass(area.x + area.width * 0.10f,
-                      area.y + area.height * 0.86f,
-                      {0.30f, 0.32f, 0.36f}, 0.11f * baseAlpha, 0.92f);
-        emitLightMass(area.x + area.width * 0.90f,
-                      area.y + area.height * 0.86f,
-                      {0.30f, 0.32f, 0.36f}, 0.11f * baseAlpha, 0.92f);
 
         endHomeGlowTargetV102(ren);
         ren.applyBlur(4.35f, 2);
@@ -2380,16 +2374,6 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
                         0.040f * baseAlpha)
         );
-        ren.drawGradientRect(
-            {area.x, area.y + area.height * 0.76f, area.width * 0.18f, area.height * 0.18f},
-            nxui::Color(0.20f, 0.21f, 0.24f, 0.045f * baseAlpha),
-            nxui::Color(0.20f, 0.21f, 0.24f, 0.0f)
-        );
-        ren.drawGradientRect(
-            {area.right() - area.width * 0.18f, area.y + area.height * 0.76f, area.width * 0.18f, area.height * 0.18f},
-            nxui::Color(0.20f, 0.21f, 0.24f, 0.0f),
-            nxui::Color(0.20f, 0.21f, 0.24f, 0.045f * baseAlpha)
-        );
         
     }
 
@@ -2406,6 +2390,34 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
          area.width, area.y + area.height - solidStartY},
         lowerBase.withAlpha(baseAlpha)
     );
+
+    // V10.6: corner glows are intentionally rendered AFTER the anthracite
+    // lower block. V10.5 drew them before it, so the dark layer swallowed them.
+#ifdef NXUI_BACKEND_DEKO3D
+    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
+        constexpr float hs = 0.5f;
+        auto emitCornerGlow = [&](float cx, float cy) {
+            const nxui::Color core(0.42f, 0.44f, 0.49f, 0.34f * baseAlpha);
+            const nxui::Color soft(0.23f, 0.24f, 0.28f, 0.22f * baseAlpha);
+            ren.drawCircle({cx * hs, cy * hs}, 90.f * hs, core, 48);
+            ren.drawCircle({cx * hs, cy * hs}, 132.f * hs, soft, 48);
+        };
+        emitCornerGlow(area.x + 72.f, area.y + area.height - 54.f);
+        emitCornerGlow(area.right() - 72.f, area.y + area.height - 54.f);
+        endHomeGlowTargetV102(ren);
+        ren.applyBlur(4.0f, 2);
+        ren.drawOffscreen(
+            0,
+            {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
+            nxui::Color::white().withAlpha(0.58f * baseAlpha)
+        );
+    }
+#else
+    ren.drawCircle({area.x + 72.f, area.y + area.height - 54.f},
+                   92.f, nxui::Color(0.34f, 0.35f, 0.39f, 0.11f * baseAlpha), 48);
+    ren.drawCircle({area.right() - 72.f, area.y + area.height - 54.f},
+                   92.f, nxui::Color(0.34f, 0.35f, 0.39f, 0.11f * baseAlpha), 48);
+#endif
 
     ren.flush();
 }

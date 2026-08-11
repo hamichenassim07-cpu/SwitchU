@@ -24,18 +24,24 @@ BatteryWidget::BatteryWidget() {
     setBaseColor(nxui::Color(0.70f, 0.84f, 0.98f, 0.34f));
     setBorderColor(nxui::Color(0.96f, 0.99f, 1.00f, 0.50f));
     setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.22f));
-    setPanelOpacity(0.96f);
-    setLiquidGlassEnabled(true);
-    setLiquidGlassShaderEnabled(true);
-    setForceLiquidGlass(true);
+    // V10.6: battery/Wi-Fi are text/icon-only, with no Liquid Glass panel.
+    setPanelOpacity(0.f);
+    setLiquidGlassEnabled(false);
+    setLiquidGlassShaderEnabled(false);
+    setForceLiquidGlass(false);
+    setBorderWidth(0.f);
     setBlurEnabled(false);
+
+    m_nifmReady = R_SUCCEEDED(nifmInitialize(NifmServiceType_User));
+}
+
+BatteryWidget::~BatteryWidget() {
+    if (m_nifmReady)
+        nifmExit();
 }
 
 void BatteryWidget::onRender(nxui::Renderer& ren) {
-    const nxui::LiquidGlassSettings saved = ren.liquidGlassSettings();
-    switchu::homeui::applyLiquidGlassV105(ren);
     nxui::GlassWidget::onRender(ren);
-    ren.liquidGlassSettings() = saved;
 }
 
 void BatteryWidget::setBatteryStatus(uint32_t percentage,
@@ -49,6 +55,31 @@ void BatteryWidget::setBatteryStatus(uint32_t percentage,
 void BatteryWidget::onContentUpdate(float dt) {
     m_chargeAnim += dt;
     m_timer += dt;
+    m_wifiTimer += dt;
+
+    if (m_wifiTimer >= 1.f) {
+        m_wifiTimer = 0.f;
+        m_wifiRadioEnabled = false;
+        m_wifiConnected = false;
+        m_wifiStrength = 0;
+
+        if (m_nifmReady) {
+            bool wirelessEnabled = false;
+            if (R_SUCCEEDED(nifmIsWirelessCommunicationEnabled(&wirelessEnabled)))
+                m_wifiRadioEnabled = wirelessEnabled;
+
+            NifmInternetConnectionType type = NifmInternetConnectionType_WiFi;
+            NifmInternetConnectionStatus status = NifmInternetConnectionStatus_ConnectingUnknown1;
+            u32 strength = 0;
+            if (m_wifiRadioEnabled &&
+                R_SUCCEEDED(nifmGetInternetConnectionStatus(&type, &strength, &status)) &&
+                type == NifmInternetConnectionType_WiFi &&
+                status == NifmInternetConnectionStatus_Connected) {
+                m_wifiConnected = true;
+                m_wifiStrength = std::min<u32>(strength, 3u);
+            }
+        }
+    }
 
     if (m_timer < 1.f && m_level >= 0.f)
         return;
@@ -70,6 +101,49 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Rect cr = contentRect();
     const float op = opacity();
     const float level = std::clamp(m_level, 0.f, 1.f);
+
+    // Real NIFM Wi-Fi indicator. It is deliberately drawn immediately to the
+    // left of the battery widget without a background capsule.
+    const nxui::Color wifiOn = m_textColor.withAlpha(0.95f * op);
+    const nxui::Color wifiOff = m_textColor.withAlpha(0.18f * op);
+    const float wifiX = cr.x - 37.f;
+    const float wifiY = cr.y + cr.height * 0.5f + 7.f;
+
+    auto drawWifiArc = [&](float radius, bool active, float thickness) {
+        constexpr int segments = 18;
+        constexpr float startA = 3.78f;
+        constexpr float endA = 5.64f;
+        nxui::Vec2 prev{
+            wifiX + std::cos(startA) * radius,
+            wifiY + std::sin(startA) * radius
+        };
+        for (int i = 1; i <= segments; ++i) {
+            const float a = startA + (endA - startA) *
+                (static_cast<float>(i) / static_cast<float>(segments));
+            nxui::Vec2 cur{
+                wifiX + std::cos(a) * radius,
+                wifiY + std::sin(a) * radius
+            };
+            ren.drawLine(prev, cur, active ? wifiOn : wifiOff, thickness);
+            prev = cur;
+        }
+    };
+
+    // 0..3 bars returned directly by Horizon/NIFM.
+    const bool bar1 = m_wifiConnected && m_wifiStrength >= 1u;
+    const bool bar2 = m_wifiConnected && m_wifiStrength >= 2u;
+    const bool bar3 = m_wifiConnected && m_wifiStrength >= 3u;
+    ren.drawCircle({wifiX, wifiY - 1.f}, 2.5f,
+                   m_wifiConnected ? wifiOn : wifiOff, 14);
+    drawWifiArc(8.0f, bar1, 2.0f);
+    drawWifiArc(13.5f, bar2, 2.0f);
+    drawWifiArc(19.0f, bar3, 2.0f);
+
+    if (!m_wifiRadioEnabled) {
+        ren.drawLine({wifiX - 13.f, wifiY - 18.f},
+                     {wifiX + 14.f, wifiY + 2.f},
+                     m_textColor.withAlpha(0.72f * op), 2.2f);
+    }
 
     char buffer[16] = {};
     std::snprintf(buffer, sizeof(buffer), "%d%%",

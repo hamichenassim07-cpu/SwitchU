@@ -9,7 +9,7 @@ constexpr float kV9TitleCenterX = 640.f;
 constexpr float kV9TitleTopY = 536.f;
 constexpr float kV9TitleScale = 1.42f;
 constexpr float kV9TitleMaxWidth = 900.f;
-constexpr float kV102SeparatorWidth = 282.f;
+constexpr float kV102SeparatorWidth = 312.f;
 constexpr float kV102SeparatorHeight = 2.2f;
 constexpr float kV102TitleToSeparatorGap = 21.f;
 constexpr float kV102SeparatorToActionsGap = 24.f;
@@ -51,6 +51,44 @@ TitlePillWidget::TitlePillWidget() {
     setBorderWidth(0.f);
 }
 
+void TitlePillWidget::setProfileOriginalMode(bool enabled) {
+    if (m_profileOriginalMode == enabled)
+        return;
+
+    m_profileOriginalMode = enabled;
+    m_layoutInitialized = false;
+    m_hideOnCollapse = false;
+    m_textReveal.setImmediate(1.f);
+
+    if (enabled) {
+        // Exact Switch U master TitlePill material/setup path for profile focus.
+        setLiquidGlassShaderEnabled(false);
+        setLiquidGlassEnabled(true);
+        setForceLiquidGlass(true);
+        setBlurEnabled(false);
+        setBlurRadius(1.5f);
+        setBlurPasses(1);
+        setCornerRadius(24.f);
+        setBaseColor({0.28f, 0.32f, 0.38f, 0.20f});
+        setBorderColor({0.96f, 0.97f, 1.0f, 0.16f});
+        setHighlightColor({1.0f, 1.0f, 1.0f, 0.05f});
+        setBorderWidth(1.0f);
+        setPanelOpacity(1.f);
+        setPadding(9.f, 22.f, 9.f, 22.f);
+        setPosition(0.f, 630.f);
+        m_showGameActions = false;
+    } else {
+        // Return to the V10.x game-title presentation.
+        setLiquidGlassShaderEnabled(false);
+        setLiquidGlassEnabled(false);
+        setForceLiquidGlass(false);
+        setBlurEnabled(false);
+        setPanelOpacity(0.f);
+        setBorderWidth(0.f);
+        setPosition(0.f, kV9TitleTopY);
+    }
+}
+
 float TitlePillWidget::anchoredX(float width, float screenWidth) const {
     constexpr float margin = 10.f;
     const float maxX = std::max(margin, screenWidth - width - margin);
@@ -58,6 +96,13 @@ float TitlePillWidget::anchoredX(float width, float screenWidth) const {
 }
 
 void TitlePillWidget::setAnchor(float centerX, float topY, float screenWidth) {
+    if (m_profileOriginalMode) {
+        (void)centerX;
+        (void)topY;
+        (void)screenWidth;
+        return;
+    }
+
     (void)centerX;
     (void)topY;
 
@@ -74,6 +119,40 @@ void TitlePillWidget::setAnchor(float centerX, float topY, float screenWidth) {
 }
 
 void TitlePillWidget::setText(const std::string& text, float screenWidth) {
+    if (m_profileOriginalMode) {
+        // Exact logic copied from Switch U master TitlePillWidget::setText.
+        if (m_text == text && m_layoutInitialized)
+            return;
+
+        const bool wasVisible = isVisible();
+        m_hideOnCollapse = false;
+        setVisible(true);
+        m_text = text;
+        sizeToFit();
+        setCornerRadius(m_rect.height * 0.5f);
+        float targetW = m_rect.width;
+        float targetX = (screenWidth - targetW) * 0.5f;
+
+        if (!m_layoutInitialized) {
+            m_layoutInitialized = true;
+            m_animX.setImmediate(targetX);
+            m_animW.setImmediate(targetW);
+        } else {
+            if (!wasVisible) {
+                float seedW = std::min(targetW, 54.f);
+                m_animW.setImmediate(seedW);
+                m_animX.setImmediate((screenWidth - seedW) * 0.5f);
+            }
+            m_animX.set(targetX, 0.22f, nxui::Easing::outCubic);
+            m_animW.set(targetW, 0.22f, nxui::Easing::outCubic);
+            m_textReveal.setImmediate(0.32f);
+            m_textReveal.set(1.f, 0.18f, nxui::Easing::outCubic);
+        }
+
+        m_rect.x = m_animX.value();
+        m_rect.width = m_animW.value();
+        return;
+    }
     const bool textChanged = (m_text != text);
     const bool wasVisible = isVisible();
 
@@ -120,6 +199,26 @@ void TitlePillWidget::setGameActionsVisible(bool visible) {
 }
 
 void TitlePillWidget::hideAnimated(float screenWidth) {
+    if (m_profileOriginalMode) {
+        // Exact logic copied from Switch U master TitlePillWidget::hideAnimated.
+        if (!isVisible() && !m_hideOnCollapse)
+            return;
+
+        if (!m_layoutInitialized) {
+            setVisible(false);
+            return;
+        }
+
+        const float seedW = std::max(0.f, m_animW.value());
+        m_animW.set(seedW, 0.01f, nxui::Easing::outCubic);
+        m_animX.set((screenWidth - seedW) * 0.5f, 0.01f, nxui::Easing::outCubic);
+        m_animW.set(0.f, 0.18f, nxui::Easing::outCubic);
+        m_animX.set(screenWidth * 0.5f, 0.18f, nxui::Easing::outCubic);
+        m_textReveal.set(0.f, 0.12f, nxui::Easing::outCubic);
+        m_hideOnCollapse = true;
+        setVisible(true);
+        return;
+    }
     if (!isVisible() && !m_hideOnCollapse)
         return;
 
@@ -154,6 +253,21 @@ void TitlePillWidget::onContentUpdate(float dt) {
 }
 
 void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
+    if (m_profileOriginalMode) {
+        // Exact rendering path from Switch U master TitlePillWidget.
+        if (!m_font || m_text.empty()) return;
+
+        nxui::Rect cr = contentRect();
+        nxui::Vec2 textSz = m_font->measure(m_text);
+        float tx = cr.x + (cr.width  - textSz.x) * 0.5f;
+        float ty = cr.y + (cr.height - textSz.y) * 0.5f;
+        float reveal = std::clamp(m_textReveal.value(), 0.f, 1.f);
+        ren.pushClipRect(cr);
+        ren.drawText(m_text, {tx, ty + (1.f - reveal) * 3.f}, m_font,
+                     m_textColor.withAlpha(m_opacity * reveal), 1.f);
+        ren.popClipRect();
+        return;
+    }
     if (!m_font || m_text.empty())
         return;
 
@@ -203,7 +317,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
         const float separatorX = cr.x + (cr.width - kV102SeparatorWidth) * 0.5f;
         ren.drawRoundedRect(
             {separatorX, separatorY, kV102SeparatorWidth, kV102SeparatorHeight},
-            nxui::Color(0.94f, 0.97f, 1.00f, 0.22f * m_opacity * reveal),
+            nxui::Color(0.94f, 0.97f, 1.00f, 0.22f * m_opacity),
             1.1f
         );
 
@@ -245,7 +359,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
                 glyph,
                 {x, rowY + (rowH - glyphH) * 0.5f},
                 glyphFont,
-                nxui::Color(0.98f, 1.f, 0.99f, 0.94f * m_opacity * reveal),
+                nxui::Color(0.98f, 1.f, 0.99f, 0.94f * m_opacity),
                 kV102ActionGlyphScale
             );
             ren.drawText(
@@ -253,7 +367,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
                 {x + glyphW + kV102ActionGap,
                  rowY + (rowH - labelH) * 0.5f},
                 m_font,
-                nxui::Color(0.94f, 0.96f, 0.98f, 0.82f * m_opacity * reveal),
+                nxui::Color(0.94f, 0.96f, 0.98f, 0.82f * m_opacity),
                 kV102ActionLabelScale
             );
             x += glyphW + kV102ActionGap + labelW;
@@ -268,6 +382,11 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
 }
 
 nxui::Vec2 TitlePillWidget::computeContentSize() const {
+    if (m_profileOriginalMode) {
+        // Exact Switch U master sizing path.
+        if (!m_font || m_text.empty()) return {0.f, 0.f};
+        return m_font->measure(m_text);
+    }
     if (!m_font || m_text.empty())
         return {0.f, 0.f};
 

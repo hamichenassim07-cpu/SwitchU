@@ -62,6 +62,13 @@ void IconGrid::setup(std::vector<std::shared_ptr<GlossyIcon>> icons,
                      float padX, float padY)
 {
     m_allIcons = std::move(icons);
+    // V10.6: carousel cards use the legacy frosted path, never the new C2
+    // Liquid Glass shader. This prevents circular lens clipping inside square
+    // application cards while keeping the pre-C2 glass look.
+    for (auto& icon : m_allIcons) {
+        if (icon)
+            icon->setLiquidGlassShaderEnabled(false);
+    }
     reconfigureLayout(cols, rows, cellW, cellH, padX, padY);
 }
 

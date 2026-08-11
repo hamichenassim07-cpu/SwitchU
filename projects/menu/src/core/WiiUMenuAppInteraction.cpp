@@ -701,6 +701,7 @@ void WiiUMenuApp::exitEditMode() {
     auto* cur = focusManager().current();
     if (isEditableIcon(cur)) {
         auto* icon = static_cast<GlossyIcon*>(cur);
+        m_titlePill->setProfileOriginalMode(false);
         m_titlePill->setGameActionsVisible(true);
         m_titlePill->setText(icon->title());
         m_titlePill->setVisible(true);
@@ -952,6 +953,7 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
         if (wasGameFocused && m_grid->visibleCount() > 0 &&
             gridTarget && gridTarget->tag() == "glossy_icon") {
             auto* icon = static_cast<GlossyIcon*>(gridTarget);
+            m_titlePill->setProfileOriginalMode(false);
             m_titlePill->setGameActionsVisible(true);
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
@@ -1242,26 +1244,34 @@ void WiiUMenuApp::wireFocusCallback() {
                 return;
             }
 
+            m_titlePill->setProfileOriginalMode(false);
             m_titlePill->setGameActionsVisible(true);
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
         } else if (cur) {
             if (m_editMode)
                 exitEditMode();
-            if (m_titlePill)
-                m_titlePill->setGameActionsVisible(false);
-
             if (m_clock && cur == m_clock.get()) {
+                if (m_titlePill) {
+                    m_titlePill->setProfileOriginalMode(false);
+                    m_titlePill->setGameActionsVisible(false);
+                }
                 m_titlePill->hideAnimated();
                 return;
             }
 
-            // V10.5: only carousel entries own the large central title.
+            // V10.6: the game title remains persistent for Settings/Controllers.
             // Paramètres and Manettes stay icon-only. Profile goes back to the
             // original Switch U behaviour: its nickname is shown by the shared
             // title pill instead of being rendered locally below the avatar.
             for (auto& btn : m_sidebar.leftButtons()) {
                 if (btn.get() == cur) {
+                    // V10.6: Settings keeps the last selected game's title,
+                    // separator and A/Y actions on screen.
+                    if (btn.get() == m_sidebar.settingsButton())
+                        return;
+                    m_titlePill->setProfileOriginalMode(false);
+                    m_titlePill->setGameActionsVisible(false);
                     m_titlePill->hideAnimated();
                     return;
                 }
@@ -1269,6 +1279,12 @@ void WiiUMenuApp::wireFocusCallback() {
 
             for (auto& btn : m_sidebar.rightButtons()) {
                 if (btn.get() == cur) {
+                    // The only visible right corner control is Controllers.
+                    // Preserve the game title/action strip exactly as-is.
+                    if (btn.get() == m_sidebar.rightButtons().front().get())
+                        return;
+                    m_titlePill->setProfileOriginalMode(false);
+                    m_titlePill->setGameActionsVisible(false);
                     m_titlePill->hideAnimated();
                     return;
                 }
@@ -1276,6 +1292,7 @@ void WiiUMenuApp::wireFocusCallback() {
 
             for (auto& avatar : m_userAvatarButtons) {
                 if (avatar.get() == cur) {
+                    m_titlePill->setProfileOriginalMode(true);
                     m_titlePill->setGameActionsVisible(false);
                     m_titlePill->setText(avatar->nickname());
                     m_titlePill->setVisible(true);
@@ -1657,6 +1674,7 @@ void WiiUMenuApp::wireGlobalActions() {
 
                 WaraWaraBackground::notifySelectedGame(tid);
                 if (m_titlePill) {
+                    m_titlePill->setProfileOriginalMode(false);
                     m_titlePill->setGameActionsVisible(true);
                     const int modelIndex = findTitleIndex(tid);
                     if (modelIndex >= 0)
@@ -2075,30 +2093,10 @@ void WiiUMenuApp::updateCursor() {
     nxui::Rect fr = cur->focusRect();
 
     if (cur->tag() == "glossy_icon") {
-        m_cursor->setGradientEnabled(true);
-
-        auto* icon =
-            static_cast<GlossyIcon*>(cur);
-
-        constexpr float kSelectedScale = 1.045f;
-
-        float visualExpand =
-            fr.width *
-            (kSelectedScale - 1.f) *
-            0.5f;
-
-        nxui::Rect visualRect =
-            fr.expanded(
-                visualExpand + 4.f
-            );
-
-        m_cursor->moveTo(
-            visualRect,
-            icon->cornerRadius() *
-                kSelectedScale +
-                4.f,
-            0.16f
-        );
+        // V10.6: the selected carousel card is indicated only by its scale.
+        // No purple/blue SelectionCursor is drawn over carousel entries.
+        m_cursor->setVisible(false);
+        return;
     } else {
         m_cursor->setGradientEnabled(false);
         m_cursor->moveTo(fr.expanded(4.f));

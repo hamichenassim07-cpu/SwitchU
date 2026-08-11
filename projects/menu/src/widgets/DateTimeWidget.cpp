@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <ctime>
+#include <chrono>
 #include <cstdio>
 
 namespace {
@@ -40,10 +41,13 @@ DateTimeWidget::DateTimeWidget() {
     setBaseColor(nxui::Color(0.56f, 0.66f, 0.82f, 0.22f));
     setBorderColor(nxui::Color(0.92f, 0.97f, 1.00f, 0.40f));
     setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.22f));
-    setPanelOpacity(0.90f);
-    setLiquidGlassEnabled(true);
-    setLiquidGlassShaderEnabled(true);
-    setForceLiquidGlass(true);
+    // V10.6: clock/date are text-only. Liquid Glass remains reserved for
+    // the Jeux / Applications selector rendered explicitly below.
+    setPanelOpacity(0.f);
+    setLiquidGlassEnabled(false);
+    setLiquidGlassShaderEnabled(false);
+    setForceLiquidGlass(false);
+    setBorderWidth(0.f);
     setBlurEnabled(false);
 }
 
@@ -186,29 +190,40 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Color secondary =
         m_secondaryColor.withAlpha(0.98f * m_opacity);
 
-    ren.drawText(
-        m_timeStr,
-        {timeX + 1.1f, timeY + 1.2f},
-        m_font,
-        shadow,
-        kTimeScale
-    );
+    // V10.6: use the exact V7.4.4 lockscreen rhythm: a hard 800 ms
+    // alarm-clock blink with fixed geometry so the minutes never shift.
+    const auto blinkMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+    const bool separatorVisible = ((blinkMs / 800) % 2) == 0;
 
-    ren.drawText(
-        m_timeStr,
-        {timeX, timeY},
-        m_font,
-        primary,
-        kTimeScale
-    );
+    const std::size_t colonPos = m_timeStr.find(':');
+    if (colonPos != std::string::npos) {
+        const std::string hourPart = m_timeStr.substr(0, colonPos);
+        const std::string minutePart = m_timeStr.substr(colonPos + 1);
+        const float hourW = m_font->measure(hourPart).x * kTimeScale;
+        const float colonW = m_font->measure(":").x * kTimeScale;
+        const float minuteX = timeX + hourW + colonW;
 
-    ren.drawText(
-        m_timeStr,
-        {timeX + 0.55f, timeY},
-        m_font,
-        primary.withAlpha(0.52f * m_opacity),
-        kTimeScale
-    );
+        auto drawTimePiece = [&](const std::string& text, float x) {
+            ren.drawText(text, {x + 1.1f, timeY + 1.2f}, m_font,
+                         shadow, kTimeScale);
+            ren.drawText(text, {x, timeY}, m_font,
+                         primary, kTimeScale);
+            ren.drawText(text, {x + 0.55f, timeY}, m_font,
+                         primary.withAlpha(0.52f * m_opacity), kTimeScale);
+        };
+
+        drawTimePiece(hourPart, timeX);
+        if (separatorVisible)
+            drawTimePiece(":", timeX + hourW);
+        drawTimePiece(minutePart, minuteX);
+    } else {
+        ren.drawText(m_timeStr, {timeX + 1.1f, timeY + 1.2f}, m_font,
+                     shadow, kTimeScale);
+        ren.drawText(m_timeStr, {timeX, timeY}, m_font,
+                     primary, kTimeScale);
+    }
 
     ren.drawText(
         m_dateStr,
