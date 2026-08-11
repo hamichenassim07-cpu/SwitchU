@@ -13,6 +13,8 @@
 #include "widgets/BatteryWidget.hpp"
 #include "widgets/TitlePillWidget.hpp"
 #include "widgets/ProfileTitlePillWidget.hpp"
+#include "widgets/GameActionsHudWidget.hpp"
+#include "widgets/CircularSelectionHaloWidget.hpp"
 #include "core/AudioManager.hpp"
 #include "core/AccessibilityManager.hpp"
 #include "widgets/LaunchAnimation.hpp"
@@ -205,6 +207,8 @@ private:
     std::shared_ptr<BatteryWidget>     m_battery;
     std::shared_ptr<TitlePillWidget>   m_titlePill;
     std::shared_ptr<ProfileTitlePillWidget> m_profileTitlePill;
+    std::shared_ptr<GameActionsHudWidget> m_gameActionsHud;
+    std::shared_ptr<CircularSelectionHaloWidget> m_systemSelectionHalo;
     std::shared_ptr<PageIndicator>     m_pageIndicator;
     std::shared_ptr<LockScreenView>    m_lockScreenView;
     std::shared_ptr<LaunchAnimation>   m_launchAnim;

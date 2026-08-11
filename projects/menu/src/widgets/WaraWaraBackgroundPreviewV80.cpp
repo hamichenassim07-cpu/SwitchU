@@ -2282,24 +2282,19 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     }
 #endif
 
-    // V10.3 visual integration: keep the reference dark without crushing the media. V10.3B softens the veil after user feedback.
-    // Artwork/video remain readable while the lower anthracite zone still anchors the UI.
-    const nxui::Color lowerBase(0.105f, 0.108f, 0.120f, 1.f);
-    const float fadeStartY = area.y + area.height * 0.50f;
-    const float solidStartY = area.y + area.height * 0.80f;
+    (void)previewVisualAlpha;
+
+    // V10.9: leave the artwork/video substantially brighter. The previous
+    // full-screen dark veil is removed; readability is now provided by one
+    // explicit lower block instead of globally dimming the media.
+    const nxui::Color lowerBase(0.026f, 0.028f, 0.034f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
-    const float mediaFactor = std::clamp(previewVisualAlpha, 0.f, 1.f);
-    const float veilTop = (0.003f + 0.008f * mediaFactor) * baseAlpha;
-    const float veilBottom = (0.010f + 0.015f * mediaFactor) * baseAlpha;
-
-    // This veil is always present. With a still/video it becomes strong enough
-    // to match the dark reference; without media it simply calms the theme.
-    ren.drawGradientRect(
-        area,
-        nxui::Color(0.006f, 0.008f, 0.014f, veilTop),
-        nxui::Color(0.008f, 0.010f, 0.018f, veilBottom)
-    );
+    // The 310 px hero cover ends at y=512. A boundary at about y=435 places
+    // roughly its lower quarter inside the dark zone while the upper area
+    // remains directly over the bright background. Scale the reference 720p
+    // coordinate with the current render area.
+    const float lowerStartY = area.y + area.height * (435.f / 720.f);
 
     AmbientSwatch glowPrimary = r.currentGlowPrimary;
     AmbientSwatch glowSecondary = r.currentGlowSecondary;
@@ -2383,18 +2378,11 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         
     }
 
-    // The lower information zone is anthracite rather than black and blends
-    // into the media so the title/actions feel embedded in the composition.
-    ren.drawGradientRect(
-        {area.x, fadeStartY, area.width, solidStartY - fadeStartY},
-        lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(0.78f * baseAlpha)
-    );
-
+    // V10.9: deliberate hard cut. No fade and no transition gradient.
     ren.drawRect(
-        {area.x, solidStartY,
-         area.width, area.y + area.height - solidStartY},
-        lowerBase.withAlpha(0.88f * baseAlpha)
+        {area.x, lowerStartY,
+         area.width, area.y + area.height - lowerStartY},
+        lowerBase.withAlpha(0.97f * baseAlpha)
     );
 
     // V10.8: quiet anchor lights remain part of the scene at all times.

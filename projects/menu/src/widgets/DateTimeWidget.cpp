@@ -10,7 +10,8 @@
 
 namespace {
 constexpr float kTimeScale = 1.28f;
-constexpr float kTabAnimSpeed = 9.0f;
+constexpr float kTabAnimDuration = 0.32f;
+constexpr float kPi = 3.14159265358979323846f;
 
 constexpr float kNavX = 440.f;
 constexpr float kNavY = 18.f;
@@ -25,9 +26,12 @@ float clamp01(float value) {
     return std::clamp(value, 0.f, 1.f);
 }
 
-float smooth01(float value) {
-    value = clamp01(value);
-    return value * value * (3.f - 2.f * value);
+float easeOutBackV109(float t) {
+    t = clamp01(t);
+    constexpr float c1 = 1.45f;
+    constexpr float c3 = c1 + 1.f;
+    const float x = t - 1.f;
+    return 1.f + c3 * x * x * x + c1 * x * x;
 }
 }
 
@@ -65,7 +69,10 @@ void DateTimeWidget::setHomeApplicationsActive(bool active) {
         return;
 
     m_homeApplicationsActive = active;
-    m_homeTabPop = 1.f;
+    m_homeTabAnimFrom = m_homeTabSlide;
+    m_homeTabAnimTo = active ? 1.f : 0.f;
+    m_homeTabAnimTime = 0.f;
+    m_homeTabAnimating = true;
 }
 
 nxui::Rect DateTimeWidget::activeHomeTabRect() const {
@@ -89,17 +96,26 @@ void DateTimeWidget::setUse12HourClock(bool enabled) {
 }
 
 void DateTimeWidget::onContentUpdate(float dt) {
-    // V10: animate the category capsule every frame, independently from the
-    // once-per-second clock refresh.
-    const float target = m_homeApplicationsActive ? 1.f : 0.f;
-    const float amount = std::min(1.f, std::max(0.f, dt) * kTabAnimSpeed);
-    m_homeTabSlide += (target - m_homeTabSlide) * amount;
-    if (std::abs(target - m_homeTabSlide) < 0.001f)
-        m_homeTabSlide = target;
+    // V10.9: visible elastic category transition. Position uses an out-back
+    // curve with a real overshoot, while the lens itself briefly swells like a
+    // soft bubble. Rapid L/R retargets from the current visual position.
+    if (m_homeTabAnimating) {
+        m_homeTabAnimTime += std::max(0.f, dt);
+        const float u = clamp01(m_homeTabAnimTime / kTabAnimDuration);
+        const float eased = easeOutBackV109(u);
+        m_homeTabSlide = m_homeTabAnimFrom +
+            (m_homeTabAnimTo - m_homeTabAnimFrom) * eased;
+        m_homeTabPop = std::sin(kPi * u) * (1.f - 0.18f * u);
 
-    m_homeTabPop += (0.f - m_homeTabPop) * std::min(1.f, std::max(0.f, dt) * 9.5f);
-    if (std::abs(m_homeTabPop) < 0.001f)
+        if (u >= 1.f) {
+            m_homeTabSlide = m_homeTabAnimTo;
+            m_homeTabPop = 0.f;
+            m_homeTabAnimating = false;
+        }
+    } else {
+        m_homeTabSlide = m_homeApplicationsActive ? 1.f : 0.f;
         m_homeTabPop = 0.f;
+    }
 
     m_timer += dt;
 
@@ -224,7 +240,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Rect navRect = homeTabsRect();
     const float gamesX = kNavX + kNavInset;
     const float appsX = gamesX + kTabW + kTabGap;
-    const float slide = smooth01(m_homeTabSlide);
+    const float slide = m_homeTabSlide;
     nxui::Rect activeRect {
         gamesX + (appsX - gamesX) * slide,
         kNavY + kNavInset,
@@ -235,8 +251,8 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     // V10.8: bubble-like tab response. The active lens swells softly and
     // relaxes back after each L/R category switch, instead of only sliding.
     const float pop = clamp01(m_homeTabPop);
-    const float expandX = 8.f * pop;
-    const float expandY = 3.5f * pop;
+    const float expandX = 18.f * pop;
+    const float expandY = 8.f * pop;
     activeRect.x -= expandX * 0.5f;
     activeRect.y -= expandY * 0.5f;
     activeRect.width += expandX;
@@ -285,8 +301,9 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float appsCenterX = appsX + kTabW * 0.5f;
     const float textY = kNavY + (kNavH - gamesSz.y) * 0.5f;
 
-    const float gamesActive = 1.f - slide;
-    const float appsActive = slide;
+    const float clampedSlide = clamp01(slide);
+    const float gamesActive = 1.f - clampedSlide;
+    const float appsActive = clampedSlide;
 
     const nxui::Color inactive(0.985f, 0.99f, 1.00f, 0.98f * m_opacity);
     const nxui::Color active(0.045f, 0.052f, 0.065f, 0.98f * m_opacity);

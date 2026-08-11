@@ -107,7 +107,7 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Color wifiOn = m_textColor.withAlpha(0.95f * op);
     const nxui::Color wifiOff = m_textColor.withAlpha(0.18f * op);
     const float wifiX = cr.x - 50.f;
-    const float wifiY = cr.y + cr.height * 0.5f + 8.f;
+    const float wifiY = cr.y + cr.height * 0.5f + 12.f;
 
     auto drawWifiArc = [&](float radius, bool active, float thickness) {
         constexpr int segments = 40;

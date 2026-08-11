@@ -42,4 +42,8 @@ private:
     bool m_homeTabsFocused = false;
     float m_homeTabSlide = 0.f;
     float m_homeTabPop = 0.f;
+    float m_homeTabAnimFrom = 0.f;
+    float m_homeTabAnimTo = 0.f;
+    float m_homeTabAnimTime = 0.f;
+    bool m_homeTabAnimating = false;
 };

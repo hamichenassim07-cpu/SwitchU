@@ -48,10 +48,24 @@ constexpr float kInertiaFriction = 4.4f;
 constexpr float kMinimumInertiaSpeed = 0.14f;
 constexpr float kMaximumInertiaSpeed = 14.f;
 constexpr float kSnapSpeed = 14.f;
+constexpr float kSelectionBounceDuration = 0.42f;
+
+float selectionBounceScale(float t) {
+    // A short under-damped response: first positive overshoot, then a tiny
+    // corrective undershoot before settling exactly at 310 px.
+    if (t <= 0.f || t >= kSelectionBounceDuration)
+        return 1.f;
+    return 1.f + 0.080f * std::exp(-7.0f * t) * std::sin(22.0f * t);
+}
 }
 
 IconGrid::IconGrid() {
     m_focus.onFocusChanged([this](nxui::Widget*, nxui::Widget*) {
+        // The bounce itself starts once the newly focused cover reaches the
+        // centre. Cancelling a previous bounce avoids stacking responses when
+        // the user scrolls rapidly.
+        m_selectionBounceActive = false;
+        m_selectionBounceTime = 0.f;
         layoutCarousel();
     });
 }
@@ -87,6 +101,10 @@ void IconGrid::setCarouselFocusActive(bool active) {
     if (m_carouselFocusActive == active)
         return;
     m_carouselFocusActive = active;
+    if (!active) {
+        m_selectionBounceActive = false;
+        m_selectionBounceTime = 0.f;
+    }
     layoutAtScrollPosition();
 }
 
@@ -365,9 +383,16 @@ void IconGrid::layoutAtScrollPosition() {
 
         const float logicalDistance =
             static_cast<float>(displayIndex) - m_scrollPosition;
-        const float size = m_carouselFocusActive
+        float size = m_carouselFocusActive
             ? iconSizeForDistance(logicalDistance)
             : kNeighborIconSize;
+
+        if (m_carouselFocusActive &&
+            m_selectionBounceActive &&
+            std::abs(logicalDistance) < 0.035f) {
+            size *= selectionBounceScale(m_selectionBounceTime);
+        }
+
         const float centerX = m_carouselFocusActive
             ? screenCenterX + carouselCenterOffset(logicalDistance)
             : screenCenterX + logicalDistance * (kNeighborIconSize + kCarouselGap);
@@ -501,6 +526,8 @@ void IconGrid::finishSnap() {
     m_snapActive = false;
     m_inertiaActive = false;
     m_scrollVelocity = 0.f;
+    m_selectionBounceTime = 0.f;
+    m_selectionBounceActive = m_carouselFocusActive;
 
     layoutAtScrollPosition();
 
@@ -686,6 +713,15 @@ void IconGrid::onUpdate(float dt) {
     if (m_touchScrolling ||
         m_displayCount <= 0)
         return;
+
+    if (m_selectionBounceActive) {
+        m_selectionBounceTime += std::max(0.f, dt);
+        if (m_selectionBounceTime >= kSelectionBounceDuration) {
+            m_selectionBounceTime = kSelectionBounceDuration;
+            m_selectionBounceActive = false;
+        }
+        layoutAtScrollPosition();
+    }
 
     if (m_inertiaActive) {
         m_scrollPosition +=

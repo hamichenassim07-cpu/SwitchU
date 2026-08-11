@@ -9,34 +9,7 @@ constexpr float kV9TitleCenterX = 640.f;
 constexpr float kV9TitleTopY = 536.f;
 constexpr float kV9TitleScale = 1.42f;
 constexpr float kV9TitleMaxWidth = 900.f;
-constexpr float kV102SeparatorWidth = 364.f;
-constexpr float kV102SeparatorHeight = 2.2f;
-constexpr float kV102TitleToSeparatorGap = 21.f;
-constexpr float kV102SeparatorToActionsGap = 24.f;
-constexpr float kV102ActionLabelScale = 0.83f;
-constexpr float kV102ActionGlyphScale = 0.97f;
-constexpr float kV102ActionGap = 8.f;
-constexpr float kV102PairGap = 42.f;
 
-std::string utf8CodepointV102(unsigned cp) {
-    std::string out;
-    if (cp <= 0x7F) {
-        out.push_back(static_cast<char>(cp));
-    } else if (cp <= 0x7FF) {
-        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    } else if (cp <= 0xFFFF) {
-        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    } else {
-        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    }
-    return out;
-}
 }
 
 TitlePillWidget::TitlePillWidget() {
@@ -190,12 +163,9 @@ void TitlePillWidget::setText(const std::string& text, float screenWidth) {
 }
 
 void TitlePillWidget::setGameActionsVisible(bool visible) {
-    if (m_showGameActions == visible)
-        return;
-
+    // V10.9 compatibility only. The real separator/A-Y strip now lives in
+    // GameActionsHudWidget at fixed absolute coordinates.
     m_showGameActions = visible;
-    if (!m_text.empty())
-        sizeToFit();
 }
 
 void TitlePillWidget::hideAnimated(float screenWidth) {
@@ -312,71 +282,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
                  m_textColor.withAlpha(0.42f * m_opacity * reveal),
                  scale);
 
-    if (m_showGameActions) {
-        const float separatorY = ty + textSz.y + kV102TitleToSeparatorGap;
-        const float separatorX = cr.x + (cr.width - kV102SeparatorWidth) * 0.5f;
-        ren.drawRoundedRect(
-            {separatorX, separatorY, kV102SeparatorWidth, kV102SeparatorHeight},
-            nxui::Color(0.94f, 0.97f, 1.00f, 0.22f * m_opacity),
-            1.1f
-        );
 
-        auto& i18n = nxui::I18n::instance();
-        const std::string launch = i18n.tr("hint.launch", "Lancer");
-        const std::string move = i18n.tr("hint.move", "Déplacer");
-        const std::string aGlyph = utf8CodepointV102(0xE0E0);
-        const std::string yGlyph = utf8CodepointV102(0xE0E3);
-        nxui::Font* glyphFont = m_iconFont ? m_iconFont : m_font;
-
-        const nxui::Vec2 launchBase = m_font->measure(launch);
-        const nxui::Vec2 moveBase = m_font->measure(move);
-        const nxui::Vec2 aBase = glyphFont->measure(aGlyph);
-        const nxui::Vec2 yBase = glyphFont->measure(yGlyph);
-        const float launchW = launchBase.x * kV102ActionLabelScale;
-        const float moveW = moveBase.x * kV102ActionLabelScale;
-        const float aW = aBase.x * kV102ActionGlyphScale;
-        const float yW = yBase.x * kV102ActionGlyphScale;
-        const float firstW = aW + kV102ActionGap + launchW;
-        const float secondW = yW + kV102ActionGap + moveW;
-        const float rowW = firstW + kV102PairGap + secondW;
-        float x = m_anchorCenterX - rowW * 0.5f;
-        const float rowY = separatorY + kV102SeparatorHeight +
-                           kV102SeparatorToActionsGap;
-
-        auto drawAction = [&](const std::string& glyph,
-                              const std::string& label,
-                              float glyphW,
-                              float labelW) {
-            const nxui::Vec2 glyphBase = glyphFont->measure(glyph);
-            const float glyphH = glyphBase.y * kV102ActionGlyphScale;
-            const nxui::Vec2 labelBase = m_font->measure(label);
-            const float labelH = labelBase.y * kV102ActionLabelScale;
-            const float rowH = std::max(glyphH, labelH);
-
-            // switch_icons.ttf is the same icon font already used by Switch U
-            // for Nintendo-style controller hints. No hand-drawn square badge.
-            ren.drawText(
-                glyph,
-                {x, rowY + (rowH - glyphH) * 0.5f},
-                glyphFont,
-                nxui::Color(0.98f, 1.f, 0.99f, 0.94f * m_opacity),
-                kV102ActionGlyphScale
-            );
-            ren.drawText(
-                label,
-                {x + glyphW + kV102ActionGap,
-                 rowY + (rowH - labelH) * 0.5f},
-                m_font,
-                nxui::Color(0.94f, 0.96f, 0.98f, 0.82f * m_opacity),
-                kV102ActionLabelScale
-            );
-            x += glyphW + kV102ActionGap + labelW;
-        };
-
-        drawAction(aGlyph, launch, aW, launchW);
-        x += kV102PairGap;
-        drawAction(yGlyph, move, yW, moveW);
-    }
 
     ren.popClipRect();
 }
@@ -392,15 +298,6 @@ nxui::Vec2 TitlePillWidget::computeContentSize() const {
 
     const nxui::Vec2 base = m_font->measure(m_text);
     const float titleH = base.y * kV9TitleScale;
-    float height = titleH;
-
-    if (m_showGameActions)
-        height += kV102TitleToSeparatorGap + kV102SeparatorHeight +
-                  kV102SeparatorToActionsGap + 30.f;
-
-    float width = std::min(kV9TitleMaxWidth, base.x * kV9TitleScale);
-    if (m_showGameActions)
-        width = std::max(width, 330.f);
-
-    return {width, height};
+    const float width = std::min(kV9TitleMaxWidth, base.x * kV9TitleScale);
+    return {width, titleH};
 }
