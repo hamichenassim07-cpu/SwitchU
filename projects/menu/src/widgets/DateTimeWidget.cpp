@@ -10,8 +10,6 @@
 
 namespace {
 constexpr float kTimeScale = 1.28f;
-constexpr float kDateScale = 1.12f;
-constexpr float kLineGap = 5.f;
 constexpr float kTabAnimSpeed = 9.0f;
 
 constexpr float kNavX = 440.f;
@@ -154,32 +152,16 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         m_smallFont ? m_smallFont : m_font;
 
     nxui::Vec2 timeBase = m_font->measure(m_timeStr);
-    nxui::Vec2 dateBase = dateFont->measure(m_dateStr);
-
     nxui::Vec2 timeSize = {
         timeBase.x * kTimeScale,
         timeBase.y * kTimeScale
     };
 
-    nxui::Vec2 dateSize = {
-        dateBase.x * kDateScale,
-        dateBase.y * kDateScale
-    };
-
-    const float contentH =
-        timeSize.y + kLineGap + dateSize.y;
-
     const float timeX =
         cr.x + (cr.width - timeSize.x) * 0.5f;
 
     const float timeY =
-        cr.y + (cr.height - contentH) * 0.5f;
-
-    const float dateX =
-        cr.x + (cr.width - dateSize.x) * 0.5f;
-
-    const float dateY =
-        timeY + timeSize.y + kLineGap;
+        cr.y + (cr.height - timeSize.y) * 0.5f;
 
     const nxui::Color shadow =
         nxui::Color(0.f, 0.f, 0.f, 0.34f * m_opacity);
@@ -187,8 +169,6 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Color primary =
         m_textColor.withAlpha(m_opacity);
 
-    const nxui::Color secondary =
-        m_secondaryColor.withAlpha(0.98f * m_opacity);
 
     // V10.6: use the exact V7.4.4 lockscreen rhythm: a hard 800 ms
     // alarm-clock blink with fixed geometry so the minutes never shift.
@@ -225,29 +205,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
                      primary, kTimeScale);
     }
 
-    ren.drawText(
-        m_dateStr,
-        {dateX + 1.f, dateY + 1.f},
-        dateFont,
-        shadow,
-        kDateScale
-    );
-
-    ren.drawText(
-        m_dateStr,
-        {dateX, dateY},
-        dateFont,
-        secondary,
-        kDateScale
-    );
-
-    ren.drawText(
-        m_dateStr,
-        {dateX + 0.45f, dateY},
-        dateFont,
-        secondary.withAlpha(0.48f * m_opacity),
-        kDateScale
-    );
+    // V10.7: date intentionally removed from the HOME HUD.
 
     // V10 centered HOME categories. There is intentionally no Nintendo eShop
     // entry. The indicator is a real animated state controlled by the menu.
@@ -366,26 +324,13 @@ nxui::Vec2 DateTimeWidget::computeContentSize() const {
     if (!m_font)
         return {190.f, 70.f};
 
-    nxui::Font* dateFont =
-        m_smallFont ? m_smallFont : m_font;
-
     nxui::Vec2 timeBase =
         m_font->measure(
             m_use12HourClock ? "12:00 PM" : "00:00"
         );
 
-    nxui::Vec2 dateBase =
-        dateFont->measure("00/00/0000");
-
-    const float width = std::max(
+    return {
         timeBase.x * kTimeScale,
-        dateBase.x * kDateScale
-    );
-
-    const float height =
-        timeBase.y * kTimeScale +
-        kLineGap +
-        dateBase.y * kDateScale;
-
-    return {width, height};
+        timeBase.y * kTimeScale
+    };
 }

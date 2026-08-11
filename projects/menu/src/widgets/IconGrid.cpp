@@ -83,6 +83,13 @@ void IconGrid::setApplicationTitleIds(const std::vector<uint64_t>& titleIds) {
     rebuildFocusRow();
 }
 
+void IconGrid::setCarouselFocusActive(bool active) {
+    if (m_carouselFocusActive == active)
+        return;
+    m_carouselFocusActive = active;
+    layoutAtScrollPosition();
+}
+
 void IconGrid::setShowApplications(bool showApplications) {
     if (m_showApplications == showApplications)
         return;
@@ -358,9 +365,12 @@ void IconGrid::layoutAtScrollPosition() {
 
         const float logicalDistance =
             static_cast<float>(displayIndex) - m_scrollPosition;
-        const float size = iconSizeForDistance(logicalDistance);
-        const float centerX =
-            screenCenterX + carouselCenterOffset(logicalDistance);
+        const float size = m_carouselFocusActive
+            ? iconSizeForDistance(logicalDistance)
+            : kNeighborIconSize;
+        const float centerX = m_carouselFocusActive
+            ? screenCenterX + carouselCenterOffset(logicalDistance)
+            : screenCenterX + logicalDistance * (kNeighborIconSize + kCarouselGap);
 
         icon->setRect({
             centerX - size * 0.5f,

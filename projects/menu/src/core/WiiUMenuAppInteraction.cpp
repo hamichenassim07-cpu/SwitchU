@@ -953,7 +953,6 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
         if (wasGameFocused && m_grid->visibleCount() > 0 &&
             gridTarget && gridTarget->tag() == "glossy_icon") {
             auto* icon = static_cast<GlossyIcon*>(gridTarget);
-            m_titlePill->setProfileOriginalMode(false);
             m_titlePill->setGameActionsVisible(true);
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
@@ -1041,6 +1040,34 @@ void WiiUMenuApp::wireFocusCallback() {
     }
 
     focusManager().onFocusChanged([this](nxui::Widget*, nxui::Widget* cur) {
+        if (!m_profileTitlePill && m_contentLayer) {
+            // V10.7: dedicated profile pill using the exact Switch U master
+            // TitlePill implementation, separate from the customized game title.
+            m_profileTitlePill = std::make_shared<ProfileTitlePillWidget>();
+            m_profileTitlePill->setFont(&m_fontNormal);
+            m_profileTitlePill->setPadding(9.f, 22.f, 9.f, 22.f);
+            m_profileTitlePill->setForceLiquidGlass(true);
+            m_profileTitlePill->setBlurEnabled(false);
+            m_profileTitlePill->setVisible(false);
+            m_contentLayer->addChild(m_profileTitlePill);
+        }
+
+        if (!m_v107HudPositioned) {
+            // Text-only HUD: pull the clock/profile closer to the upper-left
+            // and keep Wi-Fi/battery as a compact upper-right cluster.
+            if (m_clock)
+                m_clock->setRect({18.f, 8.f, 138.f, 56.f});
+            if (m_userAvatarBar && !m_userAvatarButtons.empty()) {
+                const float avatarW = 56.f * static_cast<float>(m_userAvatarButtons.size()) +
+                    10.f * static_cast<float>(m_userAvatarButtons.size() - 1);
+                m_userAvatarBar->setRect({174.f, 8.f, avatarW, 56.f});
+                m_userAvatarBar->layout();
+            }
+            if (m_battery)
+                m_battery->setRect({1094.f, 8.f, 160.f, 56.f});
+            m_v107HudPositioned = true;
+        }
+
         if (m_clock)
             m_clock->setHomeTabsFocused(false);
         updateCursor();
@@ -1059,6 +1086,11 @@ void WiiUMenuApp::wireFocusCallback() {
             m_audio.playSfx(Sfx::Navigate);
 
         if (cur && cur->tag() == "glossy_icon") {
+            WaraWaraBackground::notifyCornerControlFocus(0);
+            if (m_profileTitlePill)
+                m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
+            if (m_grid)
+                m_grid->setCarouselFocusActive(true);
             m_grid->focusManager().setFocus(cur);
 
             // V5 CORRIGÉE :
@@ -1244,64 +1276,78 @@ void WiiUMenuApp::wireFocusCallback() {
                 return;
             }
 
-            m_titlePill->setProfileOriginalMode(false);
             m_titlePill->setGameActionsVisible(true);
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
         } else if (cur) {
+            if (m_grid)
+                m_grid->setCarouselFocusActive(false);
             if (m_editMode)
                 exitEditMode();
             if (m_clock && cur == m_clock.get()) {
                 if (m_titlePill) {
-                    m_titlePill->setProfileOriginalMode(false);
-                    m_titlePill->setGameActionsVisible(false);
+                            m_titlePill->setGameActionsVisible(false);
                 }
                 m_titlePill->hideAnimated();
                 return;
             }
 
-            // V10.6: the game title remains persistent for Settings/Controllers.
-            // Paramètres and Manettes stay icon-only. Profile goes back to the
-            // original Switch U behaviour: its nickname is shown by the shared
-            // title pill instead of being rendered locally below the avatar.
+            // V10.7: Settings, Controllers and Profile preserve the last game's
+            // title/separator/A-Y strip. Only the carousel hero visual collapses.
             for (auto& btn : m_sidebar.leftButtons()) {
                 if (btn.get() == cur) {
-                    // V10.6: Settings keeps the last selected game's title,
-                    // separator and A/Y actions on screen.
-                    if (btn.get() == m_sidebar.settingsButton())
+                    if (m_profileTitlePill)
+                        m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
+                    if (btn.get() == m_sidebar.settingsButton()) {
+                        WaraWaraBackground::notifyCornerControlFocus(-1);
                         return;
-                    m_titlePill->setProfileOriginalMode(false);
-                    m_titlePill->setGameActionsVisible(false);
-                    m_titlePill->hideAnimated();
+                    }
+                    WaraWaraBackground::notifyCornerControlFocus(0);
                     return;
                 }
             }
 
             for (auto& btn : m_sidebar.rightButtons()) {
                 if (btn.get() == cur) {
-                    // The only visible right corner control is Controllers.
-                    // Preserve the game title/action strip exactly as-is.
-                    if (btn.get() == m_sidebar.rightButtons().front().get())
+                    if (m_profileTitlePill)
+                        m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
+                    if (btn.get() == m_sidebar.rightButtons().front().get()) {
+                        WaraWaraBackground::notifyCornerControlFocus(+1);
                         return;
-                    m_titlePill->setProfileOriginalMode(false);
-                    m_titlePill->setGameActionsVisible(false);
-                    m_titlePill->hideAnimated();
+                    }
+                    WaraWaraBackground::notifyCornerControlFocus(0);
                     return;
                 }
             }
 
             for (auto& avatar : m_userAvatarButtons) {
                 if (avatar.get() == cur) {
-                    m_titlePill->setProfileOriginalMode(true);
-                    m_titlePill->setGameActionsVisible(false);
-                    m_titlePill->setText(avatar->nickname());
-                    m_titlePill->setVisible(true);
+                    WaraWaraBackground::notifyCornerControlFocus(0);
+                    if (m_profileTitlePill) {
+                        const nxui::Rect pr = avatar->focusRect();
+                        const float centerX = pr.x + pr.width * 0.5f;
+                        m_profileTitlePill->setPosition(0.f, (pr.y + pr.height) + 7.f);
+                        // Original Switch U setText centres within the supplied
+                        // width. Supplying centerX*2 preserves that exact logic
+                        // while anchoring this dedicated instance below profile.
+                        m_profilePillAnchorWidth = centerX * 2.f;
+                        m_profileTitlePill->setText(avatar->nickname(), m_profilePillAnchorWidth);
+                        m_profileTitlePill->setVisible(true);
+                    }
                     return;
                 }
             }
 
-            m_titlePill->hideAnimated();
+            WaraWaraBackground::notifyCornerControlFocus(0);
+            if (m_profileTitlePill)
+                m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
+            return;
         } else {
+            WaraWaraBackground::notifyCornerControlFocus(0);
+            if (m_grid)
+                m_grid->setCarouselFocusActive(false);
+            if (m_profileTitlePill)
+                m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
             m_titlePill->hideAnimated();
         }
     });
@@ -1674,8 +1720,7 @@ void WiiUMenuApp::wireGlobalActions() {
 
                 WaraWaraBackground::notifySelectedGame(tid);
                 if (m_titlePill) {
-                    m_titlePill->setProfileOriginalMode(false);
-                    m_titlePill->setGameActionsVisible(true);
+                            m_titlePill->setGameActionsVisible(true);
                     const int modelIndex = findTitleIndex(tid);
                     if (modelIndex >= 0)
                         m_titlePill->setText(m_model.at(modelIndex).title);

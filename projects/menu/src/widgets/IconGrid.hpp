@@ -45,6 +45,8 @@ public:
     void setApplicationTitleIds(const std::vector<uint64_t>& titleIds);
     void setShowApplications(bool showApplications);
     bool showApplications() const { return m_showApplications; }
+    void setCarouselFocusActive(bool active);
+    bool carouselFocusActive() const { return m_carouselFocusActive; }
     int visibleCount() const { return m_displayCount; }
     int firstVisibleGlobalIndex() const;
     int displayPositionForGlobalIndex(int globalIndex) const;
@@ -106,6 +108,7 @@ private:
     std::vector<int> m_displayIndices;
     std::unordered_set<uint64_t> m_applicationTitleIds;
     bool m_showApplications = false;
+    bool m_carouselFocusActive = true;
     nxui::FocusManager m_focus;
 
     int m_visibleCols = 5;

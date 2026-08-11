@@ -12,6 +12,7 @@
 #include "widgets/DateTimeWidget.hpp"
 #include "widgets/BatteryWidget.hpp"
 #include "widgets/TitlePillWidget.hpp"
+#include "widgets/ProfileTitlePillWidget.hpp"
 #include "core/AudioManager.hpp"
 #include "core/AccessibilityManager.hpp"
 #include "widgets/LaunchAnimation.hpp"
@@ -203,6 +204,7 @@ private:
     std::shared_ptr<DateTimeWidget>    m_clock;
     std::shared_ptr<BatteryWidget>     m_battery;
     std::shared_ptr<TitlePillWidget>   m_titlePill;
+    std::shared_ptr<ProfileTitlePillWidget> m_profileTitlePill;
     std::shared_ptr<PageIndicator>     m_pageIndicator;
     std::shared_ptr<LockScreenView>    m_lockScreenView;
     std::shared_ptr<LaunchAnimation>   m_launchAnim;
@@ -222,6 +224,8 @@ private:
     std::shared_ptr<nxui::Box> m_rightSidebar;
     std::shared_ptr<nxui::Box> m_userAvatarBar;
     std::vector<std::shared_ptr<UserAvatarButton>> m_userAvatarButtons;
+    bool m_v107HudPositioned = false;
+    float m_profilePillAnchorWidth = 1280.f;
 
     AudioManager m_audio;
     AccessibilityManager m_accessibility;

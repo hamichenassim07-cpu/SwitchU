@@ -106,8 +106,8 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     // left of the battery widget without a background capsule.
     const nxui::Color wifiOn = m_textColor.withAlpha(0.95f * op);
     const nxui::Color wifiOff = m_textColor.withAlpha(0.18f * op);
-    const float wifiX = cr.x - 37.f;
-    const float wifiY = cr.y + cr.height * 0.5f + 7.f;
+    const float wifiX = cr.x - 45.f;
+    const float wifiY = cr.y + cr.height * 0.5f + 8.f;
 
     auto drawWifiArc = [&](float radius, bool active, float thickness) {
         constexpr int segments = 18;
@@ -133,16 +133,16 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const bool bar1 = m_wifiConnected && m_wifiStrength >= 1u;
     const bool bar2 = m_wifiConnected && m_wifiStrength >= 2u;
     const bool bar3 = m_wifiConnected && m_wifiStrength >= 3u;
-    ren.drawCircle({wifiX, wifiY - 1.f}, 2.5f,
+    ren.drawCircle({wifiX, wifiY - 1.f}, 3.2f,
                    m_wifiConnected ? wifiOn : wifiOff, 14);
-    drawWifiArc(8.0f, bar1, 2.0f);
-    drawWifiArc(13.5f, bar2, 2.0f);
-    drawWifiArc(19.0f, bar3, 2.0f);
+    drawWifiArc(10.0f, bar1, 2.6f);
+    drawWifiArc(17.0f, bar2, 2.6f);
+    drawWifiArc(24.0f, bar3, 2.6f);
 
     if (!m_wifiRadioEnabled) {
-        ren.drawLine({wifiX - 13.f, wifiY - 18.f},
-                     {wifiX + 14.f, wifiY + 2.f},
-                     m_textColor.withAlpha(0.72f * op), 2.2f);
+        ren.drawLine({wifiX - 16.f, wifiY - 23.f},
+                     {wifiX + 17.f, wifiY + 3.f},
+                     m_textColor.withAlpha(0.72f * op), 2.7f);
     }
 
     char buffer[16] = {};

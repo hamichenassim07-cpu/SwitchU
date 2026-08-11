@@ -44,6 +44,7 @@ extern "C" {
 namespace {
 
 std::atomic<uint64_t> g_selectedGameTitle{0};
+std::atomic<int> g_cornerControlFocus{0};
 
 // Reserved pseudo Title IDs used only inside Switch U's Applications carousel.
 // They never get passed to Horizon's application launcher.
@@ -1640,6 +1641,11 @@ void WaraWaraBackground::notifySelectedGame(uint64_t titleId) {
     g_selectedGameTitle.store(titleId, std::memory_order_relaxed);
 }
 
+void WaraWaraBackground::notifyCornerControlFocus(int side) {
+    g_cornerControlFocus.store(std::clamp(side, -1, 1), std::memory_order_relaxed);
+}
+
+
 void WaraWaraBackground::setPreviewActive(bool active) {
     if (m_previewActive == active)
         return;
@@ -2279,13 +2285,13 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // V10.3 visual integration: keep the reference dark without crushing the media. V10.3B softens the veil after user feedback.
     // Artwork/video remain readable while the lower anthracite zone still anchors the UI.
     const nxui::Color lowerBase(0.095f, 0.098f, 0.110f, 1.f);
-    const float fadeStartY = area.y + area.height * 0.42f;
-    const float solidStartY = area.y + area.height * 0.73f;
+    const float fadeStartY = area.y + area.height * 0.46f;
+    const float solidStartY = area.y + area.height * 0.77f;
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
     const float mediaFactor = std::clamp(previewVisualAlpha, 0.f, 1.f);
-    const float veilTop = (0.020f + 0.045f * mediaFactor) * baseAlpha;
-    const float veilBottom = (0.060f + 0.085f * mediaFactor) * baseAlpha;
+    const float veilTop = (0.006f + 0.016f * mediaFactor) * baseAlpha;
+    const float veilBottom = (0.018f + 0.030f * mediaFactor) * baseAlpha;
 
     // This veil is always present. With a still/video it becomes strong enough
     // to match the dark reference; without media it simply calms the theme.
@@ -2308,9 +2314,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
     const float glowTime = std::chrono::duration<float>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    const float slowDriftX = std::sin(glowTime * 0.26f) * 38.f;
-    const float slowDriftY = std::cos(glowTime * 0.21f) * 20.f;
-    const float glowBreath = 0.92f + 0.08f * (0.5f + 0.5f * std::sin(glowTime * 0.34f));
+    const float slowDriftX = std::sin(glowTime * 0.31f) * 60.f;
+    const float slowDriftY = std::cos(glowTime * 0.24f) * 32.f;
+    const float glowBreath = 1.00f + 0.10f * std::sin(glowTime * 0.42f);
 
     // A small coloured wash binds the background to the extracted artwork
     // palette before the larger fog lights are drawn.
@@ -2382,41 +2388,53 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         {area.x, fadeStartY, area.width, solidStartY - fadeStartY},
         lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(0.98f * baseAlpha)
+        lowerBase.withAlpha(0.90f * baseAlpha)
     );
 
     ren.drawRect(
         {area.x, solidStartY,
          area.width, area.y + area.height - solidStartY},
-        lowerBase.withAlpha(baseAlpha)
+        lowerBase.withAlpha(0.95f * baseAlpha)
     );
 
-    // V10.6: corner glows are intentionally rendered AFTER the anthracite
-    // lower block. V10.5 drew them before it, so the dark layer swallowed them.
+    // V10.7: only the currently focused lower control gets an anchor light.
+    // The emitter starts OUTSIDE the frame so the light appears to come from
+    // the physical bottom-left / bottom-right corner and spill inward.
+    const int cornerSide = g_cornerControlFocus.load(std::memory_order_relaxed);
 #ifdef NXUI_BACKEND_DEKO3D
-    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
+    if (cornerSide != 0 && baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
         constexpr float hs = 0.5f;
-        auto emitCornerGlow = [&](float cx, float cy) {
-            const nxui::Color core(0.42f, 0.44f, 0.49f, 0.34f * baseAlpha);
-            const nxui::Color soft(0.23f, 0.24f, 0.28f, 0.22f * baseAlpha);
-            ren.drawCircle({cx * hs, cy * hs}, 90.f * hs, core, 48);
-            ren.drawCircle({cx * hs, cy * hs}, 132.f * hs, soft, 48);
+        auto emitCornerSpill = [&](bool right) {
+            const float dir = right ? -1.f : 1.f;
+            const float edgeX = right ? area.right() + 42.f : area.x - 42.f;
+            const float edgeY = (area.y + area.height) + 34.f;
+            const AmbientSwatch greyA{0.46f, 0.48f, 0.54f};
+            const AmbientSwatch greyB{0.27f, 0.29f, 0.34f};
+
+            ren.drawCircle({edgeX * hs, edgeY * hs}, 178.f * hs,
+                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.42f * baseAlpha), 56);
+            ren.drawCircle({(edgeX + dir * 78.f) * hs, (edgeY - 34.f) * hs}, 142.f * hs,
+                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.28f * baseAlpha), 52);
+            ren.drawCircle({(edgeX + dir * 160.f) * hs, (edgeY - 72.f) * hs}, 112.f * hs,
+                           nxui::Color(greyB.r, greyB.g, greyB.b, 0.18f * baseAlpha), 48);
         };
-        emitCornerGlow(area.x + 72.f, area.y + area.height - 54.f);
-        emitCornerGlow(area.right() - 72.f, area.y + area.height - 54.f);
+        emitCornerSpill(cornerSide > 0);
         endHomeGlowTargetV102(ren);
-        ren.applyBlur(4.0f, 2);
+        ren.applyBlur(5.1f, 2);
         ren.drawOffscreen(
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.58f * baseAlpha)
+            nxui::Color::white().withAlpha(0.72f * baseAlpha)
         );
     }
 #else
-    ren.drawCircle({area.x + 72.f, area.y + area.height - 54.f},
-                   92.f, nxui::Color(0.34f, 0.35f, 0.39f, 0.11f * baseAlpha), 48);
-    ren.drawCircle({area.right() - 72.f, area.y + area.height - 54.f},
-                   92.f, nxui::Color(0.34f, 0.35f, 0.39f, 0.11f * baseAlpha), 48);
+    if (cornerSide < 0) {
+        ren.drawCircle({area.x - 36.f, (area.y + area.height) + 28.f},
+                       190.f, nxui::Color(0.40f, 0.42f, 0.48f, 0.15f * baseAlpha), 56);
+    } else if (cornerSide > 0) {
+        ren.drawCircle({area.right() + 36.f, (area.y + area.height) + 28.f},
+                       190.f, nxui::Color(0.40f, 0.42f, 0.48f, 0.15f * baseAlpha), 56);
+    }
 #endif
 
     ren.flush();

@@ -81,6 +81,9 @@ public:
     // MP4 sont geres par le moteur de preview asynchrone V8.1.
     static void notifySelectedGame(uint64_t titleId);
 
+    // V10.7: -1 = Settings/left corner, +1 = Controllers/right corner, 0 = none.
+    static void notifyCornerControlFocus(int side);
+
     // V9: HOME previews are suspended while the lockscreen is visible.
     // This prevents video/static textures from competing with lockscreen fonts
     // and icons for the limited Deko3D image-memory budget.
