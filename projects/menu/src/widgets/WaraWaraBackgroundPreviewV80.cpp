@@ -2296,7 +2296,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     if (previewVisualAlpha > 0.001f) {
         ren.drawRect(
             area,
-            nxui::Color(1.f, 1.f, 1.f, 0.050f * previewVisualAlpha * baseAlpha)
+            nxui::Color(1.f, 1.f, 1.f, 0.105f * previewVisualAlpha * baseAlpha)
         );
     }
 
@@ -2304,7 +2304,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // roughly its lower quarter inside the dark zone while the upper area
     // remains directly over the bright background. Scale the reference 720p
     // coordinate with the current render area.
-    const float lowerStartY = area.y + area.height * (440.f / 720.f);
+    const float lowerStartY = area.y + area.height * 456.f / 720.f;
 
     AmbientSwatch glowPrimary = r.currentGlowPrimary;
     AmbientSwatch glowSecondary = r.currentGlowSecondary;
@@ -2328,9 +2328,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         area,
         nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                    0.007f * baseAlpha),
+                    0.004f * baseAlpha),
         nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                    0.012f * baseAlpha)
+                    0.008f * baseAlpha)
     );
 
     // V10.3: TRUE GPU glow. The V10.1 circles were visible geometry with low
@@ -2390,16 +2390,16 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
     // V10.10: restore the lower anthracite block with a soft fade into the
     // background, while keeping the rest of the backdrop much brighter.
-    const float fadeBand = area.height * 0.11f;
+    const float fadeBand = area.height * 0.15f;
     ren.drawGradientRect(
         {area.x, lowerStartY - fadeBand, area.width, fadeBand},
         lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(0.62f * baseAlpha)
+        lowerBase.withAlpha(0.38f * baseAlpha)
     );
     ren.drawRect(
         {area.x, lowerStartY,
          area.width, area.y + area.height - lowerStartY},
-        lowerBase.withAlpha(0.84f * baseAlpha)
+        lowerBase.withAlpha(0.62f * baseAlpha)
     );
 
     // V10.8: quiet anchor lights remain part of the scene at all times.

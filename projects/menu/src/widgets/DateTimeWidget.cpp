@@ -105,7 +105,7 @@ void DateTimeWidget::onContentUpdate(float dt) {
         const float eased = easeOutBackV109(u);
         m_homeTabSlide = m_homeTabAnimFrom +
             (m_homeTabAnimTo - m_homeTabAnimFrom) * eased;
-        m_homeTabPop = std::sin(kPi * u) * (1.f - 0.18f * u);
+        m_homeTabPop = std::sin(kPi * u) * (1.f - 0.10f * u);
 
         if (u >= 1.f) {
             m_homeTabSlide = m_homeTabAnimTo;
@@ -248,28 +248,31 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         kTabH
     };
 
-    // V10.12: the white pill must retract first, then recover to its base
-    // size with a slight elastic release. This reads more like a soft bubble
-    // being squeezed before it settles on the other tab.
+    // V10.13: retract first, then return to the original shape. The pill no
+    // longer grows larger than its base size; it briefly tightens like a soft
+    // bubble, then relaxes back while sliding to the other category.
     const float dir = (m_homeTabAnimTo >= m_homeTabAnimFrom) ? 1.f : -1.f;
-    const float uAnim = m_homeTabAnimating ? clamp01(m_homeTabAnimTime / kTabAnimDuration) : 1.f;
+    const float uAnim = m_homeTabAnimating
+        ? clamp01(m_homeTabAnimTime / kTabAnimDuration)
+        : 1.f;
     if (m_homeTabAnimating) {
-        if (uAnim < 0.32f) {
-            const float s = uAnim / 0.32f;
-            const float shrinkX = 16.f * s;
-            const float pinchY = 3.8f * s;
+        if (uAnim < 0.34f) {
+            const float s = uAnim / 0.34f;
+            const float shrinkX = 22.f * s;
+            const float pinchY = 4.0f * s;
             activeRect.x += shrinkX * 0.5f;
             activeRect.width -= shrinkX;
             activeRect.y += pinchY * 0.5f;
             activeRect.height -= pinchY;
         } else {
-            const float s = (uAnim - 0.32f) / 0.68f;
-            const float release = std::sin(kPi * std::min(1.f, s)) * (1.f - 0.10f * s);
-            const float rearPull = 4.f * release;
-            const float leadStretch = 14.f * release;
-            const float pinchY = 2.0f * release;
-            activeRect.x -= (dir < 0.f ? leadStretch : rearPull);
-            activeRect.width += leadStretch + rearPull;
+            const float s = (uAnim - 0.34f) / 0.66f;
+            const float release = 1.f - std::pow(1.f - std::min(1.f, s), 2.f);
+            const float shrinkX = 22.f * (1.f - release);
+            const float pinchY = 4.0f * (1.f - release);
+            // Keep a subtle directional bias while the squeezed pill relaxes.
+            const float pull = 5.f * (1.f - release);
+            activeRect.x += shrinkX * 0.5f - (dir > 0.f ? 0.f : pull);
+            activeRect.width -= shrinkX;
             activeRect.y += pinchY * 0.5f;
             activeRect.height -= pinchY;
         }
