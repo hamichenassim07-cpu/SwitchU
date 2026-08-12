@@ -2296,7 +2296,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     if (previewVisualAlpha > 0.001f) {
         ren.drawRect(
             area,
-            nxui::Color(1.f, 1.f, 1.f, 0.105f * previewVisualAlpha * baseAlpha)
+            nxui::Color(1.f, 1.f, 1.f, 0.165f * previewVisualAlpha * baseAlpha)
         );
     }
 
@@ -2328,9 +2328,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         area,
         nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                    0.004f * baseAlpha),
+                    0.002f * baseAlpha),
         nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                    0.008f * baseAlpha)
+                    0.004f * baseAlpha)
     );
 
     // V10.3: TRUE GPU glow. The V10.1 circles were visible geometry with low
@@ -2390,16 +2390,16 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
     // V10.10: restore the lower anthracite block with a soft fade into the
     // background, while keeping the rest of the backdrop much brighter.
-    const float fadeBand = area.height * 0.15f;
+    const float fadeBand = area.height * 0.16f;
     ren.drawGradientRect(
         {area.x, lowerStartY - fadeBand, area.width, fadeBand},
         lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(0.38f * baseAlpha)
+        lowerBase.withAlpha(1.00f * baseAlpha)
     );
     ren.drawRect(
         {area.x, lowerStartY,
          area.width, area.y + area.height - lowerStartY},
-        lowerBase.withAlpha(0.62f * baseAlpha)
+        lowerBase.withAlpha(1.00f * baseAlpha)
     );
 
     // V10.8: quiet anchor lights remain part of the scene at all times.
