@@ -5,6 +5,7 @@
 #include <nxui/core/Texture.hpp>
 #include <nxui/core/GpuDevice.hpp>
 #include <nxui/core/Renderer.hpp>
+#include <nxui/core/Font.hpp>
 #include <switch.h>
 
 #include <cstddef>
@@ -34,6 +35,12 @@ public:
         setAccessibilityHint(i18n.tr("accessibility.hints.open_user_page", "A to open the user page."));
     }
     const std::string& nickname() const { return m_nickname; }
+
+    // V10.3: the profile owns its local nickname. It is rendered directly
+    // under the avatar (stronger on focus), instead of hijacking the carousel title.
+    void setNicknameFont(nxui::Font* font) { m_nicknameFont = font; }
+    void setShowFocusedNickname(bool enabled) { m_showFocusedNickname = enabled; }
+
     void setChromeEnabled(bool enabled);
 
     void setOnActivate(ActivateCallback cb) { m_onActivate = std::move(cb); }
@@ -56,8 +63,10 @@ private:
     nxui::Texture m_avatarTexture;
     AccountUid m_uid = {};
     std::string m_nickname;
+    nxui::Font* m_nicknameFont = nullptr;
     ActivateCallback m_onActivate;
     bool m_focusable = true;
     bool m_focused = false;
     bool m_chromeEnabled = true;
+    bool m_showFocusedNickname = true;
 };

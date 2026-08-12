@@ -103,6 +103,15 @@ void LockPressIndicator::onRender(nxui::Renderer& ren) {
     if (alpha <= 0.001f || r.width <= 1.f || r.height <= 1.f)
         return;
 
+    // V7.4.4: the heavy offscreen glow must not run at rest. On real
+    // hardware it could leave a darkened composite over the whole lockscreen.
+    // The 3D card remains visible through its own frame; this indicator now
+    // wakes up only when the user has actually started the 3xA interaction.
+    const bool interactionActive =
+        (m_progress > 0) || (m_visualProgress > 0.02f) || (m_flash > 0.01f);
+    if (!interactionActive)
+        return;
+
     const float breathe = 0.5f + 0.5f * std::sin(m_pulse * 1.38f);
     const float flash = clamp01(m_flash);
     const nxui::Color stage = cardStageColor(m_visualProgress);

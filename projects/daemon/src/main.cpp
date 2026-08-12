@@ -36,6 +36,7 @@ static bool g_avmReady = false;
 static bool g_psmReady = false;
 static bool g_lblReady = false;
 static bool g_hidReady = false;
+static bool g_bpcReady = false;
 
 extern "C" {
     u32 __nx_applet_type = AppletType_SystemApplet;
@@ -136,6 +137,14 @@ extern "C" void __appInit(void) {
     if (R_FAILED(rc))
         svcOutputDebugString("[SwitchU-daemon] hidInitialize FAIL", 36);
 
+    // V10.3 uses BPC only to distinguish an actual physical POWER press from
+    // other sleep requests. If unavailable, power handling safely falls back
+    // to Horizon's normal sleep behaviour.
+    rc = bpcInitialize();
+    g_bpcReady = R_SUCCEEDED(rc);
+    if (R_FAILED(rc))
+        svcOutputDebugString("[SwitchU-daemon] bpcInitialize FAIL", 36);
+
     rc = fsdevMountSdmc();
     if (R_FAILED(rc)) {
         svcOutputDebugString("[SwitchU-daemon] fsdevMountSdmc FAIL", 37);
@@ -165,6 +174,7 @@ extern "C" void __appExit(void) {
     switchu::FileLog::log("[daemon] __appExit");
     switchu::FileLog::close();
 
+    if (g_bpcReady) bpcExit();
     if (g_hidReady) hidExit();
     if (g_lblReady) lblExit();
     if (g_psmReady) psmExit();
@@ -214,6 +224,8 @@ static std::atomic<bool> g_appCatalogRefreshPending{false};
 static int g_appCatalogRefreshDelay = 0;
 static constexpr const char* kAppCatalogPath = "sdmc:/config/SwitchU/applist.bin";
 static constexpr const char* kAppCatalogTmpPath = "sdmc:/config/SwitchU/applist.tmp";
+static constexpr const char* kHomePowerRequestPath =
+    "sdmc:/config/SwitchU/power_button_request.flag";
 static std::mutex g_controlCacheQueueMutex;
 static std::vector<uint64_t> g_controlCacheQueue;
 static std::atomic<bool> g_controlCacheRefreshPending{false};
@@ -696,6 +708,50 @@ static bool sendViewFlagsUpdates() {
     return false;
 }
 
+static bool forwardHomePowerButtonToMenu() {
+    // Distinguish the physical button from auto-sleep or another system sleep
+    // request. We never hijack non-physical sleep transitions.
+    if (!g_bpcReady)
+        return false;
+    bool powerPushed = false;
+    const Result powerRc = bpcGetPowerButton(&powerPushed);
+    if (R_FAILED(powerRc) || !powerPushed)
+        return false;
+
+    // V10.3: the physical POWER button is special only while the real Switch U
+    // HOME surface owns the foreground. Games and other surfaces retain the
+    // normal Horizon sleep sequence. The menu consumes this one-shot marker
+    // before showing its existing Power dialog.
+    if (g_currentSurface != smi::LockReturnTarget::Home ||
+        !daemon::menu_la::isActive() ||
+        g_foregroundAppletActive) {
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directory("sdmc:/config", ec);
+    ec.clear();
+    std::filesystem::create_directory("sdmc:/config/SwitchU", ec);
+    std::ofstream marker(kHomePowerRequestPath, std::ios::trunc);
+    if (!marker.is_open()) {
+        switchu::FileLog::log("[power-home] marker open FAIL; using normal sleep");
+        return false;
+    }
+    marker << "V10.3\n";
+    marker.close();
+    if (!marker) {
+        switchu::FileLog::log("[power-home] marker write FAIL; using normal sleep");
+        return false;
+    }
+
+    // WakeUp is intentionally reused as a lightweight menu notification: the
+    // menu checks the marker first. A genuine WakeUp has no marker and keeps
+    // the V7.4.4 lockscreen route unchanged.
+    pushNotification(smi::MenuMessage::WakeUp);
+    switchu::FileLog::log("[power-home] physical POWER forwarded to active HOME");
+    return true;
+}
+
 static void handleGeneralChannel() {
     AppletStorage st;
     if (R_FAILED(appletPopFromGeneralChannel(&st))) return;
@@ -722,8 +778,9 @@ static void handleGeneralChannel() {
         openMenuFromHome("sams");
         break;
         case 3:
-        switchu::FileLog::log("[sams] -> Sleep");
-        startPowerSequence("sams-sleep", smi::SystemMessage::EnterSleep);
+        switchu::FileLog::log("[sams] -> Sleep/PowerButton");
+        if (!forwardHomePowerButtonToMenu())
+            startPowerSequence("sams-sleep", smi::SystemMessage::EnterSleep);
         break;
         case 5:
         switchu::FileLog::log("[sams] -> Shutdown");

@@ -1,5 +1,6 @@
 #include "BatteryWidget.hpp"
 #include <nxui/core/Renderer.hpp>
+#include "HomeLiquidGlassStyle.hpp"
 #include <switch.h>
 #include <algorithm>
 #include <cmath>
@@ -17,6 +18,32 @@ constexpr float kPercentageScale = 0.98f;
 
 } // namespace
 
+
+BatteryWidget::BatteryWidget() {
+    setCornerRadius(22.f);
+    setBaseColor(nxui::Color(0.70f, 0.84f, 0.98f, 0.34f));
+    setBorderColor(nxui::Color(0.96f, 0.99f, 1.00f, 0.50f));
+    setHighlightColor(nxui::Color(1.f, 1.f, 1.f, 0.22f));
+    // V10.6: battery/Wi-Fi are text/icon-only, with no Liquid Glass panel.
+    setPanelOpacity(0.f);
+    setLiquidGlassEnabled(false);
+    setLiquidGlassShaderEnabled(false);
+    setForceLiquidGlass(false);
+    setBorderWidth(0.f);
+    setBlurEnabled(false);
+
+    m_nifmReady = R_SUCCEEDED(nifmInitialize(NifmServiceType_User));
+}
+
+BatteryWidget::~BatteryWidget() {
+    if (m_nifmReady)
+        nifmExit();
+}
+
+void BatteryWidget::onRender(nxui::Renderer& ren) {
+    nxui::GlassWidget::onRender(ren);
+}
+
 void BatteryWidget::setBatteryStatus(uint32_t percentage,
                                      bool charging) {
     percentage = std::min<uint32_t>(percentage, 100u);
@@ -28,6 +55,31 @@ void BatteryWidget::setBatteryStatus(uint32_t percentage,
 void BatteryWidget::onContentUpdate(float dt) {
     m_chargeAnim += dt;
     m_timer += dt;
+    m_wifiTimer += dt;
+
+    if (m_wifiTimer >= 1.f) {
+        m_wifiTimer = 0.f;
+        m_wifiRadioEnabled = false;
+        m_wifiConnected = false;
+        m_wifiStrength = 0;
+
+        if (m_nifmReady) {
+            bool wirelessEnabled = false;
+            if (R_SUCCEEDED(nifmIsWirelessCommunicationEnabled(&wirelessEnabled)))
+                m_wifiRadioEnabled = wirelessEnabled;
+
+            NifmInternetConnectionType type = NifmInternetConnectionType_WiFi;
+            NifmInternetConnectionStatus status = NifmInternetConnectionStatus_ConnectingUnknown1;
+            u32 strength = 0;
+            if (m_wifiRadioEnabled &&
+                R_SUCCEEDED(nifmGetInternetConnectionStatus(&type, &strength, &status)) &&
+                type == NifmInternetConnectionType_WiFi &&
+                status == NifmInternetConnectionStatus_Connected) {
+                m_wifiConnected = true;
+                m_wifiStrength = std::min<u32>(strength, 3u);
+            }
+        }
+    }
 
     if (m_timer < 1.f && m_level >= 0.f)
         return;
@@ -49,6 +101,49 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Rect cr = contentRect();
     const float op = opacity();
     const float level = std::clamp(m_level, 0.f, 1.f);
+
+    // Real NIFM Wi-Fi indicator. It is deliberately drawn immediately to the
+    // left of the battery widget without a background capsule.
+    const nxui::Color wifiOn = m_textColor.withAlpha(0.95f * op);
+    const nxui::Color wifiOff = m_textColor.withAlpha(0.18f * op);
+    const float wifiX = cr.x - 50.f;
+    const float wifiY = cr.y + cr.height * 0.5f + 12.f;
+
+    auto drawWifiArc = [&](float radius, bool active, float thickness) {
+        constexpr int segments = 40;
+        constexpr float startA = 3.78f;
+        constexpr float endA = 5.64f;
+        nxui::Vec2 prev{
+            wifiX + std::cos(startA) * radius,
+            wifiY + std::sin(startA) * radius
+        };
+        for (int i = 1; i <= segments; ++i) {
+            const float a = startA + (endA - startA) *
+                (static_cast<float>(i) / static_cast<float>(segments));
+            nxui::Vec2 cur{
+                wifiX + std::cos(a) * radius,
+                wifiY + std::sin(a) * radius
+            };
+            ren.drawLine(prev, cur, active ? wifiOn : wifiOff, thickness);
+            prev = cur;
+        }
+    };
+
+    // 0..3 bars returned directly by Horizon/NIFM.
+    const bool bar1 = m_wifiConnected && m_wifiStrength >= 1u;
+    const bool bar2 = m_wifiConnected && m_wifiStrength >= 2u;
+    const bool bar3 = m_wifiConnected && m_wifiStrength >= 3u;
+    ren.drawCircle({wifiX, wifiY - 1.f}, 3.5f,
+                   m_wifiConnected ? wifiOn : wifiOff, 14);
+    drawWifiArc(11.0f, bar1, 2.8f);
+    drawWifiArc(18.5f, bar2, 2.8f);
+    drawWifiArc(26.0f, bar3, 2.8f);
+
+    if (!m_wifiRadioEnabled) {
+        ren.drawLine({wifiX - 16.f, wifiY - 23.f},
+                     {wifiX + 17.f, wifiY + 3.f},
+                     m_textColor.withAlpha(0.72f * op), 2.7f);
+    }
 
     char buffer[16] = {};
     std::snprintf(buffer, sizeof(buffer), "%d%%",
@@ -79,12 +174,12 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
         // The charge state is now carried entirely by the fill. It stays
         // visible while its green luminosity pulses, so the real level can
         // always be read.
-        const float blink = 0.48f + 0.52f *
-            (0.5f + 0.5f * std::sin(m_chargeAnim * 5.3f));
+        const float blink = 0.42f + 0.58f *
+            (0.5f + 0.5f * std::sin(m_chargeAnim * 5.8f));
         nxui::Color fillColor;
         if (m_charging) {
             fillColor = nxui::Color(0.22f, 1.00f, 0.48f,
-                                    (0.52f + 0.46f * blink) * op);
+                                    (0.46f + 0.52f * blink) * op);
         } else if (level <= 0.20f) {
             fillColor = nxui::Color(1.f, 0.26f, 0.24f, 0.96f * op);
         } else {
@@ -96,7 +191,7 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
         if (m_charging) {
             ren.drawRoundedRect(fill.expanded(1.0f),
                                 nxui::Color(0.22f, 1.f, 0.48f,
-                                            (0.025f + 0.055f * blink) * op),
+                                            (0.030f + 0.080f * blink) * op),
                                 std::min(4.8f, fill.width * 0.5f));
         }
     }

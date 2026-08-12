@@ -67,4 +67,5 @@ private:
     std::string m_loadedAssetsBase;
     std::string m_loadedCustomIconsBase;
     bool m_assetsLoaded = false;
+
 };

@@ -10,7 +10,60 @@ end
 -- Rule: switch
 rule("switch")
 
-    -- Shaders: compile GLSL -> DKSH via uam before linking 
+    -- Switch U V8.1: add the official devkitPro FFmpeg port only to the
+    -- SwitchU menu target. The daemon and the rest of the project are untouched.
+    on_load(function(target)
+        if target:name() ~= "SwitchU" then return end
+
+        local DEVKITPRO = os.getenv("DEVKITPRO") or "/opt/devkitpro"
+        local portlibs = path.join(DEVKITPRO, "portlibs", "switch")
+        local pkg_config = path.join(portlibs, "bin", "aarch64-none-elf-pkg-config")
+        local avcodec = path.join(portlibs, "lib", "libavcodec.a")
+
+        if not os.isfile(pkg_config) or not os.isfile(avcodec) then
+            raise("SwitchU V8.1 MP4 requires the devkitPro package 'switch-ffmpeg'. Install it, then re-run xmake.")
+        end
+
+        target:add("defines", "SWITCHU_V81_FFMPEG")
+        target:add("includedirs", path.join(portlibs, "include"))
+
+        -- Ask the Switch pkg-config wrapper for the complete static link chain.
+        -- This keeps FFmpeg's transitive dependencies in the correct order.
+        local libflags = os.iorunv(pkg_config, {
+            "--libs", "--static",
+            "libavformat", "libavcodec", "libswscale", "libavutil"
+        })
+
+        local linkdirs = {}
+        local links = {}
+        local ldflags = {}
+        for token in libflags:gmatch("%S+") do
+            if token:startswith("-L") then
+                table.insert(linkdirs, token:sub(3))
+            elseif token:startswith("-l") then
+                table.insert(links, token:sub(3))
+            else
+                table.insert(ldflags, token)
+            end
+        end
+
+        for _, dir in ipairs(linkdirs) do
+            target:add("linkdirs", dir)
+        end
+        for _, link in ipairs(links) do
+            target:add("links", link)
+        end
+        for _, flag in ipairs(ldflags) do
+            target:add("ldflags", flag, {force = true})
+        end
+    end)
+
+    -- Shaders: compile GLSL -> DKSH via uam before linking.
+    -- V10.4: liquid_glass_fsh is ALWAYS rebuilt. The repository contains a
+    -- precompiled DKSH, and relying only on mtimes can silently keep that old
+    -- binary after a source overlay. Removing/rebuilding this one shader makes
+    -- the runtime material deterministic: if uam cannot compile it, the build
+    -- fails instead of shipping an older Liquid Glass pass.
     before_build(function(target)
         local shaderdir = path.join(os.projectdir(), "shaders")
         if not os.isdir(shaderdir) then return end
@@ -25,9 +78,13 @@ rule("switch")
         for _, src in ipairs(os.files(path.join(shaderdir, "*.glsl"))) do
             local base = path.basename(src)
             local out  = path.join(outdir, base .. ".dksh")
+            local force_v104_liquid_glass = (base == "liquid_glass_fsh")
 
-            -- skip if up-to-date
-            if os.isfile(out) and os.mtime(out) >= os.mtime(src) then
+            if force_v104_liquid_glass then
+                if os.isfile(out) then
+                    os.rm(out)
+                end
+            elseif os.isfile(out) and os.mtime(out) >= os.mtime(src) then
                 goto continue
             end
 
@@ -38,8 +95,17 @@ rule("switch")
                 raise("shader filename must end with _vsh or _fsh: " .. base)
             end
 
-            cprint("${color.build.target}compiling shader${clear} %s", path.filename(src))
+            if force_v104_liquid_glass then
+                cprint("${bright cyan}compiling Liquid Glass V10.4${clear} %s", path.filename(src))
+            else
+                cprint("${color.build.target}compiling shader${clear} %s", path.filename(src))
+            end
+
             os.vrunv(uam, {"-s", stage, "-o", out, src})
+
+            if force_v104_liquid_glass and not os.isfile(out) then
+                raise("Liquid Glass V10.4 shader compilation did not produce: " .. out)
+            end
 
             ::continue::
         end

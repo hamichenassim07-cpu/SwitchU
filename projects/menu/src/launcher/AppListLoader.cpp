@@ -5,12 +5,88 @@
 #include <cstdio>
 #include <vector>
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 #ifdef SWITCHU_MENU
 #include <switchu/control_cache.hpp>
 #include <switchu/ns_ext.hpp>
 #endif
 
 namespace {
+
+static constexpr uint64_t kV103SystemAlbumTitleId  = 0xFFFFFFFFFFFFF101ULL;
+static constexpr uint64_t kV103SystemMiiTitleId    = 0xFFFFFFFFFFFFF102ULL;
+static constexpr uint64_t kV103SystemThemesTitleId = 0xFFFFFFFFFFFFF103ULL;
+
+bool isV103SystemTitleId(uint64_t titleId) {
+    return titleId == kV103SystemAlbumTitleId ||
+           titleId == kV103SystemMiiTitleId ||
+           titleId == kV103SystemThemesTitleId;
+}
+
+std::vector<uint8_t> readV103FileBytes(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open())
+        return {};
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(file),
+                                std::istreambuf_iterator<char>());
+}
+
+const char* v103SystemIconPath(uint64_t titleId) {
+#ifdef SWITCHU_MENU
+    if (titleId == kV103SystemAlbumTitleId)  return "romfs:/icons/album.png";
+    if (titleId == kV103SystemMiiTitleId)    return "romfs:/icons/mii_editor.png";
+    if (titleId == kV103SystemThemesTitleId) return "romfs:/icons/themes.png";
+#else
+    if (titleId == kV103SystemAlbumTitleId)  return "sdmc:/switch/SwitchU/icons/album.png";
+    if (titleId == kV103SystemMiiTitleId)    return "sdmc:/switch/SwitchU/icons/mii_editor.png";
+    if (titleId == kV103SystemThemesTitleId) return "sdmc:/switch/SwitchU/icons/themes.png";
+#endif
+    return nullptr;
+}
+
+void prependV103SystemCards(std::vector<PendingApp>& apps) {
+    auto hasId = [&apps](uint64_t titleId) {
+        return std::any_of(apps.begin(), apps.end(), [titleId](const PendingApp& app) {
+            return app.titleId == titleId;
+        });
+    };
+
+    struct Def { uint64_t id; const char* title; };
+    static constexpr Def defs[] = {
+        {kV103SystemAlbumTitleId,  "Album"},
+        {kV103SystemMiiTitleId,    "Mii"},
+        {kV103SystemThemesTitleId, "Thèmes"},
+    };
+
+    std::vector<PendingApp> system;
+    system.reserve(3);
+    for (const auto& def : defs) {
+        if (hasId(def.id))
+            continue;
+        PendingApp app;
+        char tidBuf[17] = {};
+        std::snprintf(tidBuf, sizeof(tidBuf), "%016lX", (unsigned long)def.id);
+        app.id = tidBuf;
+        app.title = def.title;
+        app.titleId = def.id;
+        app.viewFlags = 0;
+        app.userRequired = false;
+        app.startupUserKnown = true;
+        app.startupUserAccount = 0;
+        app.startupUserAccountOption = 0;
+        if (const char* iconPath = v103SystemIconPath(def.id))
+            app.iconData = readV103FileBytes(iconPath);
+        system.push_back(std::move(app));
+    }
+
+    if (!system.empty()) {
+        system.insert(system.end(),
+                      std::make_move_iterator(apps.begin()),
+                      std::make_move_iterator(apps.end()));
+        apps = std::move(system);
+    }
+}
 
 bool requiresInteractiveUserSelection(uint8_t account, uint8_t option) {
     return account == 1 && option == 0;
@@ -140,6 +216,9 @@ bool fetchDaemonCatalog(std::vector<PendingApp>& out) {
 void registerEntries(std::vector<PendingApp>& apps,
                      GridModel& model,
                      IconStreamer& streamer) {
+    // V10.3 system utilities are model entries, not sidebar-only buttons.
+    // Inject here so initial load and every asynchronous refresh stay identical.
+    prependV103SystemCards(apps);
     streamer.init((int)apps.size());
     streamer.setIconDataLoader(AppListLoader::loadIconData);
     for (int i = 0; i < (int)apps.size(); ++i) {
@@ -274,6 +353,12 @@ std::vector<uint8_t> AppListLoader::loadIconData(uint64_t titleId) {
     std::vector<uint8_t> iconData;
     if (titleId == 0)
         return iconData;
+
+    if (isV103SystemTitleId(titleId)) {
+        if (const char* path = v103SystemIconPath(titleId))
+            return readV103FileBytes(path);
+        return iconData;
+    }
 
 #ifdef SWITCHU_MENU
     iconData = switchu::control_cache::readIcon(titleId);

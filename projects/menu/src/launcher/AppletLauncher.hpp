@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <atomic>
+#include <utility>
 #include <switch.h>
 
 class AppletLauncher {
@@ -10,7 +11,10 @@ public:
         std::function<void()> requestExit;
     };
 
+    using SpecialLaunchHandler = std::function<bool(uint64_t)>;
+
     void init(Callbacks cbs);
+    void setSpecialLaunchHandler(SpecialLaunchHandler cb) { m_specialLaunchHandler = std::move(cb); }
 
     void launchAlbum();
     void launchMiiEditor();
@@ -53,4 +57,5 @@ private:
 #endif
 
     Callbacks m_cb;
+    SpecialLaunchHandler m_specialLaunchHandler;
 };
