@@ -2290,15 +2290,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     const nxui::Color lowerBase(0.030f, 0.032f, 0.039f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
-    // V10.12: brighten the media slightly after composition. The previous
-    // attempts mostly changed veils that were already gone; this explicit lift
-    // targets the actual composed background/video layer instead.
-    if (previewVisualAlpha > 0.001f) {
-        ren.drawRect(
-            area,
-            nxui::Color(1.f, 1.f, 1.f, 0.165f * previewVisualAlpha * baseAlpha)
-        );
-    }
+    // V10.15 diagnostic: no extra full-screen lift. Show the media as raw as
+    // possible so we can identify whether the remaining darkness comes from
+    // the source rendering itself or from HOME overlays.
 
     // The 310 px hero cover ends at y=512. A boundary at about y=435 places
     // roughly its lower quarter inside the dark zone while the upper area
@@ -2323,121 +2317,19 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     const float slowDriftY = std::cos(glowTime * 0.24f) * 32.f;
     const float glowBreath = 1.00f + 0.10f * std::sin(glowTime * 0.42f);
 
-    // A small coloured wash binds the background to the extracted artwork
-    // palette before the larger fog lights are drawn.
-    ren.drawGradientRect(
-        area,
-        nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                    0.002f * baseAlpha),
-        nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                    0.004f * baseAlpha)
-    );
+    // V10.15 diagnostic: disable the colour wash entirely.
 
-    // V10.3: TRUE GPU glow. The V10.1 circles were visible geometry with low
-    // alpha; now they are only high-energy light sources rendered to the same
-    // half-resolution offscreen pipeline used by the V7.4.4 lockscreen glow,
-    // then Gaussian-blurred and composited back behind the carousel.
-    bool realGlow = false;
-#ifdef NXUI_BACKEND_DEKO3D
-    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
-        constexpr float hs = 0.5f;
-        auto emitLightMass = [&](float cx, float cy,
-                                 const AmbientSwatch& c,
-                                 float strength,
-                                 float stretch) {
-            const nxui::Color hot(c.r, c.g, c.b, strength);
-            ren.drawCircle({cx * hs, cy * hs}, 112.f * hs * stretch, hot, 48);
-            ren.drawCircle({(cx - 92.f) * hs, (cy + 24.f) * hs},
-                           86.f * hs * stretch,
-                           nxui::Color(c.r, c.g, c.b, strength * 0.72f), 44);
-            ren.drawCircle({(cx + 102.f) * hs, (cy - 18.f) * hs},
-                           78.f * hs * stretch,
-                           nxui::Color(c.r, c.g, c.b, strength * 0.60f), 44);
-        };
+    // V10.15 diagnostic: main ambient carousel glow disabled.
 
-        emitLightMass(area.x + area.width * 0.35f + slowDriftX,
-                      area.y + area.height * 0.47f + slowDriftY,
-                      glowPrimary, 0.37f * glowBreath * baseAlpha, 1.24f);
-        emitLightMass(area.x + area.width * 0.67f - slowDriftX * 0.65f,
-                      area.y + area.height * 0.44f - slowDriftY * 0.55f,
-                      glowSecondary, 0.33f * glowBreath * baseAlpha, 1.17f);
-
-
-        endHomeGlowTargetV102(ren);
-        ren.applyBlur(4.35f, 2);
-        ren.drawOffscreen(
-            0,
-            {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.62f * baseAlpha)
-        );
-        realGlow = true;
-    }
-#endif
-
-    if (!realGlow) {
-        // Non-deko fallback deliberately avoids visible circles/geometric blobs.
-        // It is only a broad colour fog; the real build uses the GPU blur above.
-        ren.drawGradientRect(
-            {area.x, area.y + area.height * 0.24f,
-             area.width, area.height * 0.50f},
-            nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                        0.028f * baseAlpha),
-            nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                        0.040f * baseAlpha)
-        );
-        
-    }
-
-    // V10.10: restore the lower anthracite block with a soft fade into the
-    // background, while keeping the rest of the backdrop much brighter.
-    const float fadeBand = area.height * 0.16f;
-    ren.drawGradientRect(
-        {area.x, lowerStartY - fadeBand, area.width, fadeBand},
-        lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(1.00f * baseAlpha)
-    );
+    // V10.15 diagnostic: keep only a simple opaque lower block so the bottom
+    // UI stays readable while removing nearly all decorative overlays.
     ren.drawRect(
         {area.x, lowerStartY,
          area.width, area.y + area.height - lowerStartY},
         lowerBase.withAlpha(1.00f * baseAlpha)
     );
 
-    // V10.8: quiet anchor lights remain part of the scene at all times.
-    // They are intentionally a touch weaker than V10.7 and originate from
-    // outside the bottom corners instead of sitting directly behind buttons.
-#ifdef NXUI_BACKEND_DEKO3D
-    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
-        constexpr float hs = 0.5f;
-        auto emitCornerSpill = [&](bool right) {
-            const float dir = right ? -1.f : 1.f;
-            const float edgeX = right ? area.right() + 42.f : area.x - 42.f;
-            const float edgeY = (area.y + area.height) + 34.f;
-            const AmbientSwatch greyA{0.46f, 0.48f, 0.54f};
-            const AmbientSwatch greyB{0.27f, 0.29f, 0.34f};
-
-            ren.drawCircle({edgeX * hs, edgeY * hs}, 178.f * hs,
-                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.24f * baseAlpha), 56);
-            ren.drawCircle({(edgeX + dir * 78.f) * hs, (edgeY - 34.f) * hs}, 142.f * hs,
-                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.15f * baseAlpha), 52);
-            ren.drawCircle({(edgeX + dir * 160.f) * hs, (edgeY - 72.f) * hs}, 112.f * hs,
-                           nxui::Color(greyB.r, greyB.g, greyB.b, 0.10f * baseAlpha), 48);
-        };
-        emitCornerSpill(false);
-        emitCornerSpill(true);
-        endHomeGlowTargetV102(ren);
-        ren.applyBlur(5.1f, 2);
-        ren.drawOffscreen(
-            0,
-            {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.46f * baseAlpha)
-        );
-    }
-#else
-    ren.drawCircle({area.x - 36.f, (area.y + area.height) + 28.f},
-                   190.f, nxui::Color(0.40f, 0.42f, 0.48f, 0.10f * baseAlpha), 56);
-    ren.drawCircle({area.right() + 36.f, (area.y + area.height) + 28.f},
-                   190.f, nxui::Color(0.40f, 0.42f, 0.48f, 0.10f * baseAlpha), 56);
-#endif
+    // V10.15 diagnostic: no corner anchor glows.
 
     ren.flush();
 }
