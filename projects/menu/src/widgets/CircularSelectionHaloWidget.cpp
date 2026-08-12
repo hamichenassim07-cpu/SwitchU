@@ -10,7 +10,7 @@ void CircularSelectionHaloWidget::setTargetRect(const nxui::Rect& target) {
     setRect({cx - side * 0.5f, cy - side * 0.5f, side, side});
 }
 
-void CircularSelectionHaloWidget::onContentRender(nxui::Renderer& ren) {
+void CircularSelectionHaloWidget::onRender(nxui::Renderer& ren) {
     if (m_opacity <= 0.001f || m_rect.width <= 1.f || m_rect.height <= 1.f)
         return;
 

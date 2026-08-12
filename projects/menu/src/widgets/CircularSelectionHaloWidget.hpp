@@ -7,5 +7,5 @@ public:
     void setTargetRect(const nxui::Rect& target);
 
 protected:
-    void onContentRender(nxui::Renderer& ren) override;
+    void onRender(nxui::Renderer& ren) override;
 };

@@ -89,6 +89,9 @@ void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
         auto settings = makeBtn(
             &m_icons[5], "sidebar.settings", "Settings", actions.onSettings
         );
+        settings->setChromeEnabled(false);
+        settings->setIconCircular(true);
+        settings->setSelectionHaloEnabled(true);
         m_settingsButton = settings.get();
         place(settings, 2);
         m_leftButtons.push_back(std::move(settings));
@@ -98,6 +101,9 @@ void SidebarManager::build(nxui::GpuDevice& gpu, nxui::Renderer& ren,
         auto ctrl = makeBtn(
             &m_icons[2], "sidebar.controllers", "Controllers", actions.onControllers
         );
+        ctrl->setChromeEnabled(false);
+        ctrl->setIconCircular(true);
+        ctrl->setSelectionHaloEnabled(true);
         place(ctrl, 3);
         m_rightButtons.push_back(std::move(ctrl));
 

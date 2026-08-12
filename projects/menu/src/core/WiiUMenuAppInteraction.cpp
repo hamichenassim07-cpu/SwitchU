@@ -981,17 +981,10 @@ void WiiUMenuApp::wireFocusCallback() {
     // V10.11: keep separator + A/Y inside TitlePillWidget again for a more
     // reliable render path. We keep the optional helper widget disabled.
 
-    // V10.11: dedicated white circular halo for Profile / Settings /
-    // Controllers. Add it to the top-most available layer instead of creating
-    // it as a late temporary effect.
-    if (!m_systemSelectionHalo) {
-        auto haloHost = m_overlayLayer ? m_overlayLayer : m_contentLayer;
-        if (haloHost) {
-            m_systemSelectionHalo = std::make_shared<CircularSelectionHaloWidget>();
-            m_systemSelectionHalo->setVisible(false);
-            haloHost->addChild(m_systemSelectionHalo);
-        }
-    }
+    // V10.12.1: Profile / Settings / Controllers now render their own white
+    // focus halo locally. The external halo widget is intentionally unused.
+    if (m_systemSelectionHalo)
+        m_systemSelectionHalo->setVisible(false);
 
     // V10.3: Album / Mii / Thèmes are first-class carousel entries. They use
     // reserved pseudo title IDs so the rest of IconGrid can treat them exactly
@@ -2166,14 +2159,11 @@ void WiiUMenuApp::updateCursor() {
         m_sidebar.rightButtons().front().get() == cur;
 
     if (isProfile || isSettings || isControllers) {
-        // No glide: the dedicated circular halo is assigned the new target
-        // immediately in the same frame.
+        // Local button/avatar rendering owns the circular white halo.
+        // The generic cursor is never drawn here and never appears on covers.
         m_cursor->setVisible(false);
-        if (m_systemSelectionHalo) {
-            m_systemSelectionHalo->setTargetRect(fr);
-            m_systemSelectionHalo->setOpacity(1.f);
-            m_systemSelectionHalo->setVisible(true);
-        }
+        if (m_systemSelectionHalo)
+            m_systemSelectionHalo->setVisible(false);
         return;
     }
 
