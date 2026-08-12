@@ -18,22 +18,27 @@ void CircularSelectionHaloWidget::onRender(nxui::Renderer& ren) {
 
     // V10.9: clean white circular selection, deliberately quieter than the
     // historical blue/purple cursor. No position interpolation is used.
+    ren.drawRoundedRect(
+        m_rect.expanded(2.0f),
+        nxui::Color(1.f, 1.f, 1.f, 0.09f * m_opacity),
+        radius + 2.0f
+    );
     ren.drawRoundedRectOutline(
         m_rect.expanded(4.f),
-        nxui::Color(1.f, 1.f, 1.f, 0.10f * m_opacity),
+        nxui::Color(1.f, 1.f, 1.f, 0.18f * m_opacity),
         radius + 4.f,
         7.f
     );
     ren.drawRoundedRectOutline(
         m_rect.expanded(1.5f),
-        nxui::Color(1.f, 1.f, 1.f, 0.20f * m_opacity),
+        nxui::Color(1.f, 1.f, 1.f, 0.30f * m_opacity),
         radius + 1.5f,
         4.f
     );
     ren.drawRoundedRectOutline(
         m_rect,
-        nxui::Color(1.f, 1.f, 1.f, 0.78f * m_opacity),
+        nxui::Color(1.f, 1.f, 1.f, 0.92f * m_opacity),
         radius,
-        2.2f
+        2.6f
     );
 }

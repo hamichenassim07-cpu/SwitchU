@@ -248,15 +248,18 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         kTabH
     };
 
-    // V10.8: bubble-like tab response. The active lens swells softly and
-    // relaxes back after each L/R category switch, instead of only sliding.
+    // V10.10: elastic horizontal stretch. Instead of a simple pulse, the
+    // active white pill slightly squashes vertically and stretches in the
+    // direction of travel, like a soft bubble being pulled sideways.
     const float pop = clamp01(m_homeTabPop);
-    const float expandX = 18.f * pop;
-    const float expandY = 8.f * pop;
-    activeRect.x -= expandX * 0.5f;
-    activeRect.y -= expandY * 0.5f;
-    activeRect.width += expandX;
-    activeRect.height += expandY;
+    const float dir = (m_homeTabAnimTo >= m_homeTabAnimFrom) ? 1.f : -1.f;
+    const float rearPull = 8.f * pop;
+    const float leadStretch = 18.f * pop;
+    const float pinchY = 3.5f * pop;
+    activeRect.x -= (dir < 0.f ? leadStretch : rearPull);
+    activeRect.width += leadStretch + rearPull;
+    activeRect.y += pinchY * 0.5f;
+    activeRect.height -= pinchY;
 
     // V10.4 C2: the whole category switch remains real refractive glass.
     // The active side adds a milky-white lens on top, so the current category

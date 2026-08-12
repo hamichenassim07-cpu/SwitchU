@@ -2287,14 +2287,14 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // V10.9: leave the artwork/video substantially brighter. The previous
     // full-screen dark veil is removed; readability is now provided by one
     // explicit lower block instead of globally dimming the media.
-    const nxui::Color lowerBase(0.026f, 0.028f, 0.034f, 1.f);
+    const nxui::Color lowerBase(0.032f, 0.034f, 0.041f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
     // The 310 px hero cover ends at y=512. A boundary at about y=435 places
     // roughly its lower quarter inside the dark zone while the upper area
     // remains directly over the bright background. Scale the reference 720p
     // coordinate with the current render area.
-    const float lowerStartY = area.y + area.height * (435.f / 720.f);
+    const float lowerStartY = area.y + area.height * (440.f / 720.f);
 
     AmbientSwatch glowPrimary = r.currentGlowPrimary;
     AmbientSwatch glowSecondary = r.currentGlowSecondary;
@@ -2318,9 +2318,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         area,
         nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                    0.022f * baseAlpha),
+                    0.012f * baseAlpha),
         nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                    0.032f * baseAlpha)
+                    0.020f * baseAlpha)
     );
 
     // V10.3: TRUE GPU glow. The V10.1 circles were visible geometry with low
@@ -2378,11 +2378,18 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         
     }
 
-    // V10.9: deliberate hard cut. No fade and no transition gradient.
+    // V10.10: restore the lower anthracite block with a soft fade into the
+    // background, while keeping the rest of the backdrop much brighter.
+    const float fadeBand = area.height * 0.11f;
+    ren.drawGradientRect(
+        {area.x, lowerStartY - fadeBand, area.width, fadeBand},
+        lowerBase.withAlpha(0.00f),
+        lowerBase.withAlpha(0.78f * baseAlpha)
+    );
     ren.drawRect(
         {area.x, lowerStartY,
          area.width, area.y + area.height - lowerStartY},
-        lowerBase.withAlpha(0.97f * baseAlpha)
+        lowerBase.withAlpha(0.88f * baseAlpha)
     );
 
     // V10.8: quiet anchor lights remain part of the scene at all times.
@@ -2399,11 +2406,11 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             const AmbientSwatch greyB{0.27f, 0.29f, 0.34f};
 
             ren.drawCircle({edgeX * hs, edgeY * hs}, 178.f * hs,
-                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.30f * baseAlpha), 56);
+                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.24f * baseAlpha), 56);
             ren.drawCircle({(edgeX + dir * 78.f) * hs, (edgeY - 34.f) * hs}, 142.f * hs,
-                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.20f * baseAlpha), 52);
+                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.15f * baseAlpha), 52);
             ren.drawCircle({(edgeX + dir * 160.f) * hs, (edgeY - 72.f) * hs}, 112.f * hs,
-                           nxui::Color(greyB.r, greyB.g, greyB.b, 0.13f * baseAlpha), 48);
+                           nxui::Color(greyB.r, greyB.g, greyB.b, 0.10f * baseAlpha), 48);
         };
         emitCornerSpill(false);
         emitCornerSpill(true);
@@ -2412,7 +2419,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         ren.drawOffscreen(
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.54f * baseAlpha)
+            nxui::Color::white().withAlpha(0.46f * baseAlpha)
         );
     }
 #else

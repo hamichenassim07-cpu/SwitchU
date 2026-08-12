@@ -100,8 +100,17 @@ void IconGrid::setApplicationTitleIds(const std::vector<uint64_t>& titleIds) {
 void IconGrid::setCarouselFocusActive(bool active) {
     if (m_carouselFocusActive == active)
         return;
+    const bool wasActive = m_carouselFocusActive;
     m_carouselFocusActive = active;
     if (!active) {
+        m_selectionBounceActive = false;
+        m_entryBouncePending = false;
+        m_selectionBounceTime = 0.f;
+    } else if (!wasActive && active) {
+        // V10.10: the playful bounce should only happen when focus enters the
+        // carousel from Profile / Paramètres / Manettes, not while scrolling
+        // through covers inside the carousel itself.
+        m_entryBouncePending = true;
         m_selectionBounceActive = false;
         m_selectionBounceTime = 0.f;
     }
@@ -527,7 +536,8 @@ void IconGrid::finishSnap() {
     m_inertiaActive = false;
     m_scrollVelocity = 0.f;
     m_selectionBounceTime = 0.f;
-    m_selectionBounceActive = m_carouselFocusActive;
+    m_selectionBounceActive = m_carouselFocusActive && m_entryBouncePending;
+    m_entryBouncePending = false;
 
     layoutAtScrollPosition();
 

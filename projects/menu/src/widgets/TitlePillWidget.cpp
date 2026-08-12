@@ -10,6 +10,35 @@ constexpr float kV9TitleTopY = 536.f;
 constexpr float kV9TitleScale = 1.42f;
 constexpr float kV9TitleMaxWidth = 900.f;
 
+constexpr float kActionsSeparatorY = 596.f;
+constexpr float kActionsSeparatorWidth = 364.f;
+constexpr float kActionsSeparatorHeight = 2.4f;
+constexpr float kActionsRowY = 622.f;
+constexpr float kActionLabelScale = 0.83f;
+constexpr float kActionGlyphScale = 0.97f;
+constexpr float kActionGap = 8.f;
+constexpr float kActionPairGap = 42.f;
+
+std::string utf8CodepointTP(unsigned cp) {
+    std::string out;
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+    return out;
+}
+
 }
 
 TitlePillWidget::TitlePillWidget() {
@@ -283,8 +312,71 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
                  scale);
 
 
-
     ren.popClipRect();
+
+    if (m_showGameActions && m_font) {
+        ren.drawRoundedRect(
+            {kV9TitleCenterX - kActionsSeparatorWidth * 0.5f,
+             kActionsSeparatorY,
+             kActionsSeparatorWidth,
+             kActionsSeparatorHeight},
+            nxui::Color(0.94f, 0.97f, 1.00f, 0.30f * m_opacity),
+            1.1f
+        );
+
+        auto& i18n = nxui::I18n::instance();
+        const std::string launch = i18n.tr("hint.launch", "Lancer");
+        const std::string move = i18n.tr("hint.move", "Déplacer");
+        const std::string aGlyph = utf8CodepointTP(0xE0E0);
+        const std::string yGlyph = utf8CodepointTP(0xE0E3);
+        nxui::Font* glyphFont = m_iconFont ? m_iconFont : m_font;
+
+        const nxui::Vec2 launchBase = m_font->measure(launch);
+        const nxui::Vec2 moveBase = m_font->measure(move);
+        const nxui::Vec2 aBase = glyphFont->measure(aGlyph);
+        const nxui::Vec2 yBase = glyphFont->measure(yGlyph);
+
+        const float launchW = launchBase.x * kActionLabelScale;
+        const float moveW = moveBase.x * kActionLabelScale;
+        const float aW = aBase.x * kActionGlyphScale;
+        const float yW = yBase.x * kActionGlyphScale;
+        const float firstW = aW + kActionGap + launchW;
+        const float secondW = yW + kActionGap + moveW;
+        const float rowW = firstW + kActionPairGap + secondW;
+        float x = kV9TitleCenterX - rowW * 0.5f;
+
+        auto drawAction = [&](const std::string& glyph,
+                              const std::string& label,
+                              float glyphW,
+                              float labelW) {
+            const nxui::Vec2 glyphBase = glyphFont->measure(glyph);
+            const nxui::Vec2 labelBase = m_font->measure(label);
+            const float glyphH = glyphBase.y * kActionGlyphScale;
+            const float labelH = labelBase.y * kActionLabelScale;
+            const float rowH = std::max(glyphH, labelH);
+
+            ren.drawText(
+                glyph,
+                {x, kActionsRowY + (rowH - glyphH) * 0.5f},
+                glyphFont,
+                nxui::Color(0.98f, 1.f, 0.99f, 0.98f * m_opacity),
+                kActionGlyphScale
+            );
+            ren.drawText(
+                label,
+                {x + glyphW + kActionGap,
+                 kActionsRowY + (rowH - labelH) * 0.5f},
+                m_font,
+                nxui::Color(0.94f, 0.96f, 0.98f, 0.92f * m_opacity),
+                kActionLabelScale
+            );
+            x += glyphW + kActionGap + labelW;
+        };
+
+        drawAction(aGlyph, launch, aW, launchW);
+        x += kActionPairGap;
+        drawAction(yGlyph, move, yW, moveW);
+    }
 }
 
 nxui::Vec2 TitlePillWidget::computeContentSize() const {

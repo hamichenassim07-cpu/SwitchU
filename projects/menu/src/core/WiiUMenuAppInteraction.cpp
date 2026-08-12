@@ -677,8 +677,6 @@ void WiiUMenuApp::enterEditMode() {
     m_editMode = true;
     m_editSourceIndex = m_grid ? m_grid->focusedGlobalIndex() : -1;
     m_editHeldTitle = icon->title();
-    if (m_gameActionsHud)
-        m_gameActionsHud->setVisible(false);
     startEditGhost(icon);
     bindEditActions(icon);
     m_titlePill->setText(nxui::I18n::instance().tr("game.move_prefix", "Move: ") + m_editHeldTitle);
@@ -702,7 +700,7 @@ void WiiUMenuApp::exitEditMode() {
     if (isEditableIcon(cur)) {
         auto* icon = static_cast<GlossyIcon*>(cur);
         m_titlePill->setProfileOriginalMode(false);
-        if (m_gameActionsHud) m_gameActionsHud->setVisible(true);
+        m_titlePill->setGameActionsVisible(true);
         m_titlePill->setText(icon->title());
         m_titlePill->setVisible(true);
     } else {
@@ -953,11 +951,11 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
         if (wasGameFocused && m_grid->visibleCount() > 0 &&
             gridTarget && gridTarget->tag() == "glossy_icon") {
             auto* icon = static_cast<GlossyIcon*>(gridTarget);
-            if (m_gameActionsHud) m_gameActionsHud->setVisible(true);
+            m_titlePill->setGameActionsVisible(true);
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
         } else {
-            if (m_gameActionsHud) m_gameActionsHud->setVisible(false);
+            m_titlePill->setGameActionsVisible(false);
             m_titlePill->hideAnimated();
         }
     }
@@ -980,23 +978,19 @@ void WiiUMenuApp::wireFocusCallback() {
         m_titlePill->setGameActionsVisible(false);
     }
 
-    // V10.9: fixed action strip is a separate widget. It never inherits the
-    // dynamic title width or title animation geometry.
-    if (!m_gameActionsHud && m_contentLayer) {
-        m_gameActionsHud = std::make_shared<GameActionsHudWidget>();
-        m_gameActionsHud->setFont(&m_fontNormal);
-        m_gameActionsHud->setIconFont(&m_fontIcons);
-        m_gameActionsHud->setRect({0.f, 0.f, 1280.f, 720.f});
-        m_gameActionsHud->setVisible(false);
-        m_contentLayer->addChild(m_gameActionsHud);
-    }
+    // V10.11: keep separator + A/Y inside TitlePillWidget again for a more
+    // reliable render path. We keep the optional helper widget disabled.
 
-    // V10.9: dedicated white circular halo for Profile / Settings /
-    // Controllers. This bypasses SelectionCursor motion entirely.
-    if (!m_systemSelectionHalo && m_contentLayer) {
-        m_systemSelectionHalo = std::make_shared<CircularSelectionHaloWidget>();
-        m_systemSelectionHalo->setVisible(false);
-        m_contentLayer->addChild(m_systemSelectionHalo);
+    // V10.11: dedicated white circular halo for Profile / Settings /
+    // Controllers. Add it to the top-most available layer instead of creating
+    // it as a late temporary effect.
+    if (!m_systemSelectionHalo) {
+        auto haloHost = m_overlayLayer ? m_overlayLayer : m_contentLayer;
+        if (haloHost) {
+            m_systemSelectionHalo = std::make_shared<CircularSelectionHaloWidget>();
+            m_systemSelectionHalo->setVisible(false);
+            haloHost->addChild(m_systemSelectionHalo);
+        }
     }
 
     // V10.3: Album / Mii / Thèmes are first-class carousel entries. They use
@@ -1257,7 +1251,7 @@ void WiiUMenuApp::wireFocusCallback() {
             auto& i18n = nxui::I18n::instance();
 
             if (m_editMode) {
-                if (m_gameActionsHud) m_gameActionsHud->setVisible(false);
+                m_titlePill->setGameActionsVisible(false);
                 bindEditActions(icon);
                 m_editGhostTargetRect =
                     icon->focusRect();
@@ -1292,12 +1286,12 @@ void WiiUMenuApp::wireFocusCallback() {
             }
 
             if (icon->titleId() == 0) {
-                if (m_gameActionsHud) m_gameActionsHud->setVisible(false);
+                m_titlePill->setGameActionsVisible(false);
                 m_titlePill->hideAnimated();
                 return;
             }
 
-            if (m_gameActionsHud) m_gameActionsHud->setVisible(true);
+            m_titlePill->setGameActionsVisible(true);
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
         } else if (cur) {
@@ -1306,8 +1300,7 @@ void WiiUMenuApp::wireFocusCallback() {
             if (m_editMode)
                 exitEditMode();
             if (m_clock && cur == m_clock.get()) {
-                if (m_gameActionsHud)
-                    m_gameActionsHud->setVisible(false);
+                m_titlePill->setGameActionsVisible(false);
                 m_titlePill->hideAnimated();
                 return;
             }
@@ -1319,6 +1312,7 @@ void WiiUMenuApp::wireFocusCallback() {
                     if (m_profileTitlePill)
                         m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
                     if (btn.get() == m_sidebar.settingsButton()) {
+                        m_titlePill->setGameActionsVisible(true);
                         WaraWaraBackground::notifyCornerControlFocus(-1);
                         return;
                     }
@@ -1332,6 +1326,7 @@ void WiiUMenuApp::wireFocusCallback() {
                     if (m_profileTitlePill)
                         m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
                     if (btn.get() == m_sidebar.rightButtons().front().get()) {
+                        m_titlePill->setGameActionsVisible(true);
                         WaraWaraBackground::notifyCornerControlFocus(+1);
                         return;
                     }
@@ -1343,17 +1338,9 @@ void WiiUMenuApp::wireFocusCallback() {
             for (auto& avatar : m_userAvatarButtons) {
                 if (avatar.get() == cur) {
                     WaraWaraBackground::notifyCornerControlFocus(0);
-                    if (m_profileTitlePill) {
-                        const nxui::Rect pr = avatar->focusRect();
-                        const float centerX = pr.x + pr.width * 0.5f;
-                        m_profileTitlePill->setPosition(0.f, (pr.y + pr.height) + 7.f);
-                        // Original Switch U setText centres within the supplied
-                        // width. Supplying centerX*2 preserves that exact logic
-                        // while anchoring this dedicated instance below profile.
-                        m_profilePillAnchorWidth = centerX * 2.f;
-                        m_profileTitlePill->setText(avatar->nickname(), m_profilePillAnchorWidth);
-                        m_profileTitlePill->setVisible(true);
-                    }
+                    m_titlePill->setGameActionsVisible(true);
+                    if (m_profileTitlePill)
+                        m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
                     return;
                 }
             }
@@ -1368,8 +1355,7 @@ void WiiUMenuApp::wireFocusCallback() {
                 m_grid->setCarouselFocusActive(false);
             if (m_profileTitlePill)
                 m_profileTitlePill->hideAnimated(m_profilePillAnchorWidth);
-            if (m_gameActionsHud)
-                m_gameActionsHud->setVisible(false);
+            m_titlePill->setGameActionsVisible(false);
             m_titlePill->hideAnimated();
         }
     });
@@ -1742,8 +1728,7 @@ void WiiUMenuApp::wireGlobalActions() {
 
                 WaraWaraBackground::notifySelectedGame(tid);
                 if (m_titlePill) {
-                    if (m_gameActionsHud)
-                        m_gameActionsHud->setVisible(true);
+                    m_titlePill->setGameActionsVisible(true);
                     const int modelIndex = findTitleIndex(tid);
                     if (modelIndex >= 0)
                         m_titlePill->setText(m_model.at(modelIndex).title);

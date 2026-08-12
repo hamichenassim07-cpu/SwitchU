@@ -8,7 +8,7 @@ namespace {
 constexpr float kScreenCenterX = 640.f;
 constexpr float kSeparatorY = 596.f;
 constexpr float kSeparatorWidth = 364.f;
-constexpr float kSeparatorHeight = 2.2f;
+constexpr float kSeparatorHeight = 2.4f;
 constexpr float kActionsY = 622.f;
 constexpr float kActionLabelScale = 0.83f;
 constexpr float kActionGlyphScale = 0.97f;
@@ -49,7 +49,7 @@ void GameActionsHudWidget::onRender(nxui::Renderer& ren) {
          kSeparatorY,
          kSeparatorWidth,
          kSeparatorHeight},
-        nxui::Color(0.94f, 0.97f, 1.00f, 0.22f * m_opacity),
+        nxui::Color(0.94f, 0.97f, 1.00f, 0.30f * m_opacity),
         1.1f
     );
 
@@ -88,7 +88,7 @@ void GameActionsHudWidget::onRender(nxui::Renderer& ren) {
             glyph,
             {x, kActionsY + (rowH - glyphH) * 0.5f},
             glyphFont,
-            nxui::Color(0.98f, 1.f, 0.99f, 0.94f * m_opacity),
+            nxui::Color(0.98f, 1.f, 0.99f, 0.98f * m_opacity),
             kActionGlyphScale
         );
         ren.drawText(
@@ -96,7 +96,7 @@ void GameActionsHudWidget::onRender(nxui::Renderer& ren) {
             {x + glyphW + kActionGap,
              kActionsY + (rowH - labelH) * 0.5f},
             m_font,
-            nxui::Color(0.94f, 0.96f, 0.98f, 0.82f * m_opacity),
+            nxui::Color(0.94f, 0.96f, 0.98f, 0.92f * m_opacity),
             kActionLabelScale
         );
         x += glyphW + kActionGap + labelW;

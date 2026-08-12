@@ -131,6 +131,7 @@ private:
     bool m_snapActive = false;
     bool m_preserveScrollOnNextFocus = false;
     bool m_selectionBounceActive = false;
+    bool m_entryBouncePending = false;
     float m_selectionBounceTime = 0.f;
 
     // Stored as a global index into m_allIcons, not a filtered display slot.
