@@ -2287,8 +2287,18 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // V10.9: leave the artwork/video substantially brighter. The previous
     // full-screen dark veil is removed; readability is now provided by one
     // explicit lower block instead of globally dimming the media.
-    const nxui::Color lowerBase(0.032f, 0.034f, 0.041f, 1.f);
+    const nxui::Color lowerBase(0.030f, 0.032f, 0.039f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
+
+    // V10.12: brighten the media slightly after composition. The previous
+    // attempts mostly changed veils that were already gone; this explicit lift
+    // targets the actual composed background/video layer instead.
+    if (previewVisualAlpha > 0.001f) {
+        ren.drawRect(
+            area,
+            nxui::Color(1.f, 1.f, 1.f, 0.050f * previewVisualAlpha * baseAlpha)
+        );
+    }
 
     // The 310 px hero cover ends at y=512. A boundary at about y=435 places
     // roughly its lower quarter inside the dark zone while the upper area
@@ -2318,9 +2328,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         area,
         nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
-                    0.012f * baseAlpha),
+                    0.007f * baseAlpha),
         nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
-                    0.020f * baseAlpha)
+                    0.012f * baseAlpha)
     );
 
     // V10.3: TRUE GPU glow. The V10.1 circles were visible geometry with low
@@ -2384,12 +2394,12 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         {area.x, lowerStartY - fadeBand, area.width, fadeBand},
         lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(0.78f * baseAlpha)
+        lowerBase.withAlpha(0.62f * baseAlpha)
     );
     ren.drawRect(
         {area.x, lowerStartY,
          area.width, area.y + area.height - lowerStartY},
-        lowerBase.withAlpha(0.88f * baseAlpha)
+        lowerBase.withAlpha(0.84f * baseAlpha)
     );
 
     // V10.8: quiet anchor lights remain part of the scene at all times.

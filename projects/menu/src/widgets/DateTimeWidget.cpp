@@ -248,18 +248,32 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         kTabH
     };
 
-    // V10.10: elastic horizontal stretch. Instead of a simple pulse, the
-    // active white pill slightly squashes vertically and stretches in the
-    // direction of travel, like a soft bubble being pulled sideways.
-    const float pop = clamp01(m_homeTabPop);
+    // V10.12: the white pill must retract first, then recover to its base
+    // size with a slight elastic release. This reads more like a soft bubble
+    // being squeezed before it settles on the other tab.
     const float dir = (m_homeTabAnimTo >= m_homeTabAnimFrom) ? 1.f : -1.f;
-    const float rearPull = 8.f * pop;
-    const float leadStretch = 18.f * pop;
-    const float pinchY = 3.5f * pop;
-    activeRect.x -= (dir < 0.f ? leadStretch : rearPull);
-    activeRect.width += leadStretch + rearPull;
-    activeRect.y += pinchY * 0.5f;
-    activeRect.height -= pinchY;
+    const float uAnim = m_homeTabAnimating ? clamp01(m_homeTabAnimTime / kTabAnimDuration) : 1.f;
+    if (m_homeTabAnimating) {
+        if (uAnim < 0.32f) {
+            const float s = uAnim / 0.32f;
+            const float shrinkX = 16.f * s;
+            const float pinchY = 3.8f * s;
+            activeRect.x += shrinkX * 0.5f;
+            activeRect.width -= shrinkX;
+            activeRect.y += pinchY * 0.5f;
+            activeRect.height -= pinchY;
+        } else {
+            const float s = (uAnim - 0.32f) / 0.68f;
+            const float release = std::sin(kPi * std::min(1.f, s)) * (1.f - 0.10f * s);
+            const float rearPull = 4.f * release;
+            const float leadStretch = 14.f * release;
+            const float pinchY = 2.0f * release;
+            activeRect.x -= (dir < 0.f ? leadStretch : rearPull);
+            activeRect.width += leadStretch + rearPull;
+            activeRect.y += pinchY * 0.5f;
+            activeRect.height -= pinchY;
+        }
+    }
 
     // V10.4 C2: the whole category switch remains real refractive glass.
     // The active side adds a milky-white lens on top, so the current category
