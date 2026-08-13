@@ -2290,9 +2290,14 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     const nxui::Color lowerBase(0.030f, 0.032f, 0.039f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
-    // V10.15 diagnostic: no extra full-screen lift. Show the media as raw as
-    // possible so we can identify whether the remaining darkness comes from
-    // the source rendering itself or from HOME overlays.
+    // V10.16: keep a subtle dark filter over the background/video, but much
+    // lighter than before so the artwork remains clearly visible.
+    if (previewVisualAlpha > 0.001f) {
+        ren.drawRect(
+            area,
+            nxui::Color(0.f, 0.f, 0.f, 0.055f * previewVisualAlpha * baseAlpha)
+        );
+    }
 
     // The 310 px hero cover ends at y=512. A boundary at about y=435 places
     // roughly its lower quarter inside the dark zone while the upper area
@@ -2317,19 +2322,78 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     const float slowDriftY = std::cos(glowTime * 0.24f) * 32.f;
     const float glowBreath = 1.00f + 0.10f * std::sin(glowTime * 0.42f);
 
-    // V10.15 diagnostic: disable the colour wash entirely.
+    // A very light coloured wash reconnects the background to the current
+    // artwork colours without rebuilding the old heavy dark veil.
+    ren.drawGradientRect(
+        area,
+        nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
+                    0.0012f * baseAlpha),
+        nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
+                    0.0024f * baseAlpha)
+    );
 
-    // V10.15 diagnostic: main ambient carousel glow disabled.
+    bool realGlow = false;
+#ifdef NXUI_BACKEND_DEKO3D
+    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
+        constexpr float hs = 0.5f;
+        auto emitLightMass = [&](float cx, float cy,
+                                 const AmbientSwatch& c,
+                                 float strength,
+                                 float stretch) {
+            const nxui::Color hot(c.r, c.g, c.b, strength);
+            ren.drawCircle({cx * hs, cy * hs}, 112.f * hs * stretch, hot, 48);
+            ren.drawCircle({(cx - 92.f) * hs, (cy + 24.f) * hs},
+                           86.f * hs * stretch,
+                           nxui::Color(c.r, c.g, c.b, strength * 0.68f), 44);
+            ren.drawCircle({(cx + 102.f) * hs, (cy - 18.f) * hs},
+                           78.f * hs * stretch,
+                           nxui::Color(c.r, c.g, c.b, strength * 0.54f), 44);
+        };
 
-    // V10.15 diagnostic: keep only a simple opaque lower block so the bottom
-    // UI stays readable while removing nearly all decorative overlays.
+        emitLightMass(area.x + area.width * 0.35f + slowDriftX,
+                      area.y + area.height * 0.47f + slowDriftY,
+                      glowPrimary, 0.18f * glowBreath * baseAlpha, 1.18f);
+        emitLightMass(area.x + area.width * 0.67f - slowDriftX * 0.65f,
+                      area.y + area.height * 0.44f - slowDriftY * 0.55f,
+                      glowSecondary, 0.15f * glowBreath * baseAlpha, 1.12f);
+
+        endHomeGlowTargetV102(ren);
+        ren.applyBlur(4.1f, 2);
+        ren.drawOffscreen(
+            0,
+            {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
+            nxui::Color::white().withAlpha(0.28f * baseAlpha)
+        );
+        realGlow = true;
+    }
+#endif
+
+    if (!realGlow) {
+        ren.drawGradientRect(
+            {area.x, area.y + area.height * 0.24f,
+             area.width, area.height * 0.50f},
+            nxui::Color(glowPrimary.r, glowPrimary.g, glowPrimary.b,
+                        0.010f * baseAlpha),
+            nxui::Color(glowSecondary.r, glowSecondary.g, glowSecondary.b,
+                        0.014f * baseAlpha)
+        );
+    }
+
+    // Restore the lower opaque information block with a soft fade that links
+    // it back to the background without reintroducing a full-screen dark veil.
+    const float fadeBand = area.height * 0.14f;
+    ren.drawGradientRect(
+        {area.x, lowerStartY - fadeBand, area.width, fadeBand},
+        lowerBase.withAlpha(0.00f),
+        lowerBase.withAlpha(1.00f * baseAlpha)
+    );
     ren.drawRect(
         {area.x, lowerStartY,
          area.width, area.y + area.height - lowerStartY},
         lowerBase.withAlpha(1.00f * baseAlpha)
     );
 
-    // V10.15 diagnostic: no corner anchor glows.
+    // No lower corner glows in this pass.
 
     ren.flush();
 }
