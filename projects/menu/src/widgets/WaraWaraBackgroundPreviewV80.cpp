@@ -2339,60 +2339,47 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     ren.drawGradientRect(
         area,
         nxui::Color(conceptBlue.r, conceptBlue.g, conceptBlue.b,
-                    0.0032f * baseAlpha),
+                    0.0036f * baseAlpha),
         nxui::Color(conceptViolet.r, conceptViolet.g, conceptViolet.b,
-                    0.0058f * baseAlpha)
+                    0.0066f * baseAlpha)
     );
 
-    bool realGlow = false;
-#ifdef NXUI_BACKEND_DEKO3D
-    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
-        constexpr float hs = 0.5f;
-        auto emitMistMass = [&](float cx, float cy,
-                                const AmbientSwatch& c,
-                                float strength,
-                                float scale) {
-            ren.drawCircle({cx * hs, cy * hs}, 182.f * hs * scale,
-                           nxui::Color(c.r, c.g, c.b, strength), 56);
-            ren.drawCircle({(cx - 128.f) * hs, (cy + 14.f) * hs},
-                           154.f * hs * scale,
-                           nxui::Color(c.r, c.g, c.b, strength * 0.72f), 52);
-            ren.drawCircle({(cx + 142.f) * hs, (cy - 18.f) * hs},
-                           138.f * hs * scale,
-                           nxui::Color(c.r, c.g, c.b, strength * 0.58f), 52);
-            ren.drawCircle({cx * hs, (cy - 86.f) * hs},
-                           118.f * hs * scale,
-                           nxui::Color(c.r, c.g, c.b, strength * 0.42f), 48);
-        };
+    // V10.18.2: dissociate the glow from the offscreen pass that was making
+    // the whole scene look darker. Build the ambience directly on the main
+    // layer using large, very soft colour masses.
+    auto emitSoftMist = [&](float cx, float cy,
+                            const AmbientSwatch& c,
+                            float strength,
+                            float scale) {
+        ren.drawCircle({cx, cy}, 214.f * scale,
+                       nxui::Color(c.r, c.g, c.b, strength), 64);
+        ren.drawCircle({cx - 146.f * scale, cy + 18.f * scale}, 176.f * scale,
+                       nxui::Color(c.r, c.g, c.b, strength * 0.78f), 60);
+        ren.drawCircle({cx + 152.f * scale, cy - 22.f * scale}, 162.f * scale,
+                       nxui::Color(c.r, c.g, c.b, strength * 0.66f), 60);
+        ren.drawCircle({cx, cy - 102.f * scale}, 138.f * scale,
+                       nxui::Color(c.r, c.g, c.b, strength * 0.54f), 56);
+        ren.drawCircle({cx - 58.f * scale, cy + 76.f * scale}, 124.f * scale,
+                       nxui::Color(c.r, c.g, c.b, strength * 0.40f), 54);
+    };
 
-        emitMistMass(area.x + area.width * 0.39f + slowDriftX * 0.75f,
-                     area.y + area.height * 0.47f + slowDriftY * 0.40f,
-                     conceptBlue, 0.34f * glowBreath * baseAlpha, 1.28f);
-        emitMistMass(area.x + area.width * 0.64f - slowDriftX * 0.55f,
-                     area.y + area.height * 0.45f - slowDriftY * 0.32f,
-                     conceptViolet, 0.30f * glowBreath * baseAlpha, 1.24f);
+    emitSoftMist(area.x + area.width * 0.39f + slowDriftX * 0.90f,
+                 area.y + area.height * 0.47f + slowDriftY * 0.42f,
+                 conceptBlue, 0.085f * glowBreath * baseAlpha, 1.18f);
+    emitSoftMist(area.x + area.width * 0.64f - slowDriftX * 0.62f,
+                 area.y + area.height * 0.45f - slowDriftY * 0.34f,
+                 conceptViolet, 0.078f * glowBreath * baseAlpha, 1.14f);
 
-        endHomeGlowTargetV102(ren);
-        ren.applyBlur(5.2f, 2);
-        ren.drawOffscreen(
-            0,
-            {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.58f * baseAlpha)
-        );
-        realGlow = true;
-    }
-#endif
-
-    if (!realGlow) {
-        ren.drawGradientRect(
-            {area.x, area.y + area.height * 0.20f,
-             area.width, area.height * 0.56f},
-            nxui::Color(conceptBlue.r, conceptBlue.g, conceptBlue.b,
-                        0.040f * baseAlpha),
-            nxui::Color(conceptViolet.r, conceptViolet.g, conceptViolet.b,
-                        0.054f * baseAlpha)
-        );
-    }
+    // Add a very soft horizontal colour bed so the mist connects across the
+    // carousel instead of reading as isolated circles.
+    ren.drawGradientRect(
+        {area.x + area.width * 0.14f, area.y + area.height * 0.26f,
+         area.width * 0.72f, area.height * 0.34f},
+        nxui::Color(conceptBlue.r, conceptBlue.g, conceptBlue.b,
+                    0.028f * baseAlpha),
+        nxui::Color(conceptViolet.r, conceptViolet.g, conceptViolet.b,
+                    0.034f * baseAlpha)
+    );
 
     // Restore the lower opaque information block with a soft fade that links
     // it back to the background without reintroducing a full-screen dark veil.
@@ -2408,49 +2395,24 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         lowerBase.withAlpha(1.00f * baseAlpha)
     );
 
-    // V10.18: corner anchors should feel like light emerging from the bottom
-    // corners, not halos centered on the Settings / Controllers buttons.
-#ifdef NXUI_BACKEND_DEKO3D
-    bool realCornerGlow = false;
-    if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
-        constexpr float hs = 0.5f;
-        auto emitCornerSpill = [&](bool right) {
-            const float dir = right ? -1.f : 1.f;
-            const float edgeX = right ? area.right() + 56.f : area.x - 56.f;
-            const float edgeY = (area.y + area.height) + 40.f;
-            const AmbientSwatch greyA{0.54f, 0.56f, 0.62f};
-            const AmbientSwatch greyB{0.35f, 0.37f, 0.43f};
+    // V10.18.2: direct corner glows only. This keeps the effect visible while
+    // avoiding the darkening side-effects of the offscreen glow path.
+    auto emitCornerDirect = [&](bool right) {
+        const float dir = right ? -1.f : 1.f;
+        const float edgeX = right ? area.right() + 56.f : area.x - 56.f;
+        const float edgeY = (area.y + area.height) + 38.f;
+        const AmbientSwatch greyA{0.56f, 0.58f, 0.64f};
+        const AmbientSwatch greyB{0.38f, 0.40f, 0.46f};
 
-            ren.drawCircle({edgeX * hs, edgeY * hs}, 226.f * hs,
-                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.28f * baseAlpha), 60);
-            ren.drawCircle({(edgeX + dir * 100.f) * hs, (edgeY - 44.f) * hs}, 184.f * hs,
-                           nxui::Color(greyA.r, greyA.g, greyA.b, 0.18f * baseAlpha), 56);
-            ren.drawCircle({(edgeX + dir * 194.f) * hs, (edgeY - 90.f) * hs}, 144.f * hs,
-                           nxui::Color(greyB.r, greyB.g, greyB.b, 0.12f * baseAlpha), 52);
-        };
-        emitCornerSpill(false);
-        emitCornerSpill(true);
-        endHomeGlowTargetV102(ren);
-        ren.applyBlur(5.2f, 2);
-        ren.drawOffscreen(
-            0,
-            {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            nxui::Color::white().withAlpha(0.46f * baseAlpha)
-        );
-        realCornerGlow = true;
-    }
-    if (!realCornerGlow) {
-        ren.drawCircle({area.x - 52.f, (area.y + area.height) + 34.f},
-                       238.f, nxui::Color(0.52f, 0.54f, 0.60f, 0.18f * baseAlpha), 60);
-        ren.drawCircle({area.right() + 52.f, (area.y + area.height) + 34.f},
-                       238.f, nxui::Color(0.52f, 0.54f, 0.60f, 0.18f * baseAlpha), 60);
-    }
-#else
-    ren.drawCircle({area.x - 52.f, (area.y + area.height) + 34.f},
-                   238.f, nxui::Color(0.52f, 0.54f, 0.60f, 0.18f * baseAlpha), 60);
-    ren.drawCircle({area.right() + 52.f, (area.y + area.height) + 34.f},
-                   238.f, nxui::Color(0.52f, 0.54f, 0.60f, 0.18f * baseAlpha), 60);
-#endif
+        ren.drawCircle({edgeX, edgeY}, 244.f,
+                       nxui::Color(greyA.r, greyA.g, greyA.b, 0.11f * baseAlpha), 64);
+        ren.drawCircle({edgeX + dir * 106.f, edgeY - 42.f}, 196.f,
+                       nxui::Color(greyA.r, greyA.g, greyA.b, 0.085f * baseAlpha), 60);
+        ren.drawCircle({edgeX + dir * 200.f, edgeY - 92.f}, 154.f,
+                       nxui::Color(greyB.r, greyB.g, greyB.b, 0.060f * baseAlpha), 56);
+    };
+    emitCornerDirect(false);
+    emitCornerDirect(true);
 
     ren.flush();
 }
