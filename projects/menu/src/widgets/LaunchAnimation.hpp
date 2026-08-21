@@ -36,14 +36,15 @@ private:
     bool  m_playing  = false;
     float m_timer    = 0.f;
 
-    // V10.21: faster flip than V10.20 while keeping the full object readable.
-    static constexpr float kFormDur        = 0.22f;
-    static constexpr float kSpinDur        = 0.54f;
-    static constexpr float kSettleDur      = 0.12f;
-    static constexpr float kInsertDur      = 0.56f;
-    static constexpr float kWipeDur        = 0.34f;
+    // V10.22: restore the more readable V10.20 pacing while keeping the
+    // improved physical cartridge detailing.
+    static constexpr float kFormDur        = 0.28f;
+    static constexpr float kSpinDur        = 0.92f;
+    static constexpr float kSettleDur      = 0.18f;
+    static constexpr float kInsertDur      = 0.62f;
+    static constexpr float kWipeDur        = 0.26f;
     static constexpr float kBlackHoldDur   = 0.14f;
-    static constexpr float kPostLaunchBlackHold = 0.22f;
+    static constexpr float kPostLaunchBlackHold = 0.24f;
 
     static constexpr float kSpinStart      = kFormDur;
     static constexpr float kSettleStart    = kSpinStart + kSpinDur;
@@ -52,9 +53,10 @@ private:
     static constexpr float kLaunchMoment   = kWipeStart + kWipeDur;
     static constexpr float kTotalDur       = kLaunchMoment + kBlackHoldDur;
 
-    // Lower title/actions clear the insertion path before the cartridge drops.
-    static constexpr float kHudExitStart   = kSpinStart + kSpinDur * 0.46f;
-    static constexpr float kHudExitDur     = 0.28f;
+    // Lower title/actions leave relatively late like V10.20, but still finish
+    // before the cartridge reaches the insertion slot.
+    static constexpr float kHudExitStart   = kSpinStart + kSpinDur * 0.70f;
+    static constexpr float kHudExitDur     = 0.34f;
 
     nxui::Rect     m_from;
     nxui::Rect     m_target;
