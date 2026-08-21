@@ -49,17 +49,17 @@ float easeOutCubic(float v) {
     return 1.f - q * q * q;
 }
 
-float lerp(float a, float b, float t) {
+float lerpV10211(float a, float b, float t) {
     return a + (b - a) * t;
 }
 
 nxui::Color mixColor(const nxui::Color& a, const nxui::Color& b, float t) {
     t = clamp01(t);
     return {
-        lerp(a.r, b.r, t),
-        lerp(a.g, b.g, t),
-        lerp(a.b, b.b, t),
-        lerp(a.a, b.a, t)
+        lerpV10211(a.r, b.r, t),
+        lerpV10211(a.g, b.g, t),
+        lerpV10211(a.b, b.b, t),
+        lerpV10211(a.a, b.a, t)
     };
 }
 
@@ -649,13 +649,13 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
 
     if (m_timer < kSpinStart) {
         const float p = easeOutCubic(m_timer / kFormDur);
-        centerX = lerp(startCx, targetCx, p);
-        centerY = lerp(startCy, targetCy, p) - std::sin(clamp01(m_timer / kFormDur) * kPi) * 10.f;
-        cardW = lerp(m_from.width, m_target.width, p);
-        cardH = lerp(m_from.height, m_target.height, p);
-        depth = lerp(1.f, 15.f, p);
-        radius = lerp(m_cornerRadius, 10.f, p);
-        artworkInset = lerp(8.f, 10.f, p);
+        centerX = lerpV10211(startCx, targetCx, p);
+        centerY = lerpV10211(startCy, targetCy, p) - std::sin(clamp01(m_timer / kFormDur) * kPi) * 10.f;
+        cardW = lerpV10211(m_from.width, m_target.width, p);
+        cardH = lerpV10211(m_from.height, m_target.height, p);
+        depth = lerpV10211(1.f, 15.f, p);
+        radius = lerpV10211(m_cornerRadius, 10.f, p);
+        artworkInset = lerpV10211(8.f, 10.f, p);
         scale = 1.f + 0.025f * std::sin(clamp01(m_timer / kFormDur) * kPi);
     } else if (m_timer < kSettleStart) {
         const float raw = (m_timer - kSpinStart) / kSpinDur;
@@ -673,19 +673,19 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
     } else if (m_timer < kInsertStart) {
         const float p = smooth01((m_timer - kSettleStart) / kSettleDur);
         centerX = targetCx;
-        centerY = lerp(targetCy - 2.f, targetCy, p);
+        centerY = lerpV10211(targetCy - 2.f, targetCy, p);
         cardW = m_target.width;
         cardH = m_target.height;
         depth = 15.f;
         radius = 10.f;
         artworkInset = 10.f;
         rotY = kTwoPi;
-        rotX = lerp(-0.018f, 0.f, p);
+        rotX = lerpV10211(-0.018f, 0.f, p);
     } else {
         const float insertRaw = clamp01((m_timer - kInsertStart) / kInsertDur);
         const float p = insertRaw * insertRaw;
         centerX = targetCx;
-        centerY = lerp(targetCy, kSlotY + m_target.height * 0.72f, p);
+        centerY = lerpV10211(targetCy, kSlotY + m_target.height * 0.72f, p);
         cardW = m_target.width;
         cardH = m_target.height;
         depth = 15.f;
@@ -693,7 +693,7 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
         artworkInset = 10.f;
         rotY = kTwoPi;
         rotX = 0.035f * p;
-        scale = lerp(1.f, 0.965f, p);
+        scale = lerpV10211(1.f, 0.965f, p);
     }
 
     const bool inserting = m_timer >= kInsertStart;
@@ -764,7 +764,7 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
         const float raw = clamp01((m_timer - kWipeStart) / kWipeDur);
         const float p = easeOutCubic(raw);
         const nxui::Vec2 wipeCenter{kScreenW * 0.5f, kSlotY + 5.f};
-        const float radiusWipe = lerp(8.f, 1040.f, p);
+        const float radiusWipe = lerpV10211(8.f, 1040.f, p);
         const float rimAlpha = (1.f - raw) * 0.16f;
 
         ren.drawCircle(
