@@ -36,27 +36,25 @@ private:
     bool  m_playing  = false;
     float m_timer    = 0.f;
 
-    // First prototype deliberately leaves generous time so the motion can be
-    // judged on real hardware before tightening the rhythm.
-    static constexpr float kFormDur        = 0.28f;
-    static constexpr float kSpinDur        = 0.92f;
-    static constexpr float kSettleDur      = 0.18f;
-    static constexpr float kInsertDur      = 0.62f;
-    static constexpr float kBlackDur       = 0.28f;
+    // V10.21: faster flip than V10.20 while keeping the full object readable.
+    static constexpr float kFormDur        = 0.22f;
+    static constexpr float kSpinDur        = 0.54f;
+    static constexpr float kSettleDur      = 0.12f;
+    static constexpr float kInsertDur      = 0.56f;
+    static constexpr float kWipeDur        = 0.34f;
     static constexpr float kBlackHoldDur   = 0.14f;
-    static constexpr float kPostLaunchBlackHold = 0.24f;
+    static constexpr float kPostLaunchBlackHold = 0.22f;
 
     static constexpr float kSpinStart      = kFormDur;
     static constexpr float kSettleStart    = kSpinStart + kSpinDur;
     static constexpr float kInsertStart    = kSettleStart + kSettleDur;
-    static constexpr float kBlackStart     = kInsertStart + kInsertDur;
-    static constexpr float kLaunchMoment   = kBlackStart + kBlackDur;
+    static constexpr float kWipeStart      = kInsertStart + kInsertDur;
+    static constexpr float kLaunchMoment   = kWipeStart + kWipeDur;
     static constexpr float kTotalDur       = kLaunchMoment + kBlackHoldDur;
 
-    // Bottom HUD begins leaving near the last quarter of the spin and is fully
-    // gone before the physical insertion begins.
-    static constexpr float kHudExitStart   = kSpinStart + kSpinDur * 0.72f;
-    static constexpr float kHudExitDur     = 0.34f;
+    // Lower title/actions clear the insertion path before the cartridge drops.
+    static constexpr float kHudExitStart   = kSpinStart + kSpinDur * 0.46f;
+    static constexpr float kHudExitDur     = 0.28f;
 
     nxui::Rect     m_from;
     nxui::Rect     m_target;
@@ -71,6 +69,7 @@ private:
     bool           m_launched = false;
     bool           m_doneCalled = false;
     bool           m_postLaunchHold = false;
+    bool           m_insertSfxPlayed = false;
 
     static LaunchAnimation* s_activeInstance;
 };

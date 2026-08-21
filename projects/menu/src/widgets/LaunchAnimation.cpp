@@ -1,5 +1,6 @@
 #include "LaunchAnimation.hpp"
 #include <nxui/core/Renderer.hpp>
+#include "../core/AudioManager.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -12,7 +13,9 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kTwoPi = kPi * 2.f;
 constexpr float kScreenW = 1280.f;
 constexpr float kScreenH = 720.f;
-constexpr float kSlotY = 665.f;
+constexpr float kSlotY = 662.f;
+constexpr const char* kInsertSfxId = "launch_insert_v1021";
+bool gInsertSfxLoaded = false;
 
 struct V3 {
     float x = 0.f;
@@ -184,6 +187,57 @@ void drawTexturedFan(nxui::Renderer& ren,
     }
 }
 
+std::vector<V3> switchCardOutline(float width, float height, float z) {
+    const float hx = width * 0.5f;
+    const float hy = height * 0.5f;
+    // Switch-card-inspired moulded silhouette: clipped corners rather than a
+    // generic rounded glass rectangle. The asymmetry is deliberately subtle.
+    return {
+        {-hx + 18.f, -hy,        z},
+        { hx - 16.f, -hy,        z},
+        { hx,        -hy + 16.f, z},
+        { hx,         hy - 13.f, z},
+        { hx - 13.f,  hy,        z},
+        {-hx + 15.f,  hy,        z},
+        {-hx,         hy - 15.f, z},
+        {-hx,        -hy + 18.f, z},
+    };
+}
+
+void drawProjectedQuad(nxui::Renderer& ren,
+                       const V3& a,
+                       const V3& b,
+                       const V3& c,
+                       const V3& d,
+                       float centerX,
+                       float centerY,
+                       float rotY,
+                       float rotX,
+                       float scale,
+                       const nxui::Color& color) {
+    const auto pa = projectPoint(a, centerX, centerY, rotY, rotX, scale);
+    const auto pb = projectPoint(b, centerX, centerY, rotY, rotX, scale);
+    const auto pc = projectPoint(c, centerX, centerY, rotY, rotX, scale);
+    const auto pd = projectPoint(d, centerX, centerY, rotY, rotX, scale);
+    ren.drawTriangle(pa.p, pb.p, pc.p, color);
+    ren.drawTriangle(pa.p, pc.p, pd.p, color);
+}
+
+void drawProjectedLine(nxui::Renderer& ren,
+                       const V3& a,
+                       const V3& b,
+                       float centerX,
+                       float centerY,
+                       float rotY,
+                       float rotX,
+                       float scale,
+                       const nxui::Color& color,
+                       float thickness) {
+    const auto pa = projectPoint(a, centerX, centerY, rotY, rotX, scale);
+    const auto pb = projectPoint(b, centerX, centerY, rotY, rotX, scale);
+    ren.drawLine(pa.p, pb.p, color, thickness);
+}
+
 void drawCard3D(nxui::Renderer& ren,
                 const nxui::Texture* tex,
                 float centerX,
@@ -199,31 +253,34 @@ void drawCard3D(nxui::Renderer& ren,
                 const nxui::Color& panelColor,
                 const nxui::Color& borderColor,
                 float alpha) {
+    (void)radius;
+    (void)artworkInset;
     alpha = clamp01(alpha);
     if (alpha <= 0.001f || width <= 1.f || height <= 1.f)
         return;
 
     const float halfD = depth * 0.5f;
-    const auto frontModel = roundedOutline(width, height, radius, -halfD);
-    const auto backModel  = roundedOutline(width, height, radius,  halfD);
+    const auto frontModel = switchCardOutline(width, height, -halfD);
+    const auto backModel  = switchCardOutline(width, height,  halfD);
     const auto front = projectOutline(frontModel, centerX, centerY, rotY, rotX, scale);
     const auto back  = projectOutline(backModel, centerX, centerY, rotY, rotX, scale);
     const Projected frontCenter = projectPoint({0.f, 0.f, -halfD}, centerX, centerY, rotY, rotX, scale);
     const Projected backCenter  = projectPoint({0.f, 0.f,  halfD}, centerX, centerY, rotY, rotX, scale);
 
-    const nxui::Color darkBase{
-        std::clamp(panelColor.r * 0.40f, 0.025f, 0.24f),
-        std::clamp(panelColor.g * 0.43f, 0.028f, 0.26f),
-        std::clamp(panelColor.b * 0.50f, 0.035f, 0.30f),
-        0.985f * alpha
+    // Dense graphite plastic, with directional highlights rather than a flat
+    // black frame. The front is slightly lighter than the rear shell.
+    const float lightFacing = 0.5f + 0.5f * std::cos(rotY);
+    const nxui::Color frontBody{
+        0.040f + 0.020f * lightFacing,
+        0.043f + 0.021f * lightFacing,
+        0.050f + 0.024f * lightFacing,
+        0.995f * alpha
     };
-    const nxui::Color frontBody = mixColor(darkBase, panelColor.withAlpha(1.f), 0.22f)
-                                      .withAlpha(0.99f * alpha);
     const nxui::Color backBody{
-        0.055f, 0.060f, 0.078f, 0.995f * alpha
+        0.027f, 0.030f, 0.035f, 0.998f * alpha
     };
     const nxui::Color sideBase{
-        0.025f, 0.030f, 0.043f, 0.99f * alpha
+        0.020f, 0.022f, 0.027f, 0.995f * alpha
     };
 
     std::vector<SideQuad> sides;
@@ -233,78 +290,203 @@ void drawCard3D(nxui::Renderer& ren,
         SideQuad q;
         q.p = {front[i], front[j], back[j], back[i]};
         q.z = (front[i].z + front[j].z + back[j].z + back[i].z) * 0.25f;
-        const float edgeLight = 0.5f + 0.5f * std::cos(static_cast<float>(i) * 0.55f + rotY);
-        q.color = mixColor(sideBase,
-                           nxui::Color(0.12f, 0.14f, 0.19f, 0.99f * alpha),
-                           0.24f * edgeLight);
+        const float edgeLight =
+            0.5f + 0.5f * std::cos(static_cast<float>(i) * 0.82f + rotY);
+        q.color = mixColor(
+            sideBase,
+            nxui::Color(0.115f, 0.122f, 0.140f, 0.995f * alpha),
+            0.46f * edgeLight
+        );
         sides.push_back(q);
     }
     std::sort(sides.begin(), sides.end(), [](const SideQuad& a, const SideQuad& b) {
-        return a.z > b.z; // farther first (positive z is farther from camera)
+        return a.z > b.z;
     });
 
     const float frontDepth = averageDepth(front);
     const float backDepth = averageDepth(back);
     const bool frontNear = frontDepth < backDepth;
 
+    auto drawShellTexture = [&](float z, bool backFace) {
+        // Fine moulding ribs / plastic grain. These are true projected 3D
+        // lines on the physical shell, not a screen-space overlay.
+        const nxui::Color dark =
+            nxui::Color(0.005f, 0.006f, 0.008f, 0.22f * alpha);
+        const nxui::Color light =
+            nxui::Color(0.30f, 0.33f, 0.38f, 0.045f * alpha);
+        const float usableW = width * 0.80f;
+        const float usableH = height * 0.72f;
+        for (int i = -3; i <= 3; ++i) {
+            const float y = i * usableH / 8.f + (backFace ? -3.f : 3.f);
+            drawProjectedLine(
+                ren,
+                {-usableW * 0.5f, y, z},
+                { usableW * 0.5f, y + 3.f, z},
+                centerX, centerY, rotY, rotX, scale,
+                (i & 1) ? dark : light,
+                0.65f
+            );
+        }
+    };
+
     auto drawFront = [&]() {
         drawSolidFan(ren, front, frontCenter, frontBody);
+        drawShellTexture(-halfD - 0.18f, false);
 
-        const float inset = std::clamp(artworkInset, 0.f, std::min(width, height) * 0.20f);
-        const float artW = std::max(8.f, width - inset * 2.f);
-        const float artH = std::max(8.f, height - inset * 2.f);
-        const float artR = std::max(2.f, radius - inset * 0.62f);
-        const float artZ = -halfD - 0.8f;
-        const auto artModel = roundedOutline(artW, artH, artR, artZ);
-        const auto art = projectOutline(artModel, centerX, centerY, rotY, rotX, scale);
-        const Projected artCenter = projectPoint({0.f, 0.f, artZ}, centerX, centerY, rotY, rotX, scale);
+        // Front label bed.
+        const float labelZ = -halfD - 0.65f;
+        const float labelW = width * 0.80f;
+        const float labelH = height * 0.80f;
+        const float labelR = 9.f;
+        const auto labelModel = roundedOutline(labelW, labelH, labelR, labelZ, 5);
+        const auto labelProj = projectOutline(labelModel, centerX, centerY, rotY, rotX, scale);
+        const auto labelCenter = projectPoint({0.f, 0.f, labelZ}, centerX, centerY, rotY, rotX, scale);
+        drawSolidFan(
+            ren, labelProj, labelCenter,
+            nxui::Color(0.018f, 0.020f, 0.025f, 0.97f * alpha)
+        );
+
+        // Keep the source square artwork undistorted within the physical label.
+        const float artSide = std::min(labelW * 0.86f, labelH * 0.91f);
+        const float artZ = labelZ - 0.35f;
+        const auto artModel = roundedOutline(artSide, artSide, 7.f, artZ, 5);
+        const auto artProj = projectOutline(artModel, centerX, centerY, rotY, rotX, scale);
+        const auto artCenter = projectPoint({0.f, 0.f, artZ}, centerX, centerY, rotY, rotX, scale);
 
         if (tex && tex->valid()) {
-            drawTexturedFan(ren,
-                            tex->descriptorSlot(),
-                            artModel,
-                            art,
-                            artCenter,
-                            artW,
-                            artH,
-                            nxui::Color::white().withAlpha(alpha));
+            drawTexturedFan(
+                ren,
+                tex->descriptorSlot(),
+                artModel,
+                artProj,
+                artCenter,
+                artSide,
+                artSide,
+                nxui::Color::white().withAlpha(alpha)
+            );
         } else {
-            drawSolidFan(ren, art, artCenter,
-                         nxui::Color(0.18f, 0.22f, 0.30f, 0.96f * alpha));
+            drawSolidFan(
+                ren, artProj, artCenter,
+                nxui::Color(0.16f, 0.18f, 0.22f, 0.96f * alpha)
+            );
         }
 
-        // Thin physical lip around the artwork; this remains part of the 3D
-        // front face, not a 2D fake rotation.
-        const nxui::Color lip = borderColor.withAlpha(std::max(0.16f, borderColor.a) * 0.72f * alpha);
-        for (size_t i = 0; i < art.size(); ++i) {
-            const auto& a = art[i].p;
-            const auto& b = art[(i + 1) % art.size()].p;
-            ren.drawLine(a, b, lip, 1.1f);
-        }
+        // Moulded label lip and plastic highlight.
+        const nxui::Color lip =
+            borderColor.withAlpha(std::max(0.12f, borderColor.a) * 0.42f * alpha);
+        for (size_t i = 0; i < labelProj.size(); ++i)
+            ren.drawLine(labelProj[i].p, labelProj[(i + 1) % labelProj.size()].p, lip, 1.05f);
+
+        drawProjectedLine(
+            ren,
+            {-width * 0.39f, -height * 0.42f, -halfD - 0.28f},
+            { width * 0.34f, -height * 0.42f, -halfD - 0.28f},
+            centerX, centerY, rotY, rotX, scale,
+            nxui::Color(0.55f, 0.58f, 0.64f, 0.10f * alpha),
+            1.0f
+        );
     };
 
     auto drawBack = [&]() {
         drawSolidFan(ren, back, backCenter, backBody);
+        drawShellTexture(halfD + 0.12f, true);
 
-        // A restrained inset gives the rear surface a recognisable physical
-        // identity without copying a Nintendo cartridge design.
-        const float insetW = width * 0.66f;
-        const float insetH = height * 0.58f;
-        const float insetR = std::max(5.f, radius * 0.68f);
-        const float backZ = halfD + 0.7f;
-        const auto insetModel = roundedOutline(insetW, insetH, insetR, backZ);
-        const auto insetProj = projectOutline(insetModel, centerX, centerY, rotY, rotX, scale);
-        const Projected insetCenter = projectPoint({0.f, 0.f, backZ}, centerX, centerY, rotY, rotX, scale);
-        drawSolidFan(ren, insetProj, insetCenter,
-                     nxui::Color(0.095f, 0.105f, 0.135f, 0.92f * alpha));
+        const float surfaceZ = halfD + 0.72f;
 
-        const float markW = width * 0.22f;
-        const float markH = std::max(12.f, height * 0.055f);
-        const auto markModel = roundedOutline(markW, markH, markH * 0.5f, backZ + 0.3f, 3);
-        const auto markProj = projectOutline(markModel, centerX, centerY, rotY, rotX, scale);
-        const Projected markCenter = projectPoint({0.f, 0.f, backZ + 0.3f}, centerX, centerY, rotY, rotX, scale);
-        drawSolidFan(ren, markProj, markCenter,
-                     nxui::Color(0.52f, 0.58f, 0.72f, 0.24f * alpha));
+        // Rear recessed PCB/contact bay.
+        const float bayW = width * 0.76f;
+        const float bayH = height * 0.60f;
+        const float bayTop = -height * 0.11f;
+        const float bayBottom = bayTop + bayH;
+        drawProjectedQuad(
+            ren,
+            {-bayW * 0.5f, bayTop,    surfaceZ},
+            { bayW * 0.5f, bayTop,    surfaceZ},
+            { bayW * 0.5f, bayBottom, surfaceZ},
+            {-bayW * 0.5f, bayBottom, surfaceZ},
+            centerX, centerY, rotY, rotX, scale,
+            nxui::Color(0.020f, 0.090f, 0.067f, 0.94f * alpha)
+        );
+
+        // Subtle PCB traces.
+        const nxui::Color trace{0.57f, 0.43f, 0.14f, 0.30f * alpha};
+        constexpr int contactCount = 8;
+        const float contactsW = bayW * 0.82f;
+        const float gap = contactsW / static_cast<float>(contactCount);
+        const float padW = gap * 0.58f;
+        const float padTop = height * 0.10f;
+        const float padBottom = height * 0.39f;
+
+        for (int i = 0; i < contactCount; ++i) {
+            const float cx = -contactsW * 0.5f + gap * (i + 0.5f);
+            const float traceEndY = -height * (0.06f + 0.015f * (i % 3));
+            drawProjectedLine(
+                ren,
+                {cx, padTop - 2.f, surfaceZ + 0.10f},
+                {cx + (i - 3.5f) * 2.0f, traceEndY, surfaceZ + 0.10f},
+                centerX, centerY, rotY, rotX, scale,
+                trace,
+                1.05f
+            );
+
+            // Gold contacts with a darker copper base and a narrow specular strip.
+            const float x0 = cx - padW * 0.5f;
+            const float x1 = cx + padW * 0.5f;
+            drawProjectedQuad(
+                ren,
+                {x0, padTop,    surfaceZ + 0.28f},
+                {x1, padTop,    surfaceZ + 0.28f},
+                {x1, padBottom, surfaceZ + 0.28f},
+                {x0, padBottom, surfaceZ + 0.28f},
+                centerX, centerY, rotY, rotX, scale,
+                nxui::Color(0.74f, 0.49f, 0.10f, 0.98f * alpha)
+            );
+            drawProjectedQuad(
+                ren,
+                {x0 + padW * 0.16f, padTop + 3.f, surfaceZ + 0.34f},
+                {x0 + padW * 0.36f, padTop + 3.f, surfaceZ + 0.34f},
+                {x0 + padW * 0.36f, padBottom - 3.f, surfaceZ + 0.34f},
+                {x0 + padW * 0.16f, padBottom - 3.f, surfaceZ + 0.34f},
+                centerX, centerY, rotY, rotX, scale,
+                nxui::Color(1.00f, 0.82f, 0.31f, 0.64f * alpha)
+            );
+        }
+
+        // Small ICs and solder pads suggest the internal board while staying
+        // restrained enough to read as a cartridge at normal HOME distance.
+        drawProjectedQuad(
+            ren,
+            {-width * 0.14f, -height * 0.22f, surfaceZ + 0.18f},
+            { width * 0.02f, -height * 0.22f, surfaceZ + 0.18f},
+            { width * 0.02f, -height * 0.11f, surfaceZ + 0.18f},
+            {-width * 0.14f, -height * 0.11f, surfaceZ + 0.18f},
+            centerX, centerY, rotY, rotX, scale,
+            nxui::Color(0.010f, 0.014f, 0.015f, 0.95f * alpha)
+        );
+        drawProjectedQuad(
+            ren,
+            { width * 0.07f, -height * 0.20f, surfaceZ + 0.18f},
+            { width * 0.18f, -height * 0.20f, surfaceZ + 0.18f},
+            { width * 0.18f, -height * 0.12f, surfaceZ + 0.18f},
+            { width * 0.07f, -height * 0.12f, surfaceZ + 0.18f},
+            centerX, centerY, rotY, rotX, scale,
+            nxui::Color(0.015f, 0.020f, 0.020f, 0.92f * alpha)
+        );
+
+        // Moulded ribs around the contact bay.
+        const nxui::Color rib{0.23f, 0.25f, 0.29f, 0.12f * alpha};
+        drawProjectedLine(
+            ren,
+            {-bayW * 0.5f - 8.f, bayTop - 7.f, surfaceZ},
+            { bayW * 0.5f + 8.f, bayTop - 7.f, surfaceZ},
+            centerX, centerY, rotY, rotX, scale, rib, 1.2f
+        );
+        drawProjectedLine(
+            ren,
+            {-bayW * 0.5f - 8.f, bayBottom + 7.f, surfaceZ},
+            { bayW * 0.5f + 8.f, bayBottom + 7.f, surfaceZ},
+            centerX, centerY, rotY, rotX, scale, rib, 1.2f
+        );
     };
 
     auto drawSides = [&]() {
@@ -346,18 +528,30 @@ void LaunchAnimation::start(const nxui::Rect& from, const nxui::Texture* tex, fl
     m_doneCalled   = false;
     m_postLaunchHold = false;
 
-    // The selected HOME cover is already centred horizontally. The physical
-    // game card becomes a little narrower/taller and lifts above its slot.
-    constexpr float targetW = 286.f;
-    constexpr float targetH = 326.f;
+    // V10.21: morph the square HOME tile into a Switch-card-inspired
+    // landscape cartridge so the rotation exposes a believable front/back.
+    constexpr float targetW = 302.f;
+    constexpr float targetH = 222.f;
     const float startCx = from.x + from.width * 0.5f;
     const float startCy = from.y + from.height * 0.5f;
     m_target = {
         startCx - targetW * 0.5f,
-        startCy - 24.f - targetH * 0.5f,
+        startCy - 30.f - targetH * 0.5f,
         targetW,
         targetH
     };
+
+    m_insertSfxPlayed = false;
+    if (!gInsertSfxLoaded) {
+        if (auto* audio = AudioManager::active()) {
+            audio->loadNamedSfx(
+                kInsertSfxId,
+                "romfs:/sounds/wiiu/sfx/launch_insert.wav",
+                0.92f
+            );
+            gInsertSfxLoaded = true;
+        }
+    }
 
     s_activeInstance = this;
 }
@@ -390,6 +584,16 @@ void LaunchAnimation::clearGlobalStateIfOwned() {
 void LaunchAnimation::onUpdate(float dt) {
     if (!m_playing) return;
     m_timer += dt;
+
+    // Second animation SFX: mechanical insertion/click near the end of the
+    // physical drop. The existing LaunchGame SFX is the flip/whoosh sound.
+    const float insertClickMoment =
+        kInsertStart + kInsertDur * 0.76f;
+    if (!m_insertSfxPlayed && m_timer >= insertClickMoment) {
+        m_insertSfxPlayed = true;
+        if (auto* audio = AudioManager::active())
+            audio->playNamedSfx(kInsertSfxId);
+    }
 
     // Launch only after the insertion has fully completed and the screen has
     // reached black. The 3D animation therefore always has enough time to play.
@@ -449,32 +653,32 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
         centerY = lerp(startCy, targetCy, p) - std::sin(clamp01(m_timer / kFormDur) * kPi) * 10.f;
         cardW = lerp(m_from.width, m_target.width, p);
         cardH = lerp(m_from.height, m_target.height, p);
-        depth = lerp(1.f, 18.f, p);
-        radius = lerp(m_cornerRadius, 22.f, p);
-        artworkInset = lerp(8.f, 11.f, p);
+        depth = lerp(1.f, 15.f, p);
+        radius = lerp(m_cornerRadius, 10.f, p);
+        artworkInset = lerp(8.f, 10.f, p);
         scale = 1.f + 0.025f * std::sin(clamp01(m_timer / kFormDur) * kPi);
     } else if (m_timer < kSettleStart) {
         const float raw = (m_timer - kSpinStart) / kSpinDur;
-        const float p = smooth01(raw);
+        const float p = easeOutCubic(raw);
         centerX = targetCx;
-        centerY = targetCy - 7.f * std::sin(raw * kPi);
+        centerY = targetCy - 9.f * std::sin(raw * kPi);
         cardW = m_target.width;
         cardH = m_target.height;
-        depth = 18.f;
-        radius = 22.f;
-        artworkInset = 11.f;
+        depth = 15.f;
+        radius = 10.f;
+        artworkInset = 10.f;
         rotY = kTwoPi * p;
-        rotX = -0.055f * std::sin(raw * kPi);
-        scale = 1.f + 0.014f * std::sin(raw * kPi);
+        rotX = -0.070f * std::sin(raw * kPi);
+        scale = 1.f + 0.020f * std::sin(raw * kPi);
     } else if (m_timer < kInsertStart) {
         const float p = smooth01((m_timer - kSettleStart) / kSettleDur);
         centerX = targetCx;
         centerY = lerp(targetCy - 2.f, targetCy, p);
         cardW = m_target.width;
         cardH = m_target.height;
-        depth = 18.f;
-        radius = 22.f;
-        artworkInset = 11.f;
+        depth = 15.f;
+        radius = 10.f;
+        artworkInset = 10.f;
         rotY = kTwoPi;
         rotX = lerp(-0.018f, 0.f, p);
     } else {
@@ -484,9 +688,9 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
         centerY = lerp(targetCy, kSlotY + m_target.height * 0.72f, p);
         cardW = m_target.width;
         cardH = m_target.height;
-        depth = 18.f;
-        radius = 22.f;
-        artworkInset = 11.f;
+        depth = 15.f;
+        radius = 10.f;
+        artworkInset = 10.f;
         rotY = kTwoPi;
         rotX = 0.035f * p;
         scale = lerp(1.f, 0.965f, p);
@@ -499,7 +703,7 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
 
     if (inserting) {
         const float slotAlpha = smooth01(std::min(1.f, insertP * 4.f));
-        const float slotW = 252.f;
+        const float slotW = 324.f;
         const float slotH = 14.f;
         const float slotX = kScreenW * 0.5f - slotW * 0.5f;
 
@@ -520,7 +724,7 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
         );
     }
 
-    if (m_timer < kBlackStart) {
+    if (m_timer < kWipeStart) {
         drawCard3D(ren,
                    m_tex,
                    centerX,
@@ -538,9 +742,8 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
                    cardAlpha);
     }
 
-    if (inserting && m_timer < kBlackStart) {
-        // Physical occlusion: once the card crosses the slot, the lower part is
-        // hidden behind the HOME's black lower area instead of merely fading.
+    if (inserting && m_timer < kWipeStart) {
+        // Physical occlusion: the lower HOME block acts as the console shell.
         ren.drawRect(
             {0.f, kSlotY + 6.f, kScreenW, kScreenH - (kSlotY + 6.f)},
             nxui::Color(0.f, 0.f, 0.f, 0.985f)
@@ -548,16 +751,40 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
 
         const float slotAlpha = smooth01(std::min(1.f, insertP * 4.f));
         ren.drawRoundedRect(
-            {kScreenW * 0.5f - 119.f, kSlotY + 1.2f, 238.f, 2.0f},
-            nxui::Color(0.70f, 0.78f, 0.96f, 0.16f * slotAlpha),
-            1.f
+            {kScreenW * 0.5f - 137.f, kSlotY + 0.8f, 274.f, 2.2f},
+            nxui::Color(0.74f, 0.80f, 0.96f, 0.18f * slotAlpha),
+            1.1f
         );
     }
 
-    if (m_timer >= kBlackStart) {
-        const float blackP = clamp01((m_timer - kBlackStart) / kBlackDur);
-        const float blackAlpha = smooth01(blackP);
-        ren.drawRect({0.f, 0.f, kScreenW, kScreenH},
-                     nxui::Color(0.f, 0.f, 0.f, blackAlpha));
+    // V10.21: circular black wipe grows from the insertion point. A faint
+    // cool rim gives the transition a polished "accepted by the console"
+    // punctuation before the game process takes over.
+    if (m_timer >= kWipeStart) {
+        const float raw = clamp01((m_timer - kWipeStart) / kWipeDur);
+        const float p = easeOutCubic(raw);
+        const nxui::Vec2 wipeCenter{kScreenW * 0.5f, kSlotY + 5.f};
+        const float radiusWipe = lerp(8.f, 1040.f, p);
+        const float rimAlpha = (1.f - raw) * 0.16f;
+
+        ren.drawCircle(
+            wipeCenter,
+            radiusWipe + 14.f,
+            nxui::Color(0.62f, 0.70f, 0.88f, rimAlpha),
+            128
+        );
+        ren.drawCircle(
+            wipeCenter,
+            radiusWipe,
+            nxui::Color(0.f, 0.f, 0.f, 1.f),
+            128
+        );
+
+        if (raw >= 0.995f) {
+            ren.drawRect(
+                {0.f, 0.f, kScreenW, kScreenH},
+                nxui::Color(0.f, 0.f, 0.f, 1.f)
+            );
+        }
     }
 }
