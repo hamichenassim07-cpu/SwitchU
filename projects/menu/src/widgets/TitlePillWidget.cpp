@@ -1,4 +1,5 @@
 #include "TitlePillWidget.hpp"
+#include "LaunchAnimation.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <nxui/core/I18n.hpp>
 #include <algorithm>
@@ -270,7 +271,20 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
     if (!m_font || m_text.empty())
         return;
 
+    // V10.20: the lower HOME information physically clears the insertion
+    // path. It starts late in the 3D spin and is fully off-screen before the
+    // game card begins descending.
+    const float launchExitRaw =
+        std::clamp(LaunchAnimation::globalHudExitProgress(), 0.f, 1.f);
+    const float launchExit =
+        launchExitRaw * launchExitRaw * (3.f - 2.f * launchExitRaw);
+    const float launchAlpha = 1.f - launchExit;
+    const float launchYOffset = 214.f * launchExit;
+    if (launchAlpha <= 0.002f)
+        return;
+
     nxui::Rect cr = contentRect();
+    cr.y += launchYOffset;
     const nxui::Vec2 base = m_font->measure(m_text);
     if (base.x <= 0.f || base.y <= 0.f)
         return;
@@ -293,22 +307,22 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
     ren.drawText(m_text,
                  {tx + 1.2f, ty + 1.6f + lift},
                  m_font,
-                 nxui::Color(0.f, 0.f, 0.f, 0.44f * m_opacity * reveal),
+                 nxui::Color(0.f, 0.f, 0.f, 0.44f * m_opacity * reveal * launchAlpha),
                  scale);
     ren.drawText(m_text,
                  {tx, ty + lift},
                  m_font,
-                 m_textColor.withAlpha(m_opacity * reveal),
+                 m_textColor.withAlpha(m_opacity * reveal * launchAlpha),
                  scale);
     ren.drawText(m_text,
                  {tx + 0.48f, ty + lift},
                  m_font,
-                 m_textColor.withAlpha(0.62f * m_opacity * reveal),
+                 m_textColor.withAlpha(0.62f * m_opacity * reveal * launchAlpha),
                  scale);
     ren.drawText(m_text,
                  {tx - 0.38f, ty + lift},
                  m_font,
-                 m_textColor.withAlpha(0.42f * m_opacity * reveal),
+                 m_textColor.withAlpha(0.42f * m_opacity * reveal * launchAlpha),
                  scale);
 
 
@@ -317,10 +331,10 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
     if (m_showGameActions && m_font) {
         ren.drawRoundedRect(
             {kV9TitleCenterX - kActionsSeparatorWidth * 0.5f,
-             kActionsSeparatorY,
+             kActionsSeparatorY + launchYOffset,
              kActionsSeparatorWidth,
              kActionsSeparatorHeight},
-            nxui::Color(0.94f, 0.97f, 1.00f, 0.30f * m_opacity),
+            nxui::Color(0.94f, 0.97f, 1.00f, 0.30f * m_opacity * launchAlpha),
             1.1f
         );
 
@@ -357,17 +371,17 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
 
             ren.drawText(
                 glyph,
-                {x, kActionsRowY + (rowH - glyphH) * 0.5f},
+                {x, kActionsRowY + launchYOffset + (rowH - glyphH) * 0.5f},
                 glyphFont,
-                nxui::Color(0.98f, 1.f, 0.99f, 0.98f * m_opacity),
+                nxui::Color(0.98f, 1.f, 0.99f, 0.98f * m_opacity * launchAlpha),
                 kActionGlyphScale
             );
             ren.drawText(
                 label,
                 {x + glyphW + kActionGap,
-                 kActionsRowY + (rowH - labelH) * 0.5f},
+                 kActionsRowY + launchYOffset + (rowH - labelH) * 0.5f},
                 m_font,
-                nxui::Color(0.94f, 0.96f, 0.98f, 0.92f * m_opacity),
+                nxui::Color(0.94f, 0.96f, 0.98f, 0.92f * m_opacity * launchAlpha),
                 kActionLabelScale
             );
             x += glyphW + kActionGap + labelW;

@@ -1,5 +1,6 @@
 #include "IconGrid.hpp"
 #include "GlossyIcon.hpp"
+#include "LaunchAnimation.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <algorithm>
 #include <cmath>
@@ -809,7 +810,10 @@ void IconGrid::render(
             child->render(renderer);
     }
 
-    if (focused)
+    // V10.20: LaunchAnimation owns a separate real-3D copy of the selected
+    // cover. Hide only the original focused carousel card while that copy is
+    // active so the lift/rotation never leaves a duplicate behind.
+    if (focused && !LaunchAnimation::globalPlaying())
         focused->render(renderer);
 
     renderer.popClipRect();
