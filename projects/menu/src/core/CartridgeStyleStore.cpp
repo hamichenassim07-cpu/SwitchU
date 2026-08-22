@@ -16,8 +16,12 @@ constexpr const char* kStyleTempPath =
 
 std::string titleIdToHex(std::uint64_t value) {
     char buffer[17] = {};
-    std::snprintf(buffer, sizeof(buffer), "%016llX",
-                  static_cast<unsigned long long>(value));
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%016llX",
+        static_cast<unsigned long long>(value)
+    );
     return buffer;
 }
 
@@ -67,7 +71,7 @@ void CartridgeStyleStore::ensureLoaded() {
             m_presets[titleId] = sanitizePreset(jt.value().get<int>());
         }
     } catch (...) {
-        // A damaged optional style file must never prevent HOME from booting.
+        // A broken optional customisation file must never break HOME startup.
         m_presets.clear();
     }
 }
@@ -88,14 +92,6 @@ void CartridgeStyleStore::setPreset(std::uint64_t titleId, int preset) {
     save();
 }
 
-void CartridgeStyleStore::reset(std::uint64_t titleId) {
-    if (titleId == 0)
-        return;
-    ensureLoaded();
-    m_presets.erase(titleId);
-    save();
-}
-
 nxui::Color CartridgeStyleStore::colorFor(std::uint64_t titleId) {
     return colorForPreset(presetFor(titleId));
 }
@@ -103,14 +99,14 @@ nxui::Color CartridgeStyleStore::colorFor(std::uint64_t titleId) {
 nxui::Color CartridgeStyleStore::colorForPreset(int preset) {
     switch (sanitizePreset(preset)) {
         default:
-        case 0: return nxui::Color(0.10f, 0.11f, 0.13f, 1.f); // Anthracite
-        case 1: return nxui::Color(0.08f, 0.22f, 0.42f, 1.f); // Bleu
-        case 2: return nxui::Color(0.42f, 0.075f, 0.085f, 1.f); // Rouge
-        case 3: return nxui::Color(0.29f, 0.095f, 0.43f, 1.f); // Violet
-        case 4: return nxui::Color(0.56f, 0.58f, 0.63f, 1.f); // Blanc perle
-        case 5: return nxui::Color(0.075f, 0.31f, 0.19f, 1.f); // Vert
-        case 6: return nxui::Color(0.46f, 0.19f, 0.045f, 1.f); // Orange
-        case 7: return nxui::Color(0.43f, 0.095f, 0.29f, 1.f); // Rose
+        case 0: return nxui::Color(0.10f, 0.11f, 0.13f, 1.f); // V10.25 original
+        case 1: return nxui::Color(0.08f, 0.22f, 0.42f, 1.f);
+        case 2: return nxui::Color(0.42f, 0.075f, 0.085f, 1.f);
+        case 3: return nxui::Color(0.29f, 0.095f, 0.43f, 1.f);
+        case 4: return nxui::Color(0.56f, 0.58f, 0.63f, 1.f);
+        case 5: return nxui::Color(0.075f, 0.31f, 0.19f, 1.f);
+        case 6: return nxui::Color(0.46f, 0.19f, 0.045f, 1.f);
+        case 7: return nxui::Color(0.43f, 0.095f, 0.29f, 1.f);
     }
 }
 

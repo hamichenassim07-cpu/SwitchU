@@ -137,6 +137,11 @@ private:
     bool m_entryBouncePending = false;
     float m_selectionBounceTime = 0.f;
     float m_suspendedIdleTime = 0.f;
+    // V10.27: occasional, non-looping suspended-cartridge tumble.
+    float m_suspendedTumbleWait = 0.f;
+    float m_suspendedTumbleTime = 0.f;
+    float m_suspendedNextTumble = 22.f;
+    bool  m_suspendedTumbleActive = false;
 
     // Stored as a global index into m_allIcons, not a filtered display slot.
     int m_pendingSettledFocusIndex = -1;

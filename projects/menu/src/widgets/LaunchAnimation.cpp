@@ -921,7 +921,6 @@ void LaunchAnimation::start(const nxui::Rect& from, const nxui::Texture* tex, fl
     m_insertSfxPlayed = false;
     m_spinSfxPlayed = false;
     m_resumeSfxPlayed = false;
-    m_orderMarked = false;
     m_resumeMode = (titleId == 0 && !m_onLaunch && static_cast<bool>(m_onDone));
     m_effectiveTitleId = titleId != 0
         ? titleId
@@ -989,10 +988,6 @@ void LaunchAnimation::onUpdate(float dt) {
 
         if (m_timer >= kResumeLaunchMoment && !m_launched) {
             m_launched = true;
-            if (!m_orderMarked && m_effectiveTitleId != 0) {
-                HomeOrderStore::instance().markLaunched(m_effectiveTitleId);
-                m_orderMarked = true;
-            }
             if (m_onDone && !m_doneCalled) {
                 m_doneCalled = true;
                 m_onDone();
@@ -1024,10 +1019,6 @@ void LaunchAnimation::onUpdate(float dt) {
 
     if (m_timer >= kLaunchMoment && !m_launched) {
         m_launched = true;
-        if (!m_orderMarked && m_effectiveTitleId != 0) {
-            HomeOrderStore::instance().markLaunched(m_effectiveTitleId);
-            m_orderMarked = true;
-        }
         if (m_titleId != 0 && m_onLaunch) {
             m_onLaunch(m_titleId, m_uid);
             m_postLaunchHold = true;
@@ -1061,7 +1052,7 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
     const float startCy = m_from.y + m_from.height * 0.5f;
     const float targetCx = m_target.x + m_target.width * 0.5f;
     const float targetCy = m_target.y + m_target.height * 0.5f;
-    const nxui::Color shellColor =
+    const nxui::Color cartridgeShell =
         CartridgeStyleStore::instance().colorFor(m_effectiveTitleId);
 
     if (m_resumeMode) {
@@ -1084,7 +1075,7 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
             std::max(12.f, cardW * (18.f / 286.f)),
             std::max(12.f, cardW * (22.f / 286.f)),
             rotY, rotX, approach, 11.f,
-            shellColor,
+            cartridgeShell,
             nxui::Color(0.42f, 0.78f, 1.0f, 0.30f),
             1.f);
 
@@ -1111,42 +1102,32 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
         return;
     }
 
-    // V10.26 carousel entries are already cartridges. Start from the exact
-    // HOME cartridge proportions instead of briefly reverting to a square card
-    // before the spin begins.
-    const float sourceCardW = m_from.width * 0.86f;
-    const float sourceCardH = sourceCardW * (326.f / 286.f);
-    const float sourceDepth = std::max(12.f, sourceCardW * (18.f / 286.f));
-    const float sourceRadius = std::max(12.f, sourceCardW * (22.f / 286.f));
-
     float centerX = startCx;
     float centerY = startCy;
-    float cardW = sourceCardW;
-    float cardH = sourceCardH;
-    float depth = sourceDepth;
-    float radius = sourceRadius;
+    float cardW = m_from.width;
+    float cardH = m_from.height;
+    float depth = 1.f;
+    float radius = m_cornerRadius;
     float rotY = 0.f;
     float rotX = 0.f;
     float scale = 1.f;
-    float artworkInset = 11.f;
+    float artworkInset = 8.f;
 
     const float halfVisibleY = kScreenH;
-    // V10.26: the click is a small mechanical press while the cartridge stays
-    // visibly seated at the bottom. There is no post-click suction/offscreen exit.
-    const float seatY = kScreenH + 18.f;
-    const float reboundY = kScreenH - 4.f;
-    const float lockY = kScreenH + 4.f;
+    const float seatY = kScreenH + m_target.height * 0.5f - 33.f;
+    const float reboundY = seatY - 5.f;
+    const float lockY = kScreenH + m_target.height * 0.5f - 27.f;
 
     if (m_timer < kSpinStart) {
         const float p = easeInOutSine(m_timer / kFormDur);
         centerX = lerpV10211(startCx, targetCx, p);
         centerY = lerpV10211(startCy, targetCy, p) -
                   std::sin(clamp01(m_timer / kFormDur) * kPi) * 8.f;
-        cardW = lerpV10211(sourceCardW, m_target.width, p);
-        cardH = lerpV10211(sourceCardH, m_target.height, p);
-        depth = lerpV10211(sourceDepth, 18.f, p);
-        radius = lerpV10211(sourceRadius, 22.f, p);
-        artworkInset = 11.f;
+        cardW = lerpV10211(m_from.width, m_target.width, p);
+        cardH = lerpV10211(m_from.height, m_target.height, p);
+        depth = lerpV10211(1.f, 18.f, p);
+        radius = lerpV10211(m_cornerRadius, 22.f, p);
+        artworkInset = lerpV10211(8.f, 11.f, p);
         scale = 1.f + 0.018f * std::sin(clamp01(m_timer / kFormDur) * kPi);
     } else {
         const float spinRaw = clamp01((m_timer - kSpinStart) / kSpinDur);
@@ -1188,17 +1169,20 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
             const float p = easeInOutSine((m_timer - kLockStart) / kLockDur);
             centerY = lerpV10211(reboundY, lockY, p);
         } else if (m_timer >= kLockHoldStart) {
+            // V10.27: preserve every V10.25 launch phase and timing, but stop
+            // here after the mechanical click. The former final downward
+            // disappearance is the only motion removed.
             centerY = lockY;
         }
     }
 
-    // Keep the cartridge physically present. The black wipe covers it; the
-    // cartridge itself no longer performs a final downward disappearance.
+    // Keep the seated cartridge present while the original wipe arrives.
+    // It disappears only because the black transition naturally covers it.
     StylisedGameCartridge::draw(
         ren, m_tex, nullptr, nullptr,
         centerX, centerY, cardW, cardH,
         depth, radius, rotY, rotX, scale,
-        artworkInset, shellColor, m_borderColor, 1.f);
+        artworkInset, cartridgeShell, m_borderColor, 1.f);
 
     if (m_timer >= kWipeStart) {
         const float raw = clamp01((m_timer - kWipeStart) / kWipeDur);

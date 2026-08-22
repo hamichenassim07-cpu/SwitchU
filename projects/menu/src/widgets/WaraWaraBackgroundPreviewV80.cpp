@@ -2312,37 +2312,30 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
     (void)previewVisualAlpha;
 
-    // V10.9: leave the artwork/video substantially brighter. The previous
-    // full-screen dark veil is removed; readability is now provided by one
-    // explicit lower block instead of globally dimming the media.
+    // V10.27: background darkness and carousel glow are intentionally two
+    // independent layers. The veil affects media only; the additive glow is
+    // composited afterwards and can no longer multiply the black filter.
     const nxui::Color lowerBase(0.030f, 0.032f, 0.039f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
+    constexpr float kBackgroundVeilOpacity = 0.18f;
 
-    // V10.26 TEST: 7% was technically present but looked absent on-console.
-    // 16% keeps the media brighter than the old heavily-darkened revisions,
-    // while making the requested black veil clearly perceptible on JPG/PNG/MP4.
     if (previewVisualAlpha > 0.001f) {
         ren.drawRect(
             area,
-            nxui::Color(0.f, 0.f, 0.f, 0.160f * previewVisualAlpha * baseAlpha)
+            nxui::Color(
+                0.f, 0.f, 0.f,
+                kBackgroundVeilOpacity * previewVisualAlpha * baseAlpha
+            )
         );
     }
 
-    // Keep the existing lower information zone untouched.
+    // The opaque information band begins here. The glow is composited before
+    // this band and clipped at this exact Y, so it can illuminate the selected
+    // cover/background but never the lower black interface.
     const float lowerStartY = area.y + area.height * 456.f / 720.f;
     const float fadeBand = area.height * 0.14f;
-    ren.drawGradientRect(
-        {area.x, lowerStartY - fadeBand, area.width, fadeBand},
-        lowerBase.withAlpha(0.00f),
-        lowerBase.withAlpha(1.00f * baseAlpha)
-    );
-    ren.drawRect(
-        {area.x, lowerStartY,
-         area.width, area.y + area.height - lowerStartY},
-        lowerBase.withAlpha(1.00f * baseAlpha)
-    );
 
-    // Resolve the current artwork colours only for the carousel ambience.
+    // Resolve selected-artwork colours only for the carousel ambience.
     AmbientSwatch glowPrimary = r.currentGlowPrimary;
     AmbientSwatch glowSecondary = r.currentGlowSecondary;
     if (r.transitioning && r.nextAvailable) {
@@ -2354,61 +2347,104 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         glowSecondary = r.nextGlowSecondary;
     }
 
-    const AmbientSwatch conceptBlue{
-        glowPrimary.r * 0.45f + 0.55f * 0.30f,
-        glowPrimary.g * 0.45f + 0.55f * 0.46f,
-        glowPrimary.b * 0.45f + 0.55f * 0.98f
-    };
+    // Reference layout requested for V10.27:
+    // violet / pink on the LEFT, blue / cyan on the RIGHT.
     const AmbientSwatch conceptViolet{
-        glowSecondary.r * 0.43f + 0.57f * 0.58f,
-        glowSecondary.g * 0.43f + 0.57f * 0.34f,
-        glowSecondary.b * 0.43f + 0.57f * 0.96f
+        glowSecondary.r * 0.36f + 0.64f * 0.66f,
+        glowSecondary.g * 0.36f + 0.64f * 0.30f,
+        glowSecondary.b * 0.36f + 0.64f * 0.98f
+    };
+    const AmbientSwatch conceptBlue{
+        glowPrimary.r * 0.38f + 0.62f * 0.20f,
+        glowPrimary.g * 0.38f + 0.62f * 0.62f,
+        glowPrimary.b * 0.38f + 0.62f * 1.00f
     };
 
     const float glowTime = std::chrono::duration<float>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    const float driftX = std::sin(glowTime * 0.26f) * 18.f;
-    const float driftY = std::cos(glowTime * 0.21f) * 8.f;
-    const float breathe = 1.00f + 0.04f * std::sin(glowTime * 0.38f);
+    const float driftX = std::sin(glowTime * 0.18f) * 10.f;
+    const float driftY = std::cos(glowTime * 0.16f) * 5.f;
+    const float breathe = 1.00f + 0.028f * std::sin(glowTime * 0.31f);
 
-    // One compact, GPU-blurred ambience pass. It is rendered AFTER the lower
-    // black zone so the light sits in front of that zone, while still being
-    // behind the carousel widgets themselves. No Settings/Controllers corner
-    // glow is emitted at all.
+    // Broad, heavily blurred mist. The individual primitives are deliberately
+    // much larger than the selected cover so no circle/ellipse is readable
+    // after the blur; the result is only a soft two-colour field.
 #ifdef NXUI_BACKEND_DEKO3D
     if (baseAlpha > 0.001f && beginHomeGlowTargetV102(ren)) {
         constexpr float hs = 0.5f;
-        auto emitCompactMist = [&](float cx, float cy,
-                                   const AmbientSwatch& c,
-                                   float strength) {
-            ren.drawCircle({cx * hs, cy * hs}, 84.f * hs,
-                           nxui::Color(c.r, c.g, c.b, strength), 52);
-            ren.drawCircle({(cx - 54.f) * hs, (cy + 8.f) * hs}, 66.f * hs,
-                           nxui::Color(c.r, c.g, c.b, strength * 0.72f), 48);
-            ren.drawCircle({(cx + 58.f) * hs, (cy - 7.f) * hs}, 62.f * hs,
-                           nxui::Color(c.r, c.g, c.b, strength * 0.62f), 48);
+        auto emitSoftMist = [&](float cx, float cy,
+                                const AmbientSwatch& c,
+                                float strength) {
+            ren.drawCircle(
+                {cx * hs, cy * hs},
+                184.f * hs,
+                nxui::Color(c.r, c.g, c.b, strength),
+                64
+            );
+            ren.drawCircle(
+                {(cx - 92.f) * hs, (cy + 10.f) * hs},
+                132.f * hs,
+                nxui::Color(c.r, c.g, c.b, strength * 0.62f),
+                60
+            );
+            ren.drawCircle(
+                {(cx + 88.f) * hs, (cy - 28.f) * hs},
+                126.f * hs,
+                nxui::Color(c.r, c.g, c.b, strength * 0.54f),
+                60
+            );
         };
 
-        const float glowY = area.y + area.height * 0.535f + driftY;
-        emitCompactMist(area.x + area.width * 0.455f + driftX,
-                        glowY,
-                        conceptBlue,
-                        0.34f * breathe * baseAlpha);
-        emitCompactMist(area.x + area.width * 0.565f - driftX * 0.55f,
-                        glowY - 6.f,
-                        conceptViolet,
-                        0.30f * breathe * baseAlpha);
+        const float glowY =
+            area.y + area.height * 0.455f + driftY;
+
+        emitSoftMist(
+            area.x + area.width * 0.445f + driftX,
+            glowY,
+            conceptViolet,
+            0.30f * breathe * baseAlpha
+        );
+        emitSoftMist(
+            area.x + area.width * 0.555f - driftX * 0.45f,
+            glowY - 4.f,
+            conceptBlue,
+            0.32f * breathe * baseAlpha
+        );
 
         endHomeGlowTargetV102(ren);
-        ren.applyBlur(4.6f, 2);
+        ren.applyBlur(6.6f, 2);
+
+        // Clip the additive composite to the background side of the black
+        // separation. The lower band is drawn afterwards as a second safety
+        // mask, making the requested layer order explicit.
+        ren.pushClipRect({
+            area.x,
+            area.y,
+            area.width,
+            std::max(0.f, lowerStartY - area.y)
+        });
         drawHomeGlowAdditiveV1019(
             ren,
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            0.72f * baseAlpha
+            0.70f * baseAlpha
         );
+        ren.popClipRect();
     }
 #endif
+
+    // Existing V10.25 lower information zone, deliberately drawn AFTER the
+    // glow so it owns/masks the whole lower interface.
+    ren.drawGradientRect(
+        {area.x, lowerStartY - fadeBand, area.width, fadeBand},
+        lowerBase.withAlpha(0.00f),
+        lowerBase.withAlpha(1.00f * baseAlpha)
+    );
+    ren.drawRect(
+        {area.x, lowerStartY,
+         area.width, area.y + area.height - lowerStartY},
+        lowerBase.withAlpha(1.00f * baseAlpha)
+    );
 
     ren.flush();
 }

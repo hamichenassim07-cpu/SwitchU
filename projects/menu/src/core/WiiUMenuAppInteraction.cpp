@@ -14,7 +14,6 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <filesystem>
 #include <nxui/core/I18n.hpp>
 #include <nlohmann/json.hpp>
@@ -497,9 +496,14 @@ std::string WiiUMenuApp::accessibilityActionsFor(nxui::Widget* w) const {
         auto* icon = static_cast<GlossyIcon*>(w);
         if (icon->titleId() == 0)
             return i18n.tr("accessibility.actions.empty_slot", "Directional pad to navigate. L or R to change category.");
+        if (icon->isSuspended()) {
+            return icon->isNotLaunchable()
+                ? i18n.tr("accessibility.actions.game_blocked_suspended", "A to show the reason. Y to move. R3 to customise the cartridge. L or R to change category.")
+                : i18n.tr("accessibility.actions.game_launchable_suspended", "A to launch. X for options. Y to move. R3 to customise the cartridge. L or R to change category.");
+        }
         return icon->isNotLaunchable()
-            ? i18n.tr("accessibility.actions.game_blocked", "A to show the reason. Y to move. R3 to customise the cartridge. L or R to change category.")
-            : i18n.tr("accessibility.actions.game_launchable", "A to launch. X for options. Y to move. R3 to customise the cartridge. L or R to change category.");
+            ? i18n.tr("accessibility.actions.game_blocked", "A to show the reason. Y to move. L or R to change category.")
+            : i18n.tr("accessibility.actions.game_launchable", "A to launch. X for options. Y to move. L or R to change category.");
     }
     if (m_settings && w == m_settings.get())
         return i18n.tr("accessibility.actions.settings", "Up and down to choose a category. A or right to enter. B to close.");
@@ -591,14 +595,30 @@ void WiiUMenuApp::startEditGhost(GlossyIcon* sourceIcon) {
     if (m_editSourceIndex >= 0)
         m_iconStreamer.setPinnedIndex(m_editSourceIndex);
 
-    // V10.26 TEST: do not spawn the old square/Liquid-Glass move ghost.
-    // The real carousel item itself moves and IconGrid renders it as the same
-    // cartridge in both normal and Y-edit states, so there is no visual swap.
     m_editSourceIcon = sourceIcon;
-    m_editSourceIcon->setOpacity(1.f);
+    m_editSourceIcon->setOpacity(0.10f);
+
+    auto ghost = std::make_shared<GlossyIcon>();
+    ghost->setTag("edit_ghost");
+    ghost->setFocusable(false);
+    ghost->setTitle(sourceIcon->title());
+    ghost->setTitleId(sourceIcon->titleId());
+    ghost->setTexture(sourceIcon->texture());
+    ghost->setIsGameCard(sourceIcon->isGameCard());
+    ghost->setGameCardTexture(sourceIcon->gameCardTexture());
+    ghost->setNotLaunchable(sourceIcon->isNotLaunchable());
+    ghost->setCornerRadius(sourceIcon->cornerRadius());
+    ghost->setBlurEnabled(false);
+    ghost->setPanelOpacity(0.84f);
+    ghost->setOpacity(0.84f);
+    ghost->setScale(1.06f);
+    ghost->forceVisible();
+
     m_editGhostTargetRect = sourceIcon->focusRect().expanded(4.f);
+    ghost->setRect(m_editGhostTargetRect);
     m_editGhostPulse = 0.f;
-    m_editGhostIcon.reset();
+
+    m_editGhostIcon = ghost;
 }
 
 void WiiUMenuApp::stopEditGhost() {
@@ -667,6 +687,7 @@ void WiiUMenuApp::enterEditMode() {
     m_editHeldTitle = icon->title();
     startEditGhost(icon);
     bindEditActions(icon);
+    m_titlePill->setSelectedTitleId(0);
     m_titlePill->setText(nxui::I18n::instance().tr("game.move_prefix", "Move: ") + m_editHeldTitle);
     m_titlePill->setVisible(true);
     m_accessibility.announce(nxui::I18n::instance().tr(
@@ -690,6 +711,7 @@ void WiiUMenuApp::exitEditMode() {
         auto* icon = static_cast<GlossyIcon*>(cur);
         m_titlePill->setProfileOriginalMode(false);
         m_titlePill->setGameActionsVisible(true);
+        m_titlePill->setSelectedTitleId(icon->titleId());
         m_titlePill->setText(icon->title());
         m_titlePill->setVisible(true);
     } else {
@@ -712,16 +734,7 @@ bool WiiUMenuApp::commitEditModePlacement() {
         return false;
 
     int oldPage = m_grid->currentPage();
-    const uint64_t movedTitleId = m_model.at(from).titleId;
-    const int targetDisplayRank = m_grid->displayPositionForGlobalIndex(target);
     bool changed = (from != target) || m_editMoved;
-    if (!changed && HomeOrderStore::instance().isPinned(movedTitleId)) {
-        // V10.25 simple return-to-automatic gesture: enter move mode on a
-        // pinned title and confirm Y without moving. B remains the cancel path.
-        HomeOrderStore::instance().unpin(movedTitleId);
-        m_grid->refreshDisplayOrder();
-        changed = true;
-    }
     if (from != target) {
         if (!m_layoutSlots.empty() && from < (int)m_layoutSlots.size() && target < (int)m_layoutSlots.size())
             std::swap(m_layoutSlots[from], m_layoutSlots[target]);
@@ -733,20 +746,8 @@ bool WiiUMenuApp::commitEditModePlacement() {
         m_iconStreamer.setPinnedIndex(m_editSourceIndex);
         m_layoutDirty = true;
 
-        // V10.25: a title the user explicitly places becomes pinned. The
-        // legacy layout swap is kept for backwards compatibility, while the
-        // hybrid sorter uses this persistent rank ahead of recents.
-        auto& orderStore = HomeOrderStore::instance();
-        int pinRank = targetDisplayRank;
-        const uint64_t suspendedId = orderStore.suspendedTitleId();
-        const int suspendedIndex = findTitleIndex(suspendedId);
-        if (suspendedIndex >= 0 &&
-            m_grid->displayPositionForGlobalIndex(suspendedIndex) == 0 &&
-            pinRank > 0) {
-            --pinRank;
-        }
-        orderStore.pinAtRank(movedTitleId, pinRank);
-        m_grid->refreshDisplayOrder();
+        // V10.27: the legacy layout swap itself is the single source of truth.
+        // No recency/pin sorter is allowed to reinterpret the user's position.
     }
 
     m_grid->focusGlobalIndex(target);
@@ -814,26 +815,12 @@ bool WiiUMenuApp::moveFocusedIcon(nxui::FocusDirection dir) {
     if (target == from)
         return true;
 
-    const uint64_t movedTitleId = m_model.at(from).titleId;
-
     if (!m_layoutSlots.empty() && from < (int)m_layoutSlots.size() && target < (int)m_layoutSlots.size())
         std::swap(m_layoutSlots[from], m_layoutSlots[target]);
 
     m_model.swapEntries(from, target);
     m_iconStreamer.swapIndices(from, target);
     m_grid->swapSlots(from, target);
-
-    auto& orderStore = HomeOrderStore::instance();
-    int pinRank = targetDisplay;
-    const uint64_t suspendedId = orderStore.suspendedTitleId();
-    const int suspendedIndex = findTitleIndex(suspendedId);
-    if (suspendedIndex >= 0 &&
-        m_grid->displayPositionForGlobalIndex(suspendedIndex) == 0 &&
-        pinRank > 0) {
-        --pinRank;
-    }
-    orderStore.pinAtRank(movedTitleId, pinRank);
-    m_grid->refreshDisplayOrder();
     m_editMoved = true;
     m_editSourceIndex = target;
     m_iconStreamer.setPinnedIndex(m_editSourceIndex);
@@ -863,7 +850,7 @@ bool WiiUMenuApp::moveFocusedIcon(nxui::FocusDirection dir) {
     return true;
 }
 
-void WiiUMenuApp::openCartridgeCustomizer() {
+void WiiUMenuApp::openSuspendedCartridgeCustomizer() {
     if (!m_dialog || m_editMode)
         return;
 
@@ -876,19 +863,21 @@ void WiiUMenuApp::openCartridgeCustomizer() {
     }
 
     auto* current = focusManager().current();
-    if (!isEditableIcon(current))
+    if (!current || current->tag() != "glossy_icon")
         return;
 
     auto* icon = static_cast<GlossyIcon*>(current);
-    if (icon->titleId() == 0)
+    // V10.27 colour editing is deliberately limited to an actual cartridge.
+    // Normal HOME covers remain normal covers.
+    if (icon->titleId() == 0 || !icon->isSuspended())
         return;
 
     m_dialogReturnFocus = current;
     m_audio.playSfx(Sfx::ModalShow);
-    showCartridgeColorPage(icon->titleId(), false);
+    showSuspendedCartridgeColorPage(icon->titleId(), false);
 }
 
-void WiiUMenuApp::showCartridgeColorPage(
+void WiiUMenuApp::showSuspendedCartridgeColorPage(
     std::uint64_t titleId,
     bool extendedPage
 ) {
@@ -900,15 +889,13 @@ void WiiUMenuApp::showCartridgeColorPage(
 
     std::string gameTitle = "Application";
     const int modelIndex = findTitleIndex(titleId);
-    if (modelIndex >= 0 &&
-        modelIndex < m_model.count() &&
+    if (modelIndex >= 0 && modelIndex < m_model.count() &&
         !m_model.at(modelIndex).title.empty()) {
         gameTitle = m_model.at(modelIndex).title;
     }
 
     const std::string message =
-        gameTitle +
-        "\nCouleur actuelle : " +
+        gameTitle + "\nCouleur actuelle : " +
         CartridgeStyleStore::nameForPreset(currentPreset);
 
     auto setColor = [titleId](int preset) {
@@ -925,11 +912,11 @@ void WiiUMenuApp::showCartridgeColorPage(
             {"Rouge",  [setColor]() { setColor(2); }, true},
             {"Violet", [setColor]() { setColor(3); }, true},
             {"Plus", [this, titleId]() {
-                showCartridgeColorPage(titleId, true);
+                showSuspendedCartridgeColorPage(titleId, true);
             }, false},
         };
-        initialSelected = (currentPreset >= 0 && currentPreset <= 3)
-            ? currentPreset : 4;
+        initialSelected =
+            (currentPreset >= 0 && currentPreset <= 3) ? currentPreset : 4;
     } else {
         buttons = {
             {"Blanc",  [setColor]() { setColor(4); }, true},
@@ -937,11 +924,11 @@ void WiiUMenuApp::showCartridgeColorPage(
             {"Orange", [setColor]() { setColor(6); }, true},
             {"Rose",   [setColor]() { setColor(7); }, true},
             {"Retour", [this, titleId]() {
-                showCartridgeColorPage(titleId, false);
+                showSuspendedCartridgeColorPage(titleId, false);
             }, false},
         };
-        initialSelected = (currentPreset >= 4 && currentPreset <= 7)
-            ? currentPreset - 4 : 4;
+        initialSelected =
+            (currentPreset >= 4 && currentPreset <= 7) ? currentPreset - 4 : 4;
     }
 
     m_dialog->show(
@@ -1070,6 +1057,7 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
             gridTarget && gridTarget->tag() == "glossy_icon") {
             auto* icon = static_cast<GlossyIcon*>(gridTarget);
             m_titlePill->setGameActionsVisible(true);
+            m_titlePill->setSelectedTitleId(icon->titleId());
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
         } else {
@@ -1362,6 +1350,7 @@ void WiiUMenuApp::wireFocusCallback() {
             auto& i18n = nxui::I18n::instance();
 
             if (m_editMode) {
+                m_titlePill->setSelectedTitleId(0);
                 m_titlePill->setGameActionsVisible(false);
                 bindEditActions(icon);
                 m_editGhostTargetRect =
@@ -1397,12 +1386,14 @@ void WiiUMenuApp::wireFocusCallback() {
             }
 
             if (icon->titleId() == 0) {
+                m_titlePill->setSelectedTitleId(0);
                 m_titlePill->setGameActionsVisible(false);
                 m_titlePill->hideAnimated();
                 return;
             }
 
             m_titlePill->setGameActionsVisible(true);
+            m_titlePill->setSelectedTitleId(icon->titleId());
             m_titlePill->setText(icon->title());
             m_titlePill->setVisible(true);
         } else if (cur) {
@@ -1569,18 +1560,15 @@ void WiiUMenuApp::markSuspendedIcon(uint64_t titleId) {
     HomeOrderStore::instance().setSuspendedTitle(titleId);
     for (auto& icon : m_grid->allIcons())
         icon->setSuspended(titleId != 0 && icon->titleId() == titleId);
-    // The suspended title is always group 0 in the V10.25 hybrid order.
+    // V10.27 keeps suspension state without changing the title's slot.
     m_grid->setSuspendedTitleId(titleId);
     if (titleId != 0)
         focusTitle(titleId);
 
     if (auto* cur = m_grid->focusManager().current()) {
         auto* icon = static_cast<GlossyIcon*>(cur);
-        if (m_launcher.isAppSuspended(icon->titleId())) {
-            m_titlePill->setText(icon->title());
-        } else {
-            m_titlePill->setText(icon->title());
-        }
+        m_titlePill->setSelectedTitleId(icon->titleId());
+        m_titlePill->setText(icon->title());
     }
 }
 
@@ -1701,8 +1689,9 @@ void WiiUMenuApp::wireGlobalActions() {
     root.addAction(static_cast<uint64_t>(nxui::Button::R), [this]() {
         setHomeApplicationsCategory(true);
     });
+
     root.addAction(static_cast<uint64_t>(nxui::Button::RStick), [this]() {
-        openCartridgeCustomizer();
+        openSuspendedCartridgeCustomizer();
     });
 
     root.addAction(static_cast<uint64_t>(nxui::Button::ZL), [this]() {
@@ -1846,6 +1835,7 @@ void WiiUMenuApp::wireGlobalActions() {
                 WaraWaraBackground::notifySelectedGame(tid);
                 if (m_titlePill) {
                     m_titlePill->setGameActionsVisible(true);
+                    m_titlePill->setSelectedTitleId(tid);
                     const int modelIndex = findTitleIndex(tid);
                     if (modelIndex >= 0)
                         m_titlePill->setText(m_model.at(modelIndex).title);

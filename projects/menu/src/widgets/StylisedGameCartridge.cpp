@@ -381,6 +381,7 @@ void StylisedGameCartridge::draw(nxui::Renderer& ren,
                 const nxui::Color& borderColor,
                 float alpha) {
     (void)artworkInset;
+    (void)borderColor;
     (void)frontShellTex;
     (void)backShellTex;
 
@@ -404,42 +405,75 @@ void StylisedGameCartridge::draw(nxui::Renderer& ren,
     const float frontLight = clamp01(0.50f + 0.50f * std::cos(rotY - 0.48f));
     const float backLight  = clamp01(0.50f + 0.50f * std::cos((rotY - kPi) - 0.48f));
 
-    // V10.26 TEST: panelColor now drives the real procedural shell material.
-    // V10.25 accepted the parameter but rendered fixed anthracite values.
-    const nxui::Color shell{
-        clamp01(panelColor.r),
-        clamp01(panelColor.g),
-        clamp01(panelColor.b),
-        1.f
-    };
-    auto litChannel = [](float base, float light, float floor, float boost) {
-        return clamp01(base * (floor + boost * light) + 0.012f * light);
-    };
+    // V10.27: the default anthracite preset reproduces the V10.25
+    // material exactly. Other presets tint only representations that were
+    // already cartridges (suspended / launch / lockscreen).
+    const bool defaultShell =
+        std::abs(panelColor.r - 0.10f) < 0.0005f &&
+        std::abs(panelColor.g - 0.11f) < 0.0005f &&
+        std::abs(panelColor.b - 0.13f) < 0.0005f;
 
-    const nxui::Color frontBody{
-        litChannel(shell.r, frontLight, 0.88f, 0.31f),
-        litChannel(shell.g, frontLight, 0.88f, 0.31f),
-        litChannel(shell.b, frontLight, 0.88f, 0.31f),
-        0.995f * alpha
-    };
-    const nxui::Color backBody{
-        litChannel(shell.r, backLight, 0.76f, 0.24f),
-        litChannel(shell.g, backLight, 0.76f, 0.24f),
-        litChannel(shell.b, backLight, 0.76f, 0.24f),
-        0.995f * alpha
-    };
-    const nxui::Color sideBase{
-        clamp01(shell.r * 0.52f + 0.008f),
-        clamp01(shell.g * 0.52f + 0.008f),
-        clamp01(shell.b * 0.52f + 0.010f),
-        0.995f * alpha
-    };
-    const nxui::Color sideHighlight{
-        clamp01(shell.r * 1.55f + 0.10f),
-        clamp01(shell.g * 1.55f + 0.10f),
-        clamp01(shell.b * 1.55f + 0.11f),
-        0.995f * alpha
-    };
+    nxui::Color frontBody{};
+    nxui::Color backBody{};
+    nxui::Color sideBase{};
+    nxui::Color sideHighlight{};
+
+    if (defaultShell) {
+        frontBody = {
+            0.105f + 0.035f * frontLight,
+            0.109f + 0.038f * frontLight,
+            0.120f + 0.042f * frontLight,
+            0.995f * alpha
+        };
+        backBody = {
+            0.095f + 0.030f * backLight,
+            0.099f + 0.033f * backLight,
+            0.110f + 0.036f * backLight,
+            0.995f * alpha
+        };
+        sideBase = {
+            0.055f, 0.060f, 0.070f, 0.995f * alpha
+        };
+        sideHighlight = {
+            0.22f, 0.23f, 0.25f, 0.995f * alpha
+        };
+    } else {
+        const nxui::Color shell{
+            clamp01(panelColor.r),
+            clamp01(panelColor.g),
+            clamp01(panelColor.b),
+            1.f
+        };
+        auto lit = [](float channel, float light, float floor, float gain) {
+            return clamp01(channel * (floor + gain * light) +
+                           0.010f * light);
+        };
+
+        frontBody = {
+            lit(shell.r, frontLight, 0.88f, 0.31f),
+            lit(shell.g, frontLight, 0.88f, 0.31f),
+            lit(shell.b, frontLight, 0.88f, 0.31f),
+            0.995f * alpha
+        };
+        backBody = {
+            lit(shell.r, backLight, 0.76f, 0.24f),
+            lit(shell.g, backLight, 0.76f, 0.24f),
+            lit(shell.b, backLight, 0.76f, 0.24f),
+            0.995f * alpha
+        };
+        sideBase = {
+            clamp01(shell.r * 0.52f + 0.008f),
+            clamp01(shell.g * 0.52f + 0.008f),
+            clamp01(shell.b * 0.52f + 0.010f),
+            0.995f * alpha
+        };
+        sideHighlight = {
+            clamp01(shell.r * 1.45f + 0.08f),
+            clamp01(shell.g * 1.45f + 0.08f),
+            clamp01(shell.b * 1.45f + 0.09f),
+            0.995f * alpha
+        };
+    }
 
     std::vector<SideQuad> sides;
     sides.reserve(front.size());
@@ -543,8 +577,6 @@ void StylisedGameCartridge::draw(nxui::Renderer& ren,
         const nxui::Color edgeSoft(
             0.50f, 0.57f, 0.70f,
             (0.045f + 0.10f * detailSpec) * alpha);
-        const nxui::Color customEdge = mixColor(
-            edgeHi, borderColor.withAlpha(edgeHi.a), 0.22f);
 
         // Stronger molded frame around the dynamic artwork. Two clean rings
         // read as a recessed label bed without adding photoreal texture noise.
@@ -557,7 +589,7 @@ void StylisedGameCartridge::draw(nxui::Renderer& ren,
             ren, artCenterX, artCenterY,
             artW + 4.0f, artH + 4.0f, artR + 2.0f, z - 0.02f,
             centerX, centerY, rotY, rotX, scale,
-            customEdge, 0.95f);
+            edgeHi, 0.95f);
 
         // Upper decorative molded groove (NOT an insertion slot).
         const float topGrooveCy = texYToModel(78.f, height);

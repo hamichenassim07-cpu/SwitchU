@@ -4,6 +4,7 @@
 #include <nxui/core/Animation.hpp>
 #include <nxui/core/Types.hpp>
 #include <string>
+#include <cstdint>
 
 class TitlePillWidget : public nxui::GlassWidget {
 public:
@@ -15,6 +16,7 @@ public:
 
     void setAnchor(float centerX, float topY, float screenWidth = 1280.f);
     void setText(const std::string& text, float screenWidth = 1280.f);
+    void setSelectedTitleId(std::uint64_t titleId);
     void setGameActionsVisible(bool visible);
     bool gameActionsVisible() const { return m_showGameActions; }
 
@@ -44,4 +46,7 @@ private:
     bool m_hideOnCollapse = false;
     bool m_showGameActions = false;
     bool m_profileOriginalMode = false;
+    std::uint64_t m_selectedTitleId = 0;
+    std::uint64_t m_playTimeMinutes = 0;
+    bool m_playTimeAvailable = false;
 };

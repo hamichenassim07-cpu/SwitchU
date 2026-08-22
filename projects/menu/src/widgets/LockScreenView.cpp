@@ -2,8 +2,8 @@
 #include "launcher/AppListLoader.hpp"
 #include "bluetooth/BluetoothManager.hpp"
 #include "core/AudioManager.hpp"
-#include "core/DebugLog.hpp"
 #include "core/CartridgeStyleStore.hpp"
+#include "core/DebugLog.hpp"
 #include <nxui/Application.hpp>
 #include <nxui/core/Renderer.hpp>
 #include <nxui/widgets/True3DCard.hpp>

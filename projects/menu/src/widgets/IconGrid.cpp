@@ -106,6 +106,10 @@ void IconGrid::setSuspendedTitleId(uint64_t titleId) {
         return;
     m_suspendedTitleId = titleId;
     HomeOrderStore::instance().setSuspendedTitle(titleId);
+    m_suspendedTumbleWait = 0.f;
+    m_suspendedTumbleTime = 0.f;
+    m_suspendedNextTumble = 22.f;
+    m_suspendedTumbleActive = false;
     refreshDisplayOrder();
 }
 
@@ -221,46 +225,9 @@ void IconGrid::updateDisplayCount() {
             m_displayIndices.push_back(i);
     }
 
-    // V10.25 hybrid order: suspended first, then manually pinned titles,
-    // then all remaining titles by last real launch time. Equal metadata keeps
-    // the legacy/layout order because stable_sort never disturbs ties.
-    auto& orderStore = HomeOrderStore::instance();
-    uint64_t suspended = m_suspendedTitleId;
-    if (suspended == 0) {
-        for (int idx : m_displayIndices) {
-            if (idx >= 0 && idx < static_cast<int>(m_allIcons.size()) &&
-                m_allIcons[idx] && m_allIcons[idx]->isSuspended()) {
-                suspended = m_allIcons[idx]->titleId();
-                break;
-            }
-        }
-    }
-    if (suspended != 0)
-        orderStore.setSuspendedTitle(suspended);
-
-    std::stable_sort(m_displayIndices.begin(), m_displayIndices.end(),
-        [&](int lhs, int rhs) {
-            const uint64_t a = m_allIcons[lhs] ? m_allIcons[lhs]->titleId() : 0;
-            const uint64_t b = m_allIcons[rhs] ? m_allIcons[rhs]->titleId() : 0;
-            const int ga = (a != 0 && a == suspended) ? 0 :
-                           (orderStore.isPinned(a) ? 1 : 2);
-            const int gb = (b != 0 && b == suspended) ? 0 :
-                           (orderStore.isPinned(b) ? 1 : 2);
-            if (ga != gb) return ga < gb;
-            if (ga == 1) {
-                const int ra = orderStore.manualRank(a);
-                const int rb = orderStore.manualRank(b);
-                if (ra != rb) return ra < rb;
-                return false;
-            }
-            if (ga == 2) {
-                const uint64_t ta = orderStore.lastLaunchTime(a);
-                const uint64_t tb = orderStore.lastLaunchTime(b);
-                if (ta != tb) return ta > tb;
-            }
-            return false;
-        });
-
+    // V10.27: stable carousel order. Category filtering preserves the exact
+    // underlying model/layout order; launching or suspending a title never
+    // changes its position. Manual Y placement is persisted by layout slots.
     m_displayCount = static_cast<int>(m_displayIndices.size());
 
     if (m_displayCount <= 0) {
@@ -779,7 +746,34 @@ void IconGrid::startWaveTransition(
 }
 
 void IconGrid::onUpdate(float dt) {
-    m_suspendedIdleTime += std::max(0.f, dt);
+    const float safeDt = std::max(0.f, dt);
+    m_suspendedIdleTime += safeDt;
+
+    if (m_suspendedTitleId != 0) {
+        if (m_suspendedTumbleActive) {
+            m_suspendedTumbleTime += safeDt;
+            constexpr float kTumbleDuration = 1.08f;
+            if (m_suspendedTumbleTime >= kTumbleDuration) {
+                m_suspendedTumbleActive = false;
+                m_suspendedTumbleTime = 0.f;
+                m_suspendedTumbleWait = 0.f;
+                // Deterministic-but-varied interval: roughly 24–34 seconds.
+                m_suspendedNextTumble =
+                    24.f + 10.f * (0.5f + 0.5f *
+                        std::sin(m_suspendedIdleTime * 0.173f + 1.41f));
+            }
+        } else {
+            m_suspendedTumbleWait += safeDt;
+            if (m_suspendedTumbleWait >= m_suspendedNextTumble) {
+                m_suspendedTumbleActive = true;
+                m_suspendedTumbleTime = 0.f;
+            }
+        }
+    } else {
+        m_suspendedTumbleWait = 0.f;
+        m_suspendedTumbleTime = 0.f;
+        m_suspendedTumbleActive = false;
+    }
     if (m_touchScrolling ||
         m_displayCount <= 0)
         return;
@@ -863,73 +857,49 @@ void IconGrid::render(
 
     nxui::Widget* focused = m_focus.current();
 
-    // V10.26 TEST: cartridge is now the visual language of the whole carousel,
-    // not only the suspended title. Neighbours converge toward the selected
-    // centre using the same continuous scroll coordinate as position/scale.
-    auto renderCartridge = [&](GlossyIcon* icon) {
-        if (!icon)
-            return;
-
-        int globalIndex = -1;
-        for (int i = 0; i < static_cast<int>(m_allIcons.size()); ++i) {
-            if (m_allIcons[i].get() == icon) {
-                globalIndex = i;
-                break;
-            }
-        }
-        const int displayIndex = displayPositionForGlobalIndex(globalIndex);
-        if (displayIndex < 0)
-            return;
-
-        const float logicalDistance =
-            static_cast<float>(displayIndex) - m_scrollPosition;
-        const float degrees = 3.14159265358979323846f / 180.f;
-
-        // Left = positive yaw (looks right), right = negative yaw (looks left).
-        float yaw = -std::clamp(logicalDistance * 7.5f, -10.0f, 10.0f) * degrees;
-        float pitch = 0.f;
-        float floatX = 0.f;
-        float floatY = 0.f;
-        float breathe = 1.f;
-
-        if (icon->isSuspended()) {
-            // Lockscreen-inspired suspended idle: slow horizontal + vertical
-            // drift and a tiny additive 3D motion, never a bouncy bob.
-            floatX = std::sin(m_suspendedIdleTime * 0.54f) * 2.5f
-                   + std::sin(m_suspendedIdleTime * 0.23f + 1.1f) * 0.7f;
-            floatY = std::sin(m_suspendedIdleTime * 0.47f + 0.4f) * 1.7f;
-            yaw += std::sin(m_suspendedIdleTime * 0.41f) * 1.8f * degrees;
-            pitch = std::sin(m_suspendedIdleTime * 0.31f + 0.7f) * 0.85f * degrees;
-            breathe = 1.f + 0.0035f * std::sin(m_suspendedIdleTime * 0.29f);
-        }
-
+    auto renderSuspendedCartridge = [&](GlossyIcon* icon) {
+        if (!icon) return;
         const nxui::Rect r = icon->focusRect();
+        const float degrees = 3.14159265358979323846f / 180.f;
+        float yaw = std::sin(m_suspendedIdleTime * 0.82f) * 2.0f * degrees;
+        float pitch = std::sin(m_suspendedIdleTime * 0.61f + 0.7f) * 1.0f * degrees;
+        float floatY = std::sin(m_suspendedIdleTime * 1.08f) * 2.0f;
+        float breathe = 1.f + 0.004f * std::sin(m_suspendedIdleTime * 0.76f);
+
+        // Rare surprise animation: a short fall/tumble and a natural return.
+        // It is additive to the existing gentle idle and never loops.
+        if (m_suspendedTumbleActive) {
+            constexpr float kTumbleDuration = 1.08f;
+            const float p = std::clamp(
+                m_suspendedTumbleTime / kTumbleDuration, 0.f, 1.f);
+            const float arc = std::sin(p * 3.14159265358979323846f);
+            const float wobble = std::sin(p * 6.2831853071795864769f);
+            pitch += 34.f * degrees * arc;
+            yaw += 10.f * degrees * wobble * arc;
+            floatY += 7.f * arc;
+            breathe *= 1.f - 0.030f * arc;
+        }
+
         const float cardW = r.width * 0.86f;
         const float cardH = cardW * (326.f / 286.f);
-        const float alpha = m_opacity * (icon->isNotLaunchable() ? 0.66f : 1.f);
-        const nxui::Color shell =
-            CartridgeStyleStore::instance().colorFor(icon->titleId());
-
         StylisedGameCartridge::draw(
             renderer, icon->texture(), nullptr, nullptr,
-            r.x + r.width * 0.5f + floatX,
+            r.x + r.width * 0.5f,
             r.y + r.height * 0.5f + floatY,
             cardW, cardH,
             std::max(12.f, cardW * (18.f / 286.f)),
             std::max(12.f, cardW * (22.f / 286.f)),
             yaw, pitch, breathe, 11.f,
-            shell,
-            icon->isSuspended()
-                ? nxui::Color(0.35f, 0.72f, 1.00f, 0.24f)
-                : nxui::Color(0.28f, 0.62f, 1.00f, 0.12f),
-            alpha);
+            CartridgeStyleStore::instance().colorFor(icon->titleId()),
+            nxui::Color(0.28f, 0.62f, 1.00f, 0.20f),
+            m_opacity);
     };
 
     auto renderOne = [&](nxui::Widget* widget) {
-        if (!widget)
-            return;
-        if (auto* glossy = dynamic_cast<GlossyIcon*>(widget)) {
-            renderCartridge(glossy);
+        if (!widget) return;
+        auto* glossy = dynamic_cast<GlossyIcon*>(widget);
+        if (glossy && glossy->isSuspended()) {
+            renderSuspendedCartridge(glossy);
             return;
         }
         widget->render(renderer);
@@ -940,7 +910,8 @@ void IconGrid::render(
             renderOne(child.get());
     }
 
-    // Focused hero is drawn last. LaunchAnimation takes ownership while active.
+    // The independent launch/resume animation owns the focused cartridge while
+    // active, preventing a duplicate suspended card underneath it.
     if (focused && !LaunchAnimation::globalPlaying())
         renderOne(focused);
 

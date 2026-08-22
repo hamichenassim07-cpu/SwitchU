@@ -5,7 +5,8 @@
 #include <string>
 #include <unordered_map>
 
-// V10.26 TEST: persistent per-title cartridge appearance.
+// V10.27: persistent colour choice for the cartridge representation only.
+// Normal HOME covers remain normal covers.
 class CartridgeStyleStore {
 public:
     static constexpr int kPresetCount = 8;
@@ -14,7 +15,6 @@ public:
 
     int presetFor(std::uint64_t titleId);
     void setPreset(std::uint64_t titleId, int preset);
-    void reset(std::uint64_t titleId);
 
     nxui::Color colorFor(std::uint64_t titleId);
     static nxui::Color colorForPreset(int preset);

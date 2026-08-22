@@ -47,6 +47,7 @@ private:
     static constexpr float kReboundDur       = 0.050f;
     static constexpr float kLockDur          = 0.060f;
     static constexpr float kLockHoldDur      = 0.10f;
+    static constexpr float kExitDur          = 0.15f;
     static constexpr float kWipeDur          = 0.26f;
     static constexpr float kBlackHoldDur     = 0.14f;
     static constexpr float kPostLaunchBlackHold = 0.24f;
@@ -60,7 +61,8 @@ private:
     static constexpr float kReboundStart     = kClickStart + kClickDownDur;
     static constexpr float kLockStart        = kReboundStart + kReboundDur;
     static constexpr float kLockHoldStart    = kLockStart + kLockDur;
-    static constexpr float kWipeStart        = kLockHoldStart + kLockHoldDur;
+    static constexpr float kExitStart        = kLockHoldStart + kLockHoldDur;
+    static constexpr float kWipeStart        = kExitStart + kExitDur;
     static constexpr float kLaunchMoment     = kWipeStart + kWipeDur;
     static constexpr float kTotalDur         = kLaunchMoment + kBlackHoldDur;
 
@@ -91,7 +93,6 @@ private:
     bool           m_spinSfxPlayed = false;
     bool           m_resumeSfxPlayed = false;
     bool           m_resumeMode = false;
-    bool           m_orderMarked = false;
     uint64_t       m_effectiveTitleId = 0;
 
     static LaunchAnimation* s_activeInstance;
