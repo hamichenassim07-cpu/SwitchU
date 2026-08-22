@@ -3,6 +3,7 @@
 #include "LaunchAnimation.hpp"
 #include "StylisedGameCartridge.hpp"
 #include "../core/HomeOrderStore.hpp"
+#include "../core/CartridgeStyleStore.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <algorithm>
 #include <cmath>
@@ -862,35 +863,73 @@ void IconGrid::render(
 
     nxui::Widget* focused = m_focus.current();
 
-    auto renderSuspendedCartridge = [&](GlossyIcon* icon) {
-        if (!icon) return;
-        const nxui::Rect r = icon->focusRect();
-        const float degrees = 3.14159265358979323846f / 180.f;
-        const float yaw = std::sin(m_suspendedIdleTime * 0.82f) * 2.0f * degrees;
-        const float pitch = std::sin(m_suspendedIdleTime * 0.61f + 0.7f) * 1.0f * degrees;
-        const float floatY = std::sin(m_suspendedIdleTime * 1.08f) * 2.0f;
-        const float breathe = 1.f + 0.004f * std::sin(m_suspendedIdleTime * 0.76f);
+    // V10.26 TEST: cartridge is now the visual language of the whole carousel,
+    // not only the suspended title. Neighbours converge toward the selected
+    // centre using the same continuous scroll coordinate as position/scale.
+    auto renderCartridge = [&](GlossyIcon* icon) {
+        if (!icon)
+            return;
 
+        int globalIndex = -1;
+        for (int i = 0; i < static_cast<int>(m_allIcons.size()); ++i) {
+            if (m_allIcons[i].get() == icon) {
+                globalIndex = i;
+                break;
+            }
+        }
+        const int displayIndex = displayPositionForGlobalIndex(globalIndex);
+        if (displayIndex < 0)
+            return;
+
+        const float logicalDistance =
+            static_cast<float>(displayIndex) - m_scrollPosition;
+        const float degrees = 3.14159265358979323846f / 180.f;
+
+        // Left = positive yaw (looks right), right = negative yaw (looks left).
+        float yaw = -std::clamp(logicalDistance * 7.5f, -10.0f, 10.0f) * degrees;
+        float pitch = 0.f;
+        float floatX = 0.f;
+        float floatY = 0.f;
+        float breathe = 1.f;
+
+        if (icon->isSuspended()) {
+            // Lockscreen-inspired suspended idle: slow horizontal + vertical
+            // drift and a tiny additive 3D motion, never a bouncy bob.
+            floatX = std::sin(m_suspendedIdleTime * 0.54f) * 2.5f
+                   + std::sin(m_suspendedIdleTime * 0.23f + 1.1f) * 0.7f;
+            floatY = std::sin(m_suspendedIdleTime * 0.47f + 0.4f) * 1.7f;
+            yaw += std::sin(m_suspendedIdleTime * 0.41f) * 1.8f * degrees;
+            pitch = std::sin(m_suspendedIdleTime * 0.31f + 0.7f) * 0.85f * degrees;
+            breathe = 1.f + 0.0035f * std::sin(m_suspendedIdleTime * 0.29f);
+        }
+
+        const nxui::Rect r = icon->focusRect();
         const float cardW = r.width * 0.86f;
         const float cardH = cardW * (326.f / 286.f);
+        const float alpha = m_opacity * (icon->isNotLaunchable() ? 0.66f : 1.f);
+        const nxui::Color shell =
+            CartridgeStyleStore::instance().colorFor(icon->titleId());
+
         StylisedGameCartridge::draw(
             renderer, icon->texture(), nullptr, nullptr,
-            r.x + r.width * 0.5f,
+            r.x + r.width * 0.5f + floatX,
             r.y + r.height * 0.5f + floatY,
             cardW, cardH,
             std::max(12.f, cardW * (18.f / 286.f)),
             std::max(12.f, cardW * (22.f / 286.f)),
             yaw, pitch, breathe, 11.f,
-            nxui::Color(0.10f, 0.11f, 0.13f, 1.f),
-            nxui::Color(0.28f, 0.62f, 1.00f, 0.20f),
-            m_opacity);
+            shell,
+            icon->isSuspended()
+                ? nxui::Color(0.35f, 0.72f, 1.00f, 0.24f)
+                : nxui::Color(0.28f, 0.62f, 1.00f, 0.12f),
+            alpha);
     };
 
     auto renderOne = [&](nxui::Widget* widget) {
-        if (!widget) return;
-        auto* glossy = dynamic_cast<GlossyIcon*>(widget);
-        if (glossy && glossy->isSuspended()) {
-            renderSuspendedCartridge(glossy);
+        if (!widget)
+            return;
+        if (auto* glossy = dynamic_cast<GlossyIcon*>(widget)) {
+            renderCartridge(glossy);
             return;
         }
         widget->render(renderer);
@@ -901,8 +940,7 @@ void IconGrid::render(
             renderOne(child.get());
     }
 
-    // The independent launch/resume animation owns the focused cartridge while
-    // active, preventing a duplicate suspended card underneath it.
+    // Focused hero is drawn last. LaunchAnimation takes ownership while active.
     if (focused && !LaunchAnimation::globalPlaying())
         renderOne(focused);
 

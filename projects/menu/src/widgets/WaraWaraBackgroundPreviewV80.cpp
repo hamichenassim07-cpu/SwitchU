@@ -2318,13 +2318,13 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     const nxui::Color lowerBase(0.030f, 0.032f, 0.039f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
 
-    // V10.25: restore the real full-screen black veil from the validated
-    // V10.16/V10.18 implementation. 0.070 is intentionally reused verbatim
-    // instead of inventing a new opacity; it remains independent from glow.
+    // V10.26 TEST: 7% was technically present but looked absent on-console.
+    // 16% keeps the media brighter than the old heavily-darkened revisions,
+    // while making the requested black veil clearly perceptible on JPG/PNG/MP4.
     if (previewVisualAlpha > 0.001f) {
         ren.drawRect(
             area,
-            nxui::Color(0.f, 0.f, 0.f, 0.070f * previewVisualAlpha * baseAlpha)
+            nxui::Color(0.f, 0.f, 0.f, 0.160f * previewVisualAlpha * baseAlpha)
         );
     }
 

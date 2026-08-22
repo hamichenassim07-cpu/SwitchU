@@ -1,5 +1,7 @@
 #include "HomeOrderStore.hpp"
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <vector>
 #include <filesystem>
 #include <fstream>
 #include <chrono>
@@ -60,6 +62,23 @@ void HomeOrderStore::ensureLoaded() {
         md.lastLaunchTime = jt.value().value("lastLaunchTime", std::uint64_t{0});
         m_entries[tid] = md;
     }
+
+    std::vector<std::uint64_t> pinned;
+    for (const auto& [tid, entry] : m_entries) {
+        if (entry.pinned)
+            pinned.push_back(tid);
+    }
+    std::stable_sort(pinned.begin(), pinned.end(), [&](std::uint64_t a, std::uint64_t b) {
+        const auto& ma = m_entries.at(a);
+        const auto& mb = m_entries.at(b);
+        if (ma.manualRank != mb.manualRank)
+            return ma.manualRank < mb.manualRank;
+        if (ma.lastLaunchTime != mb.lastLaunchTime)
+            return ma.lastLaunchTime > mb.lastLaunchTime;
+        return a < b;
+    });
+    for (int i = 0; i < static_cast<int>(pinned.size()); ++i)
+        m_entries[pinned[static_cast<std::size_t>(i)]].manualRank = i;
 }
 
 const HomeOrderStore::Metadata& HomeOrderStore::metadata(std::uint64_t titleId) {
@@ -85,9 +104,32 @@ std::uint64_t HomeOrderStore::lastLaunchTime(std::uint64_t titleId) {
 void HomeOrderStore::pinAtRank(std::uint64_t titleId, int rank) {
     if (titleId == 0) return;
     ensureLoaded();
-    auto& md = m_entries[titleId];
-    md.pinned = true;
-    md.manualRank = rank < 0 ? 0 : rank;
+
+    // V10.26: one authoritative pinned sequence. V10.25 only changed the
+    // moved title's rank, allowing duplicate manualRank values and causing
+    // stable_sort to fall back to the old physical layout seemingly at random.
+    std::vector<std::uint64_t> pinned;
+    for (const auto& [tid, entry] : m_entries) {
+        if (tid != titleId && entry.pinned)
+            pinned.push_back(tid);
+    }
+    std::stable_sort(pinned.begin(), pinned.end(), [&](std::uint64_t a, std::uint64_t b) {
+        const auto& ma = m_entries.at(a);
+        const auto& mb = m_entries.at(b);
+        if (ma.manualRank != mb.manualRank)
+            return ma.manualRank < mb.manualRank;
+        if (ma.lastLaunchTime != mb.lastLaunchTime)
+            return ma.lastLaunchTime > mb.lastLaunchTime;
+        return a < b;
+    });
+
+    const int desired = std::clamp(rank, 0, static_cast<int>(pinned.size()));
+    pinned.insert(pinned.begin() + desired, titleId);
+    for (int i = 0; i < static_cast<int>(pinned.size()); ++i) {
+        auto& entry = m_entries[pinned[static_cast<std::size_t>(i)]];
+        entry.pinned = true;
+        entry.manualRank = i;
+    }
     save();
 }
 
@@ -96,6 +138,22 @@ void HomeOrderStore::unpin(std::uint64_t titleId) {
     ensureLoaded();
     auto& md = m_entries[titleId];
     md.pinned = false;
+
+    std::vector<std::uint64_t> pinned;
+    for (const auto& [tid, entry] : m_entries) {
+        if (entry.pinned)
+            pinned.push_back(tid);
+    }
+    std::stable_sort(pinned.begin(), pinned.end(), [&](std::uint64_t a, std::uint64_t b) {
+        const auto& ma = m_entries.at(a);
+        const auto& mb = m_entries.at(b);
+        if (ma.manualRank != mb.manualRank)
+            return ma.manualRank < mb.manualRank;
+        return a < b;
+    });
+    for (int i = 0; i < static_cast<int>(pinned.size()); ++i)
+        m_entries[pinned[static_cast<std::size_t>(i)]].manualRank = i;
+
     save();
 }
 
@@ -103,7 +161,16 @@ void HomeOrderStore::markLaunched(std::uint64_t titleId) {
     if (titleId == 0) return;
     ensureLoaded();
     auto& md = m_entries[titleId];
-    md.lastLaunchTime = unixSecondsNow();
+
+    // Two launches can occur inside the same system-clock second. Guarantee a
+    // strict timestamp order so the recent list never intermittently falls
+    // back to legacy/model order on equal timestamps.
+    std::uint64_t stamp = unixSecondsNow();
+    for (const auto& [tid, entry] : m_entries) {
+        if (tid != titleId && entry.lastLaunchTime >= stamp)
+            stamp = entry.lastLaunchTime + 1;
+    }
+    md.lastLaunchTime = stamp;
     save();
 }
 

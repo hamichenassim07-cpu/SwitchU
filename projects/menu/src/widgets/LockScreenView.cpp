@@ -3,6 +3,7 @@
 #include "bluetooth/BluetoothManager.hpp"
 #include "core/AudioManager.hpp"
 #include "core/DebugLog.hpp"
+#include "core/CartridgeStyleStore.hpp"
 #include <nxui/Application.hpp>
 #include <nxui/core/Renderer.hpp>
 #include <nxui/widgets/True3DCard.hpp>
@@ -1339,7 +1340,7 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
             cardStyle.width, cardStyle.height, cardStyle.depth,
             cardStyle.cornerRadius, cardStyle.yaw, cardStyle.pitch,
             1.f, cardStyle.frameInset,
-            nxui::Color(0.10f, 0.11f, 0.13f, 1.f),
+            CartridgeStyleStore::instance().colorFor(m_gameTitleId),
             nxui::Color(0.38f, 0.72f, 1.0f, 0.24f),
             contentAlpha * unlockFade);
 

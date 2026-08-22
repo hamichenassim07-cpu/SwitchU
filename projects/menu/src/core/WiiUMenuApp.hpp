@@ -174,6 +174,8 @@ private:
     void bindEditActions(GlossyIcon* icon);
     void unbindEditActions();
     bool isEditableIcon(nxui::Widget* w) const;
+    void openCartridgeCustomizer();
+    void showCartridgeColorPage(std::uint64_t titleId, bool extendedPage);
     void announceFocusedWidget(nxui::Widget* w);
     std::string accessibilityContextFor(nxui::Widget* w) const;
     std::string accessibilityActionsFor(nxui::Widget* w) const;
