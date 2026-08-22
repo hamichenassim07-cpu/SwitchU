@@ -187,6 +187,109 @@ void drawTexturedFan(nxui::Renderer& ren,
     }
 }
 
+
+void drawTexturedFanMapped(nxui::Renderer& ren,
+                           int textureSlot,
+                           const std::vector<V3>& model,
+                           const std::vector<Projected>& pts,
+                           const Projected& center,
+                           float modelCenterX,
+                           float modelCenterY,
+                           float modelWidth,
+                           float modelHeight,
+                           float u0,
+                           float v0,
+                           float u1,
+                           float v1,
+                           const nxui::Color& tint) {
+    if (textureSlot < 0 || model.size() != pts.size() || pts.size() < 3 ||
+        modelWidth <= 0.f || modelHeight <= 0.f)
+        return;
+
+    const nxui::Vec2 uvCenter{(u0 + u1) * 0.5f, (v0 + v1) * 0.5f};
+    for (size_t i = 0; i < pts.size(); ++i) {
+        const size_t j = (i + 1) % pts.size();
+
+        const float ax = (model[i].x - modelCenterX) / modelWidth + 0.5f;
+        const float ay = (model[i].y - modelCenterY) / modelHeight + 0.5f;
+        const float bx = (model[j].x - modelCenterX) / modelWidth + 0.5f;
+        const float by = (model[j].y - modelCenterY) / modelHeight + 0.5f;
+
+        const nxui::Vec2 uvA{
+            lerpV10211(u0, u1, clamp01(ax)),
+            lerpV10211(v0, v1, clamp01(ay))
+        };
+        const nxui::Vec2 uvB{
+            lerpV10211(u0, u1, clamp01(bx)),
+            lerpV10211(v0, v1, clamp01(by))
+        };
+
+        ren.drawTexturedTriangle(textureSlot,
+                                 center.p, uvCenter,
+                                 pts[i].p, uvA,
+                                 pts[j].p, uvB,
+                                 tint);
+    }
+}
+
+void computeCoverUv(const nxui::Texture* tex,
+                    float destWidth,
+                    float destHeight,
+                    float& u0,
+                    float& v0,
+                    float& u1,
+                    float& v1) {
+    u0 = 0.f; v0 = 0.f; u1 = 1.f; v1 = 1.f;
+    if (!tex || !tex->valid() || tex->width() <= 0 || tex->height() <= 0 ||
+        destWidth <= 0.f || destHeight <= 0.f)
+        return;
+
+    const float srcAspect = static_cast<float>(tex->width()) /
+                            static_cast<float>(tex->height());
+    const float dstAspect = destWidth / destHeight;
+
+    if (srcAspect > dstAspect) {
+        const float visibleU = dstAspect / srcAspect;
+        u0 = (1.f - visibleU) * 0.5f;
+        u1 = 1.f - u0;
+    } else if (srcAspect < dstAspect) {
+        const float visibleV = srcAspect / dstAspect;
+        v0 = (1.f - visibleV) * 0.5f;
+        v1 = 1.f - v0;
+    }
+}
+
+float texXToModel(float px, float width) {
+    return (px / 1024.f - 0.5f) * width;
+}
+
+float texYToModel(float py, float height) {
+    return (py / 1168.f - 0.5f) * height;
+}
+
+std::vector<V3> offsetOutline(std::vector<V3> model, float dx, float dy) {
+    for (auto& v : model) {
+        v.x += dx;
+        v.y += dy;
+    }
+    return model;
+}
+
+struct ContactSlotPx {
+    float x0, y0, x1, y1;
+};
+
+constexpr std::array<ContactSlotPx, 8> kCalibratedContactSlots{{
+    {160.f, 806.f, 221.f, 1059.f},
+    {251.f, 806.f, 312.f, 1060.f},
+    {343.f, 806.f, 404.f, 1059.f},
+    {435.f, 806.f, 495.f, 1060.f},
+    {527.f, 806.f, 588.f, 1060.f},
+    {618.f, 806.f, 680.f, 1060.f},
+    {712.f, 806.f, 773.f, 1059.f},
+    {803.f, 806.f, 864.f, 1060.f},
+}};
+
 void drawProjectedQuad(nxui::Renderer& ren,
                        const V3& a,
                        const V3& b,
@@ -222,7 +325,9 @@ void drawProjectedLine(nxui::Renderer& ren,
 }
 
 void drawCard3D(nxui::Renderer& ren,
-                const nxui::Texture* tex,
+                const nxui::Texture* artworkTex,
+                const nxui::Texture* frontShellTex,
+                const nxui::Texture* backShellTex,
                 float centerX,
                 float centerY,
                 float width,
@@ -236,10 +341,17 @@ void drawCard3D(nxui::Renderer& ren,
                 const nxui::Color& panelColor,
                 const nxui::Color& borderColor,
                 float alpha) {
+    (void)artworkInset;
+    (void)panelColor;
+    (void)borderColor;
+
     alpha = clamp01(alpha);
     if (alpha <= 0.001f || width <= 1.f || height <= 1.f)
         return;
 
+    // V10.23: keep the exact V10.20 physical geometry, but map the calibrated
+    // front/back material assets onto it. 1024x1168 has almost exactly the
+    // same aspect ratio as 286x326, so no visible shell distortion is needed.
     const float halfD = depth * 0.5f;
     const auto frontModel = roundedOutline(width, height, radius, -halfD);
     const auto backModel  = roundedOutline(width, height, radius,  halfD);
@@ -248,18 +360,25 @@ void drawCard3D(nxui::Renderer& ren,
     const Projected frontCenter = projectPoint({0.f, 0.f, -halfD}, centerX, centerY, rotY, rotX, scale);
     const Projected backCenter  = projectPoint({0.f, 0.f,  halfD}, centerX, centerY, rotY, rotX, scale);
 
-    const float lightFacing = 0.5f + 0.5f * std::cos(rotY);
+    // Orientation-aware base illumination. The detailed grain remains in the
+    // PNG; these values only stop the object reading as a flat black sprite.
+    const float frontLight = clamp01(0.50f + 0.50f * std::cos(rotY - 0.48f));
+    const float backLight  = clamp01(0.50f + 0.50f * std::cos((rotY - kPi) - 0.48f));
+
     const nxui::Color frontBody{
-        0.090f + 0.045f * lightFacing,
-        0.094f + 0.048f * lightFacing,
-        0.106f + 0.054f * lightFacing,
+        0.105f + 0.035f * frontLight,
+        0.109f + 0.038f * frontLight,
+        0.120f + 0.042f * frontLight,
         0.995f * alpha
     };
     const nxui::Color backBody{
-        0.078f, 0.082f, 0.094f, 0.995f * alpha
+        0.095f + 0.030f * backLight,
+        0.099f + 0.033f * backLight,
+        0.110f + 0.036f * backLight,
+        0.995f * alpha
     };
     const nxui::Color sideBase{
-        0.050f, 0.054f, 0.064f, 0.995f * alpha
+        0.055f, 0.060f, 0.070f, 0.995f * alpha
     };
 
     std::vector<SideQuad> sides;
@@ -269,10 +388,19 @@ void drawCard3D(nxui::Renderer& ren,
         SideQuad q;
         q.p = {front[i], front[j], back[j], back[i]};
         q.z = (front[i].z + front[j].z + back[j].z + back[i].z) * 0.25f;
-        const float edgeLight = 0.5f + 0.5f * std::cos(static_cast<float>(i) * 0.55f + rotY);
-        q.color = mixColor(sideBase,
-                           nxui::Color(0.16f, 0.17f, 0.19f, 0.995f * alpha),
-                           0.40f * edgeLight);
+
+        // Stronger edge response around profile angles makes the real depth
+        // readable while the card spins.
+        const float segmentPhase = static_cast<float>(i) /
+                                   static_cast<float>(std::max<size_t>(1, front.size()));
+        const float edgeLight = 0.5f + 0.5f *
+            std::cos(segmentPhase * kTwoPi + rotY - 0.65f);
+        const float profileBoost = std::pow(std::abs(std::sin(rotY)), 0.65f);
+        q.color = mixColor(
+            sideBase,
+            nxui::Color(0.22f, 0.23f, 0.25f, 0.995f * alpha),
+            clamp01(0.25f * edgeLight + 0.30f * profileBoost * edgeLight)
+        );
         sides.push_back(q);
     }
     std::sort(sides.begin(), sides.end(), [](const SideQuad& a, const SideQuad& b) {
@@ -283,151 +411,248 @@ void drawCard3D(nxui::Renderer& ren,
     const float backDepth = averageDepth(back);
     const bool frontNear = frontDepth < backDepth;
 
-    auto drawShellGrooves = [&](float widthScale, float heightScale, float z, float alphaMul) {
-        const float grooveW = width * widthScale;
-        const float xL = -grooveW * 0.5f;
-        const float xR =  grooveW * 0.5f;
-        const nxui::Color grooveDark(0.02f, 0.022f, 0.028f, 0.18f * alpha * alphaMul);
-        const nxui::Color grooveLight(0.80f, 0.84f, 0.92f, 0.055f * alpha * alphaMul);
-        const float y0 = -height * heightScale;
-        const float gap = height * 0.12f;
-        for (int i = 0; i < 4; ++i) {
-            const float y = y0 + gap * i;
-            drawProjectedLine(ren, {xL, y, z}, {xR, y, z}, centerX, centerY, rotY, rotX, scale, grooveDark, 0.9f);
-            drawProjectedLine(ren, {xL, y - 1.2f, z}, {xR, y - 1.2f, z}, centerX, centerY, rotY, rotX, scale, grooveLight, 0.45f);
+    // Calibrated artwork opening measured from the generated shell texture.
+    // Values are normalized from the 1024x1168 authoring canvas so the mapping
+    // remains correct at any rendered card size.
+    constexpr float artPxX = 113.f;
+    constexpr float artPxY = 153.f;
+    constexpr float artPxW = 798.f;
+    constexpr float artPxH = 791.f;
+    constexpr float artPxRadius = 54.f;
+
+    const float artCenterX =
+        texXToModel(artPxX + artPxW * 0.5f, width);
+    const float artCenterY =
+        texYToModel(artPxY + artPxH * 0.5f, height);
+    const float artW = width * (artPxW / 1024.f);
+    const float artH = height * (artPxH / 1168.f);
+    const float artR = std::max(2.f,
+        0.5f * (width * (artPxRadius / 1024.f) +
+                height * (artPxRadius / 1168.f)));
+
+    auto drawArtwork = [&]() {
+        // Slightly enlarge behind the transparent shell opening so texture
+        // antialiasing can never reveal a one-pixel dark seam.
+        const float pad = 1.4f;
+        const float aw = artW + pad * 2.f;
+        const float ah = artH + pad * 2.f;
+        const float ar = artR + pad * 0.6f;
+        const float artZ = -halfD + 0.10f;
+        auto artModel = roundedOutline(aw, ah, ar, artZ, 6);
+        artModel = offsetOutline(std::move(artModel), artCenterX, artCenterY);
+        const auto artProj = projectOutline(artModel, centerX, centerY, rotY, rotX, scale);
+        const Projected artCenter = projectPoint(
+            {artCenterX, artCenterY, artZ},
+            centerX, centerY, rotY, rotX, scale);
+
+        if (artworkTex && artworkTex->valid()) {
+            float u0, v0, u1, v1;
+            computeCoverUv(artworkTex, aw, ah, u0, v0, u1, v1);
+            drawTexturedFanMapped(
+                ren,
+                artworkTex->descriptorSlot(),
+                artModel,
+                artProj,
+                artCenter,
+                artCenterX,
+                artCenterY,
+                aw,
+                ah,
+                u0, v0, u1, v1,
+                nxui::Color::white().withAlpha(alpha)
+            );
+        } else {
+            drawSolidFan(ren, artProj, artCenter,
+                         nxui::Color(0.18f, 0.21f, 0.27f, 0.98f * alpha));
         }
+    };
+
+    auto drawFrontReflection = [&]() {
+        // A dynamic highlight is geometry, not painted into the texture. It
+        // changes position/intensity from the real 3D rotation angle.
+        const float spec = std::pow(
+            clamp01(0.5f + 0.5f * std::cos(rotY - 0.62f)),
+            5.5f
+        );
+        if (spec <= 0.01f)
+            return;
+
+        const float topLimit = texYToModel(artPxY, height);
+        const float bottomStart = texYToModel(artPxY + artPxH, height);
+        const float glide = 0.5f + 0.5f * std::sin(rotY - 0.35f);
+        const float bandCx = lerpV10211(-width * 0.34f, width * 0.34f, glide);
+        const float bandW = width * 0.075f;
+        const float z = -halfD - 0.16f;
+        const nxui::Color sheen(
+            0.82f, 0.88f, 0.96f,
+            (0.035f + 0.10f * spec) * alpha
+        );
+
+        // Top and bottom plastic only: never wash over the dynamic game icon.
+        drawProjectedQuad(
+            ren,
+            {bandCx - bandW, -height * 0.5f + 4.f, z},
+            {bandCx + bandW, -height * 0.5f + 4.f, z},
+            {bandCx + bandW * 0.58f, topLimit - 2.f, z},
+            {bandCx - bandW * 0.58f, topLimit - 2.f, z},
+            centerX, centerY, rotY, rotX, scale, sheen
+        );
+        drawProjectedQuad(
+            ren,
+            {bandCx - bandW * 0.58f, bottomStart + 2.f, z},
+            {bandCx + bandW * 0.58f, bottomStart + 2.f, z},
+            {bandCx + bandW, height * 0.5f - 4.f, z},
+            {bandCx - bandW, height * 0.5f - 4.f, z},
+            centerX, centerY, rotY, rotX, scale, sheen
+        );
+
+        const nxui::Color rim(
+            0.92f, 0.96f, 1.0f,
+            (0.025f + 0.10f * spec) * alpha
+        );
+        for (size_t i = 0; i < front.size(); ++i)
+            ren.drawLine(front[i].p, front[(i + 1) % front.size()].p, rim, 0.85f);
     };
 
     auto drawFront = [&]() {
         drawSolidFan(ren, front, frontCenter, frontBody);
-        drawShellGrooves(0.72f, 0.33f, -halfD - 0.12f, 0.9f);
+        drawArtwork();
 
-        for (size_t i = 0; i < front.size(); ++i) {
-            ren.drawLine(front[i].p, front[(i + 1) % front.size()].p,
-                         nxui::Color(0.92f, 0.96f, 1.0f, 0.075f * alpha), 0.85f);
-        }
-
-        const float inset = std::clamp(artworkInset, 0.f, std::min(width, height) * 0.20f);
-        const float lipInset = inset - 3.f;
-        const float lipW = std::max(8.f, width - lipInset * 2.f);
-        const float lipH = std::max(8.f, height - lipInset * 2.f);
-        const float lipR = std::max(3.f, radius - lipInset * 0.62f);
-        const float lipZ = -halfD - 0.18f;
-        const auto lipModel = roundedOutline(lipW, lipH, lipR, lipZ);
-        const auto lipProj = projectOutline(lipModel, centerX, centerY, rotY, rotX, scale);
-        const Projected lipCenter = projectPoint({0.f, 0.f, lipZ}, centerX, centerY, rotY, rotX, scale);
-        drawSolidFan(ren, lipProj, lipCenter, nxui::Color(0.045f, 0.048f, 0.056f, 0.96f * alpha));
-
-        const float artW = std::max(8.f, width - inset * 2.f);
-        const float artH = std::max(8.f, height - inset * 2.f);
-        const float artR = std::max(2.f, radius - inset * 0.62f);
-        const float artZ = -halfD - 0.78f;
-        const auto artModel = roundedOutline(artW, artH, artR, artZ);
-        const auto art = projectOutline(artModel, centerX, centerY, rotY, rotX, scale);
-        const Projected artCenter = projectPoint({0.f, 0.f, artZ}, centerX, centerY, rotY, rotX, scale);
-
-        if (tex && tex->valid()) {
-            drawTexturedFan(ren,
-                            tex->descriptorSlot(),
-                            artModel,
-                            art,
-                            artCenter,
-                            artW,
-                            artH,
-                            nxui::Color::white().withAlpha(alpha));
+        if (frontShellTex && frontShellTex->valid()) {
+            drawTexturedFan(
+                ren,
+                frontShellTex->descriptorSlot(),
+                frontModel,
+                front,
+                frontCenter,
+                width,
+                height,
+                nxui::Color::white().withAlpha(alpha)
+            );
         } else {
-            drawSolidFan(ren, art, artCenter,
-                         nxui::Color(0.20f, 0.23f, 0.30f, 0.96f * alpha));
+            // Safe fallback if the ROMFS asset is absent.
+            for (size_t i = 0; i < front.size(); ++i) {
+                ren.drawLine(front[i].p, front[(i + 1) % front.size()].p,
+                             nxui::Color(0.88f, 0.92f, 1.f, 0.08f * alpha), 0.9f);
+            }
         }
 
-        const nxui::Color lipColor = mixColor(borderColor.withAlpha(0.9f), nxui::Color(1.f,1.f,1.f,1.f), 0.22f)
-                                        .withAlpha(std::max(0.22f, borderColor.a) * 0.78f * alpha);
-        for (size_t i = 0; i < art.size(); ++i) {
-            ren.drawLine(art[i].p, art[(i + 1) % art.size()].p, lipColor, 1.0f);
+        drawFrontReflection();
+    };
+
+    auto drawContacts = [&]() {
+        const float backSpec = std::pow(
+            clamp01(0.5f + 0.5f * std::cos((rotY - kPi) - 0.72f)),
+            7.5f
+        );
+        const float zBase = halfD + 0.10f;
+
+        for (const auto& slot : kCalibratedContactSlots) {
+            const float x0 = texXToModel(slot.x0, width);
+            const float x1 = texXToModel(slot.x1, width);
+            const float y0 = texYToModel(slot.y0, height);
+            const float y1 = texYToModel(slot.y1, height);
+            const float sw = x1 - x0;
+
+            const nxui::Color copper(
+                0.42f + 0.11f * backSpec,
+                0.215f + 0.065f * backSpec,
+                0.055f + 0.020f * backSpec,
+                0.99f * alpha
+            );
+            drawProjectedQuad(
+                ren,
+                {x0, y0, zBase},
+                {x1, y0, zBase},
+                {x1, y1, zBase},
+                {x0, y1, zBase},
+                centerX, centerY, rotY, rotX, scale, copper
+            );
+
+            const float inner = sw * 0.13f;
+            const nxui::Color gold(
+                0.78f + 0.18f * backSpec,
+                0.54f + 0.26f * backSpec,
+                0.10f + 0.18f * backSpec,
+                0.96f * alpha
+            );
+            drawProjectedQuad(
+                ren,
+                {x0 + inner, y0 + 2.f, zBase + 0.06f},
+                {x1 - inner, y0 + 2.f, zBase + 0.06f},
+                {x1 - inner, y1 - 2.f, zBase + 0.06f},
+                {x0 + inner, y1 - 2.f, zBase + 0.06f},
+                centerX, centerY, rotY, rotX, scale, gold
+            );
+
+            // Narrow moving metal highlight.
+            const float hX0 = x0 + sw * (0.20f + 0.34f * backSpec);
+            const float hX1 = std::min(x1 - 1.f, hX0 + sw * 0.16f);
+            drawProjectedQuad(
+                ren,
+                {hX0, y0 + 3.f, zBase + 0.10f},
+                {hX1, y0 + 3.f, zBase + 0.10f},
+                {hX1, y1 - 3.f, zBase + 0.10f},
+                {hX0, y1 - 3.f, zBase + 0.10f},
+                centerX, centerY, rotY, rotX, scale,
+                nxui::Color(1.f, 0.90f, 0.50f,
+                            (0.13f + 0.50f * backSpec) * alpha)
+            );
         }
-        drawProjectedLine(ren,
-                          {-artW * 0.42f, -artH * 0.34f, artZ - 0.03f},
-                          { artW * 0.36f, -artH * 0.40f, artZ - 0.03f},
-                          centerX, centerY, rotY, rotX, scale,
-                          nxui::Color(1.f, 1.f, 1.f, 0.10f * alpha), 1.2f);
+    };
+
+    auto drawBackReflection = [&]() {
+        const float spec = std::pow(
+            clamp01(0.5f + 0.5f * std::cos((rotY - kPi) - 0.58f)),
+            5.0f
+        );
+        if (spec <= 0.01f)
+            return;
+
+        const float glide = 0.5f + 0.5f * std::sin((rotY - kPi) - 0.25f);
+        const float bandCx = lerpV10211(-width * 0.30f, width * 0.30f, glide);
+        const float bandW = width * 0.09f;
+        const float upperBottom = texYToModel(720.f, height);
+        const float z = halfD + 0.18f;
+
+        drawProjectedQuad(
+            ren,
+            {bandCx - bandW, -height * 0.5f + 5.f, z},
+            {bandCx + bandW, -height * 0.5f + 5.f, z},
+            {bandCx + bandW * 0.55f, upperBottom, z},
+            {bandCx - bandW * 0.55f, upperBottom, z},
+            centerX, centerY, rotY, rotX, scale,
+            nxui::Color(0.82f, 0.88f, 0.96f,
+                        (0.025f + 0.085f * spec) * alpha)
+        );
     };
 
     auto drawBack = [&]() {
         drawSolidFan(ren, back, backCenter, backBody);
-        drawShellGrooves(0.68f, 0.22f, halfD + 0.10f, 1.0f);
 
-        const float panelW = width * 0.70f;
-        const float panelH = height * 0.52f;
-        const float panelR = std::max(8.f, radius * 0.55f);
-        const float panelZ = halfD + 0.22f;
-        const auto panelModel = roundedOutline(panelW, panelH, panelR, panelZ, 4);
-        const auto panelProj = projectOutline(panelModel, centerX, centerY, rotY, rotX, scale);
-        const Projected panelCenter = projectPoint({0.f, 0.f, panelZ}, centerX, centerY, rotY, rotX, scale);
-        drawSolidFan(ren, panelProj, panelCenter,
-                     nxui::Color(0.060f, 0.064f, 0.074f, 0.96f * alpha));
+        // Metal is drawn first, then revealed by the calibrated transparent
+        // contact slots in the rear shell texture.
+        drawContacts();
 
-        const float bayW = width * 0.56f;
-        const float bayH = height * 0.32f;
-        const float bayY = height * 0.16f;
-        drawProjectedQuad(ren,
-                          {-bayW * 0.5f, bayY - bayH * 0.5f, panelZ + 0.22f},
-                          { bayW * 0.5f, bayY - bayH * 0.5f, panelZ + 0.22f},
-                          { bayW * 0.5f, bayY + bayH * 0.5f, panelZ + 0.22f},
-                          {-bayW * 0.5f, bayY + bayH * 0.5f, panelZ + 0.22f},
-                          centerX, centerY, rotY, rotX, scale,
-                          nxui::Color(0.026f, 0.028f, 0.035f, 0.98f * alpha));
-
-        drawProjectedLine(ren,
-                          {-bayW * 0.48f, bayY - bayH * 0.18f, panelZ + 0.34f},
-                          { bayW * 0.48f, bayY - bayH * 0.18f, panelZ + 0.34f},
-                          centerX, centerY, rotY, rotX, scale,
-                          nxui::Color(0.18f, 0.19f, 0.21f, 0.28f * alpha), 1.0f);
-
-        constexpr int contactCount = 8;
-        const float contactsW = bayW * 0.78f;
-        const float gap = contactsW / static_cast<float>(contactCount);
-        const float padW = gap * 0.56f;
-        const float padTop = bayY - bayH * 0.02f;
-        const float padBottom = bayY + bayH * 0.34f;
-        for (int i = 0; i < contactCount; ++i) {
-            const float cx = -contactsW * 0.5f + gap * (i + 0.5f);
-            const float x0 = cx - padW * 0.5f;
-            const float x1 = cx + padW * 0.5f;
-            drawProjectedQuad(ren,
-                              {x0, padTop,    panelZ + 0.42f},
-                              {x1, padTop,    panelZ + 0.42f},
-                              {x1, padBottom, panelZ + 0.42f},
-                              {x0, padBottom, panelZ + 0.42f},
-                              centerX, centerY, rotY, rotX, scale,
-                              nxui::Color(0.62f, 0.42f, 0.08f, 0.98f * alpha));
-            drawProjectedQuad(ren,
-                              {x0 + padW * 0.16f, padTop + 2.f, panelZ + 0.48f},
-                              {x0 + padW * 0.74f, padTop + 2.f, panelZ + 0.48f},
-                              {x0 + padW * 0.74f, padBottom - 2.f, panelZ + 0.48f},
-                              {x0 + padW * 0.16f, padBottom - 2.f, panelZ + 0.48f},
-                              centerX, centerY, rotY, rotX, scale,
-                              nxui::Color(0.96f, 0.79f, 0.24f, 0.74f * alpha));
+        if (backShellTex && backShellTex->valid()) {
+            drawTexturedFan(
+                ren,
+                backShellTex->descriptorSlot(),
+                backModel,
+                back,
+                backCenter,
+                width,
+                height,
+                nxui::Color::white().withAlpha(alpha)
+            );
+        } else {
+            for (size_t i = 0; i < back.size(); ++i) {
+                ren.drawLine(back[i].p, back[(i + 1) % back.size()].p,
+                             nxui::Color(0.82f, 0.86f, 0.94f, 0.06f * alpha), 0.8f);
+            }
         }
 
-        drawProjectedLine(ren,
-                          {-bayW * 0.5f, bayY - bayH * 0.5f, panelZ + 0.24f},
-                          { bayW * 0.5f, bayY - bayH * 0.5f, panelZ + 0.24f},
-                          centerX, centerY, rotY, rotX, scale,
-                          nxui::Color(0.80f, 0.84f, 0.92f, 0.06f * alpha), 0.8f);
-        drawProjectedQuad(ren,
-                          {-width * 0.18f, -height * 0.10f, panelZ + 0.16f},
-                          {-width * 0.03f, -height * 0.10f, panelZ + 0.16f},
-                          {-width * 0.03f, -height * 0.02f, panelZ + 0.16f},
-                          {-width * 0.18f, -height * 0.02f, panelZ + 0.16f},
-                          centerX, centerY, rotY, rotX, scale,
-                          nxui::Color(0.09f, 0.095f, 0.105f, 0.72f * alpha));
-        drawProjectedQuad(ren,
-                          { width * 0.05f, -height * 0.08f, panelZ + 0.16f},
-                          { width * 0.18f, -height * 0.08f, panelZ + 0.16f},
-                          { width * 0.18f, -height * 0.01f, panelZ + 0.16f},
-                          { width * 0.05f, -height * 0.01f, panelZ + 0.16f},
-                          centerX, centerY, rotY, rotX, scale,
-                          nxui::Color(0.09f, 0.095f, 0.105f, 0.72f * alpha));
+        drawBackReflection();
     };
 
     auto drawSides = [&]() {
@@ -447,6 +672,30 @@ void drawCard3D(nxui::Renderer& ren,
         drawBack();
     }
 }
+}
+
+void LaunchAnimation::ensureCartridgeTextures(nxui::Renderer& ren) {
+    if (m_shellTexturesAttempted)
+        return;
+
+    m_shellTexturesAttempted = true;
+
+    // Runtime assets are deliberately 512x584 (half the authoring size) to
+    // keep GPU memory reasonable while retaining more detail than the ~286x326
+    // on-screen card. maxSide=0 is mandatory: Texture::loadFromFile otherwise
+    // downsizes to 128px by default.
+    m_frontShellTexture.loadFromFile(
+        ren.gpu(),
+        ren,
+        "romfs:/icons/launch_cartridge/cartridge_front_base.png",
+        0
+    );
+    m_backShellTexture.loadFromFile(
+        ren.gpu(),
+        ren,
+        "romfs:/icons/launch_cartridge/cartridge_back_base.png",
+        0
+    );
 }
 
 void LaunchAnimation::start(const nxui::Rect& from, const nxui::Texture* tex, float cornerRadius,
@@ -571,6 +820,8 @@ void LaunchAnimation::onUpdate(float dt) {
 void LaunchAnimation::onRender(nxui::Renderer& ren) {
     if (!m_playing) return;
 
+    ensureCartridgeTextures(ren);
+
     const float startCx = m_from.x + m_from.width * 0.5f;
     const float startCy = m_from.y + m_from.height * 0.5f;
     const float targetCx = m_target.x + m_target.width * 0.5f;
@@ -671,6 +922,8 @@ void LaunchAnimation::onRender(nxui::Renderer& ren) {
     if (m_timer < kWipeStart) {
         drawCard3D(ren,
                    m_tex,
+                   m_frontShellTexture.valid() ? &m_frontShellTexture : nullptr,
+                   m_backShellTexture.valid() ? &m_backShellTexture : nullptr,
                    centerX,
                    centerY,
                    cardW,

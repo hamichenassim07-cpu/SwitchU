@@ -32,6 +32,7 @@ protected:
 private:
     float hudExitProgress() const;
     void clearGlobalStateIfOwned();
+    void ensureCartridgeTextures(nxui::Renderer& ren);
 
     bool  m_playing  = false;
     float m_timer    = 0.f;
@@ -72,6 +73,12 @@ private:
     bool           m_doneCalled = false;
     bool           m_postLaunchHold = false;
     bool           m_insertSfxPlayed = false;
+
+    // V10.23 material prototype: calibrated shell textures are cached once and
+    // mapped onto the existing real 3D card. The game artwork remains dynamic.
+    nxui::Texture  m_frontShellTexture;
+    nxui::Texture  m_backShellTexture;
+    bool           m_shellTexturesAttempted = false;
 
     static LaunchAnimation* s_activeInstance;
 };
