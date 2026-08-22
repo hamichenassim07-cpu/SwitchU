@@ -32,30 +32,38 @@ protected:
 private:
     float hudExitProgress() const;
     void clearGlobalStateIfOwned();
-    void ensureCartridgeTextures(nxui::Renderer& ren);
 
     bool  m_playing  = false;
     float m_timer    = 0.f;
 
-    // V10.22: restore the more readable V10.20 pacing while keeping the
-    // improved physical cartridge detailing.
+    // V10.24: keep the validated V10.20 formation/spin, then use a physical
+    // bottom-of-screen motion instead of a visible slot / suction animation.
     static constexpr float kFormDur        = 0.28f;
     static constexpr float kSpinDur        = 0.92f;
     static constexpr float kSettleDur      = 0.18f;
-    static constexpr float kInsertDur      = 0.62f;
+    static constexpr float kDropDur        = 0.44f;
+    static constexpr float kPreClickHoldDur = 0.065f;
+    static constexpr float kClickDownDur   = 0.11f;
+    static constexpr float kReboundDur     = 0.045f;
+    static constexpr float kLockDur        = 0.055f;
+    static constexpr float kLockHoldDur    = 0.10f;
     static constexpr float kWipeDur        = 0.26f;
     static constexpr float kBlackHoldDur   = 0.14f;
     static constexpr float kPostLaunchBlackHold = 0.24f;
 
     static constexpr float kSpinStart      = kFormDur;
     static constexpr float kSettleStart    = kSpinStart + kSpinDur;
-    static constexpr float kInsertStart    = kSettleStart + kSettleDur;
-    static constexpr float kWipeStart      = kInsertStart + kInsertDur;
+    static constexpr float kDropStart      = kSettleStart + kSettleDur;
+    static constexpr float kPreClickHoldStart = kDropStart + kDropDur;
+    static constexpr float kClickStart     = kPreClickHoldStart + kPreClickHoldDur;
+    static constexpr float kReboundStart   = kClickStart + kClickDownDur;
+    static constexpr float kLockStart      = kReboundStart + kReboundDur;
+    static constexpr float kLockHoldStart  = kLockStart + kLockDur;
+    static constexpr float kWipeStart      = kLockHoldStart + kLockHoldDur;
     static constexpr float kLaunchMoment   = kWipeStart + kWipeDur;
     static constexpr float kTotalDur       = kLaunchMoment + kBlackHoldDur;
 
-    // Lower title/actions leave relatively late like V10.20, but still finish
-    // before the cartridge reaches the insertion slot.
+    // Lower title/actions still leave before the physical descent begins.
     static constexpr float kHudExitStart   = kSpinStart + kSpinDur * 0.70f;
     static constexpr float kHudExitDur     = 0.34f;
 
@@ -73,12 +81,6 @@ private:
     bool           m_doneCalled = false;
     bool           m_postLaunchHold = false;
     bool           m_insertSfxPlayed = false;
-
-    // V10.23 material prototype: calibrated shell textures are cached once and
-    // mapped onto the existing real 3D card. The game artwork remains dynamic.
-    nxui::Texture  m_frontShellTexture;
-    nxui::Texture  m_backShellTexture;
-    bool           m_shellTexturesAttempted = false;
 
     static LaunchAnimation* s_activeInstance;
 };
