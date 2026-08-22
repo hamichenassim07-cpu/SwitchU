@@ -81,6 +81,160 @@ float random01V80() {
     return (std::rand() % 1000) / 1000.f;
 }
 
+
+struct V1028Point2 {
+    float x;
+    float y;
+};
+
+V1028Point2 rotatePointV1028(const V1028Point2& p, float angle) {
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    return {p.x * c - p.y * s, p.x * s + p.y * c};
+}
+
+V1028Point2 projectPointV1028(const V1028Point2& local,
+                               float cx,
+                               float cy,
+                               float angle,
+                               float scaleX,
+                               float scaleY) {
+    const auto r = rotatePointV1028(local, angle);
+    return {cx + r.x * scaleX, cy + r.y * scaleY};
+}
+
+void drawQuadV1028(nxui::Renderer& ren,
+                   const V1028Point2& a,
+                   const V1028Point2& b,
+                   const V1028Point2& c,
+                   const V1028Point2& d,
+                   const nxui::Color& color) {
+    ren.drawTriangle({a.x, a.y}, {b.x, b.y}, {c.x, c.y}, color);
+    ren.drawTriangle({a.x, a.y}, {c.x, c.y}, {d.x, d.y}, color);
+}
+
+void drawRoundedCapsuleV1028(nxui::Renderer& ren,
+                             float cx,
+                             float cy,
+                             float width,
+                             float height,
+                             float angle,
+                             const nxui::Color& color) {
+    const float halfW = width * 0.5f;
+    const float halfH = height * 0.5f;
+    const float radius = std::min(halfW, halfH) * 0.98f;
+    const float coreH = std::max(0.f, height - radius * 2.f);
+
+    if (coreH > 0.5f) {
+        const float hh = coreH * 0.5f;
+        const auto p0 = projectPointV1028({-halfW, -hh}, cx, cy, angle, 1.f, 1.f);
+        const auto p1 = projectPointV1028({ halfW, -hh}, cx, cy, angle, 1.f, 1.f);
+        const auto p2 = projectPointV1028({ halfW,  hh}, cx, cy, angle, 1.f, 1.f);
+        const auto p3 = projectPointV1028({-halfW,  hh}, cx, cy, angle, 1.f, 1.f);
+        drawQuadV1028(ren, p0, p1, p2, p3, color);
+    }
+
+    const auto top = projectPointV1028({0.f, -(coreH * 0.5f)}, cx, cy, angle, 1.f, 1.f);
+    const auto bottom = projectPointV1028({0.f, (coreH * 0.5f)}, cx, cy, angle, 1.f, 1.f);
+    ren.drawCircle({top.x, top.y}, radius, color, 28);
+    ren.drawCircle({bottom.x, bottom.y}, radius, color, 28);
+}
+
+void drawJoyConSymbolV1028(nxui::Renderer& ren,
+                           float cx,
+                           float cy,
+                           float scale,
+                           float angle,
+                           float opacity) {
+    const nxui::Color body(0.95f, 0.97f, 1.00f, 0.10f * opacity);
+    const nxui::Color bodyHi(1.00f, 1.00f, 1.00f, 0.18f * opacity);
+    const nxui::Color detail(0.88f, 0.92f, 0.98f, 0.20f * opacity);
+    const nxui::Color softShadow(0.82f, 0.86f, 0.92f, 0.05f * opacity);
+
+    // soft shadow / back plate to detach the symbol a bit from the media.
+    drawRoundedCapsuleV1028(ren, cx + 7.f * scale, cy + 10.f * scale,
+                            54.f * scale, 155.f * scale,
+                            angle, softShadow);
+    drawRoundedCapsuleV1028(ren, cx, cy, 48.f * scale, 148.f * scale,
+                            angle, body);
+    drawRoundedCapsuleV1028(ren, cx - 3.f * scale, cy - 5.f * scale,
+                            40.f * scale, 128.f * scale,
+                            angle, bodyHi);
+
+    auto point = [&](float lx, float ly) {
+        return projectPointV1028({lx * scale, ly * scale}, cx, cy, angle, 1.f, 1.f);
+    };
+
+    auto ring = [&](float lx, float ly, float radius, const nxui::Color& outer, const nxui::Color& inner) {
+        const auto c = point(lx, ly);
+        ren.drawCircle({c.x, c.y}, radius * scale, outer, 22);
+        ren.drawCircle({c.x, c.y}, radius * 0.56f * scale, inner, 18);
+    };
+
+    // Analog stick
+    ring(-3.0f, -34.0f, 9.4f, detail, nxui::Color(0.82f, 0.86f, 0.92f, 0.28f * opacity));
+    const auto stickDot = point(-3.0f, -34.0f);
+    ren.drawCircle({stickDot.x, stickDot.y}, 2.2f * scale,
+                   nxui::Color(0.98f, 0.99f, 1.0f, 0.22f * opacity), 14);
+
+    // ABXY cluster as simple circles.
+    ring(10.8f, 8.0f, 4.6f, detail, nxui::Color(0.94f, 0.97f, 1.f, 0.12f * opacity));
+    ring(-0.5f, 19.0f, 4.6f, detail, nxui::Color(0.94f, 0.97f, 1.f, 0.12f * opacity));
+    ring(-11.5f, 8.0f, 4.6f, detail, nxui::Color(0.94f, 0.97f, 1.f, 0.12f * opacity));
+    ring(-0.5f, -3.0f, 4.6f, detail, nxui::Color(0.94f, 0.97f, 1.f, 0.12f * opacity));
+
+    // Plus button
+    {
+        const auto c = point(0.0f, -57.0f);
+        ren.drawLine({c.x - 4.2f * scale, c.y}, {c.x + 4.2f * scale, c.y}, detail, 1.8f * scale);
+        ren.drawLine({c.x, c.y - 4.2f * scale}, {c.x, c.y + 4.2f * scale}, detail, 1.8f * scale);
+    }
+
+    // HOME button
+    ring(0.0f, 45.0f, 4.8f, detail, nxui::Color(0.94f, 0.97f, 1.f, 0.10f * opacity));
+
+    // Side rail suggestion
+    const auto r0 = point(18.5f, -46.f);
+    const auto r1 = point(20.5f, -46.f);
+    const auto r2 = point(20.5f, 46.f);
+    const auto r3 = point(18.5f, 46.f);
+    drawQuadV1028(ren, r0, r1, r2, r3,
+                  nxui::Color(0.90f, 0.94f, 1.00f, 0.16f * opacity));
+}
+
+void drawFloatingJoyConFieldV1028(nxui::Renderer& ren,
+                                  const nxui::Rect& area,
+                                  float lowerStartY,
+                                  float opacity) {
+    const float t = std::chrono::duration<float>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    ren.pushClipRect({area.x, area.y, area.width,
+                      std::max(0.f, lowerStartY - area.y)});
+
+    // Main large symbol on the left, like a soft Wii U object.
+    drawJoyConSymbolV1028(
+        ren,
+        area.x + area.width * 0.18f + std::sin(t * 0.11f) * 18.f,
+        area.y + area.height * 0.30f + std::cos(t * 0.09f) * 12.f,
+        1.18f,
+        -0.28f + 0.03f * std::sin(t * 0.07f),
+        opacity
+    );
+
+    // Smaller distant duplicate at the upper-right for depth.
+    drawJoyConSymbolV1028(
+        ren,
+        area.x + area.width * 0.79f + std::cos(t * 0.13f) * 11.f,
+        area.y + area.height * 0.20f + std::sin(t * 0.10f) * 10.f,
+        0.72f,
+        0.20f + 0.04f * std::cos(t * 0.05f),
+        opacity * 0.72f
+    );
+
+    ren.popClipRect();
+}
+
 float wrapValueV80(float value, float minValue, float maxValue) {
     const float span = maxValue - minValue;
     if (span <= 0.f)
@@ -2317,14 +2471,15 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // composited afterwards and can no longer multiply the black filter.
     const nxui::Color lowerBase(0.030f, 0.032f, 0.039f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
-    constexpr float kBackgroundVeilOpacity = 0.18f;
+    constexpr float kBackgroundVeilOpacity = 0.26f;
 
-    if (previewVisualAlpha > 0.001f) {
+    const float veilVisualAlpha = std::max(previewVisualAlpha, 1.f);
+    if (baseAlpha > 0.001f) {
         ren.drawRect(
             area,
             nxui::Color(
                 0.f, 0.f, 0.f,
-                kBackgroundVeilOpacity * previewVisualAlpha * baseAlpha
+                kBackgroundVeilOpacity * veilVisualAlpha * baseAlpha
             )
         );
     }
@@ -2334,6 +2489,11 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // cover/background but never the lower black interface.
     const float lowerStartY = area.y + area.height * 456.f / 720.f;
     const float fadeBand = area.height * 0.14f;
+
+    // V10.28 test: add a very light floating Joy-Con field inspired by the
+    // reference Wii U-style objects. They stay monochrome and behind the
+    // coloured glow so the HOME remains readable.
+    drawFloatingJoyConFieldV1028(ren, area, lowerStartY, baseAlpha);
 
     // Resolve selected-artwork colours only for the carousel ambience.
     AmbientSwatch glowPrimary = r.currentGlowPrimary;
@@ -2350,14 +2510,14 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     // Reference layout requested for V10.27:
     // violet / pink on the LEFT, blue / cyan on the RIGHT.
     const AmbientSwatch conceptViolet{
-        glowSecondary.r * 0.36f + 0.64f * 0.66f,
-        glowSecondary.g * 0.36f + 0.64f * 0.30f,
-        glowSecondary.b * 0.36f + 0.64f * 0.98f
+        glowSecondary.r * 0.26f + 0.74f * 0.82f,
+        glowSecondary.g * 0.26f + 0.74f * 0.28f,
+        glowSecondary.b * 0.26f + 0.74f * 1.00f
     };
     const AmbientSwatch conceptBlue{
-        glowPrimary.r * 0.38f + 0.62f * 0.20f,
-        glowPrimary.g * 0.38f + 0.62f * 0.62f,
-        glowPrimary.b * 0.38f + 0.62f * 1.00f
+        glowPrimary.r * 0.28f + 0.72f * 0.16f,
+        glowPrimary.g * 0.28f + 0.72f * 0.76f,
+        glowPrimary.b * 0.28f + 0.72f * 1.00f
     };
 
     const float glowTime = std::chrono::duration<float>(
@@ -2377,19 +2537,19 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
                                 float strength) {
             ren.drawCircle(
                 {cx * hs, cy * hs},
-                184.f * hs,
+228.f * hs,
                 nxui::Color(c.r, c.g, c.b, strength),
                 64
             );
             ren.drawCircle(
                 {(cx - 92.f) * hs, (cy + 10.f) * hs},
-                132.f * hs,
+164.f * hs,
                 nxui::Color(c.r, c.g, c.b, strength * 0.62f),
                 60
             );
             ren.drawCircle(
                 {(cx + 88.f) * hs, (cy - 28.f) * hs},
-                126.f * hs,
+156.f * hs,
                 nxui::Color(c.r, c.g, c.b, strength * 0.54f),
                 60
             );
@@ -2402,17 +2562,17 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             area.x + area.width * 0.445f + driftX,
             glowY,
             conceptViolet,
-            0.30f * breathe * baseAlpha
+            0.42f * breathe * baseAlpha
         );
         emitSoftMist(
             area.x + area.width * 0.555f - driftX * 0.45f,
             glowY - 4.f,
             conceptBlue,
-            0.32f * breathe * baseAlpha
+            0.44f * breathe * baseAlpha
         );
 
         endHomeGlowTargetV102(ren);
-        ren.applyBlur(6.6f, 2);
+        ren.applyBlur(7.4f, 2);
 
         // Clip the additive composite to the background side of the black
         // separation. The lower band is drawn afterwards as a second safety
@@ -2427,7 +2587,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             ren,
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            0.70f * baseAlpha
+            0.92f * baseAlpha
         );
         ren.popClipRect();
     }

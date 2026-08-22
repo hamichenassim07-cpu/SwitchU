@@ -16,8 +16,8 @@ constexpr float kTerminalExtent = 7.f;
 constexpr float kTextGap = 7.f;
 constexpr float kPercentageScale = 0.98f;
 
-// V10.27 battery semantics. Keep the existing 20% critical threshold and add
-// one explicit middle band instead of changing colour only while charging.
+// V10.28 battery semantics. Keep the same level bands, but charging is
+// now indicated only by a dedicated rose/cyan fill cycle with no bolt icon.
 constexpr float kBatteryCriticalLevel = 0.20f;
 constexpr float kBatteryComfortLevel = 0.50f;
 
@@ -173,10 +173,21 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     ren.drawRoundedRect({body.right() + 2.2f, body.y + 6.5f, 4.5f, 11.f},
                         edge.withAlpha(0.82f * op), 1.8f);
 
-    // V10.27: charge level and charge state are two independent signals.
-    // The fill colour always describes the real battery level.
+    // V10.28: outside charging, the fill colour shows the true level. While
+    // charging, the level fill itself becomes the indicator through a
+    // rose/cyan cycle with no lightning glyph.
     nxui::Color levelColor;
-    if (level <= kBatteryCriticalLevel) {
+    if (m_charging) {
+        const float pulse = 0.5f + 0.5f * std::sin(m_chargeAnim * 3.8f);
+        const nxui::Color rose(1.00f, 0.48f, 0.86f, 0.96f * op);
+        const nxui::Color cyan(0.42f, 0.96f, 1.00f, 0.96f * op);
+        levelColor = nxui::Color(
+            rose.r * (1.f - pulse) + cyan.r * pulse,
+            rose.g * (1.f - pulse) + cyan.g * pulse,
+            rose.b * (1.f - pulse) + cyan.b * pulse,
+            0.96f * op
+        );
+    } else if (level <= kBatteryCriticalLevel) {
         levelColor = nxui::Color(1.00f, 0.24f, 0.22f, 0.96f * op);
     } else if (level <= kBatteryComfortLevel) {
         levelColor = nxui::Color(1.00f, 0.78f, 0.18f, 0.96f * op);
@@ -192,27 +203,13 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     }
 
     if (m_charging) {
-        // Charging never replaces red/yellow/green with a fourth colour. The
-        // same level colour gently pulses around the battery, while a neutral
-        // lightning glyph makes the charging state explicit.
-        const float pulse = 0.5f + 0.5f * std::sin(m_chargeAnim * 4.8f);
+        const float pulse = 0.5f + 0.5f * std::sin(m_chargeAnim * 3.8f);
         ren.drawRoundedRectOutline(
             body.expanded(1.2f),
-            levelColor.withAlpha((0.18f + 0.30f * pulse) * op),
+            levelColor.withAlpha((0.18f + 0.28f * pulse) * op),
             6.6f,
             1.45f
         );
-
-        const float cx = body.x + body.width * 0.5f;
-        const float cy = body.y + body.height * 0.5f;
-        const nxui::Color bolt =
-            nxui::Color(1.f, 1.f, 1.f, (0.70f + 0.20f * pulse) * op);
-        ren.drawLine({cx + 1.6f, cy - 7.0f},
-                     {cx - 2.0f, cy - 0.8f}, bolt, 2.0f);
-        ren.drawLine({cx - 2.0f, cy - 0.8f},
-                     {cx + 2.1f, cy - 0.8f}, bolt, 2.0f);
-        ren.drawLine({cx + 2.1f, cy - 0.8f},
-                     {cx - 1.8f, cy + 7.0f}, bolt, 2.0f);
     }
 
     if (m_font) {
