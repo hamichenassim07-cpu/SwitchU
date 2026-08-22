@@ -262,6 +262,7 @@ private:
 #endif
     bool m_showWireframe     = false;
     bool m_editMode          = false;
+    bool m_editMoved         = false;
     int  m_editSourceIndex   = -1;
     std::string m_editHeldTitle;
     GlossyIcon* m_editBoundIcon = nullptr;

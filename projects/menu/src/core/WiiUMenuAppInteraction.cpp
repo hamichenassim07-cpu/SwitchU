@@ -1,6 +1,7 @@
 #include "WiiUMenuApp.hpp"
 #include "widgets/GlossyIcon.hpp"
 #include "DebugLog.hpp"
+#include "HomeOrderStore.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -675,6 +676,7 @@ void WiiUMenuApp::enterEditMode() {
 
     auto* icon = static_cast<GlossyIcon*>(cur);
     m_editMode = true;
+    m_editMoved = false;
     m_editSourceIndex = m_grid ? m_grid->focusedGlobalIndex() : -1;
     m_editHeldTitle = icon->title();
     startEditGhost(icon);
@@ -691,6 +693,7 @@ void WiiUMenuApp::exitEditMode() {
         return;
 
     m_editMode = false;
+    m_editMoved = false;
     unbindEditActions();
     m_editSourceIndex = -1;
     m_editHeldTitle.clear();
@@ -723,8 +726,17 @@ bool WiiUMenuApp::commitEditModePlacement() {
         return false;
 
     int oldPage = m_grid->currentPage();
-    bool changed = (from != target);
-    if (changed) {
+    const uint64_t movedTitleId = m_model.at(from).titleId;
+    const int targetDisplayRank = m_grid->displayPositionForGlobalIndex(target);
+    bool changed = (from != target) || m_editMoved;
+    if (!changed && HomeOrderStore::instance().isPinned(movedTitleId)) {
+        // V10.25 simple return-to-automatic gesture: enter move mode on a
+        // pinned title and confirm Y without moving. B remains the cancel path.
+        HomeOrderStore::instance().unpin(movedTitleId);
+        m_grid->refreshDisplayOrder();
+        changed = true;
+    }
+    if (from != target) {
         if (!m_layoutSlots.empty() && from < (int)m_layoutSlots.size() && target < (int)m_layoutSlots.size())
             std::swap(m_layoutSlots[from], m_layoutSlots[target]);
 
@@ -734,6 +746,12 @@ bool WiiUMenuApp::commitEditModePlacement() {
         m_editSourceIndex = target;
         m_iconStreamer.setPinnedIndex(m_editSourceIndex);
         m_layoutDirty = true;
+
+        // V10.25: a title the user explicitly places becomes pinned. The
+        // legacy layout swap is kept for backwards compatibility, while the
+        // hybrid sorter uses this persistent rank ahead of recents.
+        HomeOrderStore::instance().pinAtRank(movedTitleId, targetDisplayRank);
+        m_grid->refreshDisplayOrder();
     }
 
     m_grid->focusGlobalIndex(target);
@@ -801,12 +819,17 @@ bool WiiUMenuApp::moveFocusedIcon(nxui::FocusDirection dir) {
     if (target == from)
         return true;
 
+    const uint64_t movedTitleId = m_model.at(from).titleId;
+
     if (!m_layoutSlots.empty() && from < (int)m_layoutSlots.size() && target < (int)m_layoutSlots.size())
         std::swap(m_layoutSlots[from], m_layoutSlots[target]);
 
     m_model.swapEntries(from, target);
     m_iconStreamer.swapIndices(from, target);
     m_grid->swapSlots(from, target);
+    HomeOrderStore::instance().pinAtRank(movedTitleId, targetDisplay);
+    m_grid->refreshDisplayOrder();
+    m_editMoved = true;
     m_editSourceIndex = target;
     m_iconStreamer.setPinnedIndex(m_editSourceIndex);
     m_grid->focusGlobalIndex(target);
@@ -1448,8 +1471,11 @@ bool WiiUMenuApp::focusTitle(uint64_t titleId) {
 void WiiUMenuApp::markSuspendedIcon(uint64_t titleId) {
     if (!m_grid)
         return;
+    HomeOrderStore::instance().setSuspendedTitle(titleId);
     for (auto& icon : m_grid->allIcons())
         icon->setSuspended(titleId != 0 && icon->titleId() == titleId);
+    // The suspended title is always group 0 in the V10.25 hybrid order.
+    m_grid->setSuspendedTitleId(titleId);
     if (titleId != 0)
         focusTitle(titleId);
 

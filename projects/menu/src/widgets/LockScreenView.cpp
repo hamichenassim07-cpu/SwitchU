@@ -6,6 +6,7 @@
 #include <nxui/Application.hpp>
 #include <nxui/core/Renderer.hpp>
 #include <nxui/widgets/True3DCard.hpp>
+#include "StylisedGameCartridge.hpp"
 
 #include <switch.h>
 
@@ -1295,16 +1296,17 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
             650.f + floatX,
             310.f + floatY + lift * 0.10f
         };
-        cardStyle.width = 304.f * cardScale;
-        cardStyle.height = 304.f * cardScale;
+        // V10.25: the suspended visual now uses the same vertical stylised
+        // cartridge proportions as HOME/launch instead of a square glass card.
+        cardStyle.width = 270.f * cardScale;
+        cardStyle.height = 308.f * cardScale;
         cardStyle.depth = 18.f * cardScale;
-        cardStyle.cornerRadius = 40.f * cardScale;
-        cardStyle.frameInset = 17.f * cardScale;
+        cardStyle.cornerRadius = 22.f * cardScale;
+        cardStyle.frameInset = 11.f * cardScale;
         cardStyle.pitch = idlePitch - 0.75f * pressKick * degrees;
         cardStyle.yaw = idleYaw +
             pressDirection * 1.45f * pressKick * degrees;
-        cardStyle.roll = idleRoll +
-            pressDirection * 0.62f * pressKick * degrees;
+        cardStyle.roll = 0.f;
         cardStyle.focalLength = 910.f;
         cardStyle.textureGrid = 12;
         cardStyle.opacity = contentAlpha;
@@ -1331,9 +1333,15 @@ void LockScreenView::onRender(nxui::Renderer& ren) {
         // transition, without changing the validated handoff timing.
         const float unlockFade = 1.f - smoothStep(
             clamp01((m_unlockProgress - 0.56f) / 0.20f));
-        nxui::True3DCard::draw(
-            ren, gameTexture, cardStyle,
-            nxui::Color::white().withAlpha(unlockFade));
+        StylisedGameCartridge::draw(
+            ren, gameTexture, nullptr, nullptr,
+            cardStyle.center.x, cardStyle.center.y,
+            cardStyle.width, cardStyle.height, cardStyle.depth,
+            cardStyle.cornerRadius, cardStyle.yaw, cardStyle.pitch,
+            1.f, cardStyle.frameInset,
+            nxui::Color(0.10f, 0.11f, 0.13f, 1.f),
+            nxui::Color(0.38f, 0.72f, 1.0f, 0.24f),
+            contentAlpha * unlockFade);
 
         if (m_fontMedium && !m_gameTitle.empty()) {
             constexpr float titleScale = 0.84f;

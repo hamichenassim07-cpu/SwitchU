@@ -36,36 +36,45 @@ private:
     bool  m_playing  = false;
     float m_timer    = 0.f;
 
-    // V10.24: keep the validated V10.20 formation/spin, then use a physical
-    // bottom-of-screen motion instead of a visible slot / suction animation.
-    static constexpr float kFormDur        = 0.28f;
-    static constexpr float kSpinDur        = 0.92f;
-    static constexpr float kSettleDur      = 0.18f;
-    static constexpr float kDropDur        = 0.44f;
-    static constexpr float kPreClickHoldDur = 0.065f;
-    static constexpr float kClickDownDur   = 0.11f;
-    static constexpr float kReboundDur     = 0.045f;
-    static constexpr float kLockDur        = 0.055f;
-    static constexpr float kLockHoldDur    = 0.10f;
-    static constexpr float kWipeDur        = 0.26f;
-    static constexpr float kBlackHoldDur   = 0.14f;
+    // V10.25 normal launch timeline. The drop starts 85 ms before the 360°
+    // spin ends so movement reads as one continuous physical gesture.
+    static constexpr float kFormDur          = 0.28f;
+    static constexpr float kSpinDur          = 0.92f;
+    static constexpr float kSpinDropOverlap  = 0.085f;
+    static constexpr float kDropDur          = 0.50f;
+    static constexpr float kPreClickHoldDur  = 0.060f;
+    static constexpr float kClickDownDur     = 0.10f;
+    static constexpr float kReboundDur       = 0.050f;
+    static constexpr float kLockDur          = 0.060f;
+    static constexpr float kLockHoldDur      = 0.10f;
+    static constexpr float kExitDur          = 0.15f;
+    static constexpr float kWipeDur          = 0.26f;
+    static constexpr float kBlackHoldDur     = 0.14f;
     static constexpr float kPostLaunchBlackHold = 0.24f;
 
-    static constexpr float kSpinStart      = kFormDur;
-    static constexpr float kSettleStart    = kSpinStart + kSpinDur;
-    static constexpr float kDropStart      = kSettleStart + kSettleDur;
-    static constexpr float kPreClickHoldStart = kDropStart + kDropDur;
-    static constexpr float kClickStart     = kPreClickHoldStart + kPreClickHoldDur;
-    static constexpr float kReboundStart   = kClickStart + kClickDownDur;
-    static constexpr float kLockStart      = kReboundStart + kReboundDur;
-    static constexpr float kLockHoldStart  = kLockStart + kLockDur;
-    static constexpr float kWipeStart      = kLockHoldStart + kLockHoldDur;
-    static constexpr float kLaunchMoment   = kWipeStart + kWipeDur;
-    static constexpr float kTotalDur       = kLaunchMoment + kBlackHoldDur;
+    static constexpr float kSpinStart        = kFormDur;
+    static constexpr float kSpinEnd          = kSpinStart + kSpinDur;
+    static constexpr float kDropStart        = kSpinEnd - kSpinDropOverlap;
+    static constexpr float kDropEnd          = kDropStart + kDropDur;
+    static constexpr float kPreClickHoldStart = kDropEnd;
+    static constexpr float kClickStart       = kPreClickHoldStart + kPreClickHoldDur;
+    static constexpr float kReboundStart     = kClickStart + kClickDownDur;
+    static constexpr float kLockStart        = kReboundStart + kReboundDur;
+    static constexpr float kLockHoldStart    = kLockStart + kLockDur;
+    static constexpr float kExitStart        = kLockHoldStart + kLockHoldDur;
+    static constexpr float kWipeStart        = kExitStart + kExitDur;
+    static constexpr float kLaunchMoment     = kWipeStart + kWipeDur;
+    static constexpr float kTotalDur         = kLaunchMoment + kBlackHoldDur;
 
-    // Lower title/actions still leave before the physical descent begins.
-    static constexpr float kHudExitStart   = kSpinStart + kSpinDur * 0.70f;
-    static constexpr float kHudExitDur     = 0.34f;
+    // Resume path: no insertion, no click. Stabilise -> wake pulse -> small
+    // approach -> black handoff.
+    static constexpr float kResumeAnimDur    = 0.42f;
+    static constexpr float kResumeWipeDur    = 0.22f;
+    static constexpr float kResumeLaunchMoment = kResumeAnimDur + kResumeWipeDur;
+    static constexpr float kResumeTotalDur   = kResumeLaunchMoment + 0.14f;
+
+    static constexpr float kHudExitStart     = kSpinStart + kSpinDur * 0.70f;
+    static constexpr float kHudExitDur       = 0.34f;
 
     nxui::Rect     m_from;
     nxui::Rect     m_target;
@@ -81,6 +90,11 @@ private:
     bool           m_doneCalled = false;
     bool           m_postLaunchHold = false;
     bool           m_insertSfxPlayed = false;
+    bool           m_spinSfxPlayed = false;
+    bool           m_resumeSfxPlayed = false;
+    bool           m_resumeMode = false;
+    bool           m_orderMarked = false;
+    uint64_t       m_effectiveTitleId = 0;
 
     static LaunchAnimation* s_activeInstance;
 };

@@ -1,26 +1,14 @@
-#include "LaunchAnimation.hpp"
-#include <nxui/core/Renderer.hpp>
-#include "../core/AudioManager.hpp"
-#include "../core/HomeOrderStore.hpp"
 #include "StylisedGameCartridge.hpp"
+#include <nxui/core/Renderer.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
 
-LaunchAnimation* LaunchAnimation::s_activeInstance = nullptr;
-
 namespace {
+
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kTwoPi = kPi * 2.f;
-constexpr float kScreenW = 1280.f;
-constexpr float kScreenH = 720.f;
-constexpr const char* kSpinSfxId = "launch_spin_v1025";
-constexpr const char* kClickSfxId = "launch_click_v1025";
-constexpr const char* kResumeSfxId = "resume_game_v1025";
-bool gSpinSfxLoaded = false;
-bool gClickSfxLoaded = false;
-bool gResumeSfxLoaded = false;
 
 struct V3 {
     float x = 0.f;
@@ -52,16 +40,6 @@ float easeOutCubic(float v) {
     v = clamp01(v);
     const float q = 1.f - v;
     return 1.f - q * q * q;
-}
-
-float easeInOutSine(float v) {
-    v = clamp01(v);
-    return 0.5f - 0.5f * std::cos(kPi * v);
-}
-
-float easeInCubic(float v) {
-    v = clamp01(v);
-    return v * v * v;
 }
 
 float lerpV10211(float a, float b, float t) {
@@ -382,7 +360,10 @@ void drawProjectedRoundedOutline(nxui::Renderer& ren,
                      color, thickness);
 }
 
-void drawCard3D(nxui::Renderer& ren,
+
+} // namespace
+
+void StylisedGameCartridge::draw(nxui::Renderer& ren,
                 const nxui::Texture* artworkTex,
                 const nxui::Texture* frontShellTex,
                 const nxui::Texture* backShellTex,
@@ -881,325 +862,5 @@ void drawCard3D(nxui::Renderer& ren,
         drawSides();
         drawBack();
     }
-}
-}
 
-void LaunchAnimation::start(const nxui::Rect& from, const nxui::Texture* tex, float cornerRadius,
-                            const nxui::Color& panelColor, const nxui::Color& borderColor,
-                            uint64_t titleId, AccountUid uid,
-                            LaunchCallback onLaunch, nxui::VoidCallback onDone)
-{
-    m_from         = from;
-    m_tex          = tex;
-    m_cornerRadius = cornerRadius;
-    m_panelColor   = panelColor;
-    m_borderColor  = borderColor;
-    m_titleId      = titleId;
-    m_uid          = uid;
-    m_onLaunch     = std::move(onLaunch);
-    m_onDone       = std::move(onDone);
-    m_timer        = 0.f;
-    m_playing      = true;
-    m_launched     = false;
-    m_doneCalled   = false;
-    m_postLaunchHold = false;
-
-    // Preserve the V10.20 dimensions that were visually validated. V10.24
-    // changes only the stylised shell detailing and bottom-of-screen motion.
-    constexpr float targetW = 286.f;
-    constexpr float targetH = 326.f;
-    const float startCx = from.x + from.width * 0.5f;
-    const float startCy = from.y + from.height * 0.5f;
-    m_target = {
-        startCx - targetW * 0.5f,
-        startCy - 24.f - targetH * 0.5f,
-        targetW,
-        targetH
-    };
-
-    m_insertSfxPlayed = false;
-    m_spinSfxPlayed = false;
-    m_resumeSfxPlayed = false;
-    m_orderMarked = false;
-    m_resumeMode = (titleId == 0 && !m_onLaunch && static_cast<bool>(m_onDone));
-    m_effectiveTitleId = titleId != 0
-        ? titleId
-        : HomeOrderStore::instance().suspendedTitleId();
-
-    if (auto* audio = AudioManager::active()) {
-        if (!gSpinSfxLoaded) {
-            audio->loadNamedSfx(kSpinSfxId,
-                "romfs:/sounds/wiiu/sfx/launch_spin.wav", 0.78f);
-            gSpinSfxLoaded = true;
-        }
-        if (!gClickSfxLoaded) {
-            audio->loadNamedSfx(kClickSfxId,
-                "romfs:/sounds/wiiu/sfx/launch_click.wav", 0.90f);
-            gClickSfxLoaded = true;
-        }
-        if (!gResumeSfxLoaded) {
-            audio->loadNamedSfx(kResumeSfxId,
-                "romfs:/sounds/wiiu/sfx/resume_game.wav", 0.76f);
-            gResumeSfxLoaded = true;
-        }
-    }
-
-    s_activeInstance = this;
-}
-
-void LaunchAnimation::stop() {
-    m_playing = false;
-    m_tex = nullptr;
-    clearGlobalStateIfOwned();
-}
-
-bool LaunchAnimation::globalPlaying() {
-    return s_activeInstance && s_activeInstance->m_playing;
-}
-
-float LaunchAnimation::globalHudExitProgress() {
-    if (!globalPlaying())
-        return 0.f;
-    return s_activeInstance->hudExitProgress();
-}
-
-float LaunchAnimation::hudExitProgress() const {
-    if (m_resumeMode)
-        return smooth01((m_timer - 0.08f) / 0.22f);
-    return smooth01((m_timer - kHudExitStart) / kHudExitDur);
-}
-
-void LaunchAnimation::clearGlobalStateIfOwned() {
-    if (s_activeInstance == this)
-        s_activeInstance = nullptr;
-}
-
-void LaunchAnimation::onUpdate(float dt) {
-    if (!m_playing) return;
-    m_timer += dt;
-
-    auto* audio = AudioManager::active();
-
-    if (m_resumeMode) {
-        if (!m_resumeSfxPlayed) {
-            m_resumeSfxPlayed = true;
-            if (audio) audio->playNamedSfx(kResumeSfxId);
-        }
-
-        if (m_timer >= kResumeLaunchMoment && !m_launched) {
-            m_launched = true;
-            if (!m_orderMarked && m_effectiveTitleId != 0) {
-                HomeOrderStore::instance().markLaunched(m_effectiveTitleId);
-                m_orderMarked = true;
-            }
-            if (m_onDone && !m_doneCalled) {
-                m_doneCalled = true;
-                m_onDone();
-                m_postLaunchHold = true;
-            }
-        }
-
-        if (m_timer >= kResumeTotalDur) {
-            if (!m_postLaunchHold ||
-                m_timer >= kResumeTotalDur + kPostLaunchBlackHold) {
-                m_playing = false;
-                clearGlobalStateIfOwned();
-            }
-        }
-        return;
-    }
-
-    // A softer independent spin SFX begins with the real Y rotation, not with
-    // the formation. It can be replaced without touching the mechanical click.
-    if (!m_spinSfxPlayed && m_timer >= kSpinStart) {
-        m_spinSfxPlayed = true;
-        if (audio) audio->playNamedSfx(kSpinSfxId);
-    }
-
-    if (!m_insertSfxPlayed && m_timer >= kClickStart) {
-        m_insertSfxPlayed = true;
-        if (audio) audio->playNamedSfx(kClickSfxId);
-    }
-
-    if (m_timer >= kLaunchMoment && !m_launched) {
-        m_launched = true;
-        if (!m_orderMarked && m_effectiveTitleId != 0) {
-            HomeOrderStore::instance().markLaunched(m_effectiveTitleId);
-            m_orderMarked = true;
-        }
-        if (m_titleId != 0 && m_onLaunch) {
-            m_onLaunch(m_titleId, m_uid);
-            m_postLaunchHold = true;
-        } else if (m_onDone && !m_doneCalled) {
-            m_doneCalled = true;
-            m_onDone();
-            m_postLaunchHold = true;
-        }
-    }
-
-    if (m_timer >= kTotalDur && !m_doneCalled) {
-        m_doneCalled = true;
-        if (m_onDone) {
-            m_onDone();
-            m_postLaunchHold = true;
-        }
-    }
-
-    if (m_timer >= kTotalDur) {
-        if (!m_postLaunchHold || m_timer >= kTotalDur + kPostLaunchBlackHold) {
-            m_playing = false;
-            clearGlobalStateIfOwned();
-        }
-    }
-}
-
-void LaunchAnimation::onRender(nxui::Renderer& ren) {
-    if (!m_playing) return;
-
-    const float startCx = m_from.x + m_from.width * 0.5f;
-    const float startCy = m_from.y + m_from.height * 0.5f;
-    const float targetCx = m_target.x + m_target.width * 0.5f;
-    const float targetCy = m_target.y + m_target.height * 0.5f;
-
-    if (m_resumeMode) {
-        const float p = easeInOutSine(m_timer / kResumeAnimDur);
-        const float degrees = kPi / 180.f;
-        const float cardW = m_from.width * 0.86f;
-        const float cardH = cardW * (326.f / 286.f);
-        const float centerX = startCx;
-        const float centerY = startCy - 3.5f * p;
-        const float idleFade = 1.f - p;
-        const float rotY = std::sin(0.85f + m_timer * 1.6f) * 2.0f * degrees * idleFade;
-        const float rotX = std::sin(0.45f + m_timer * 1.2f) * 1.0f * degrees * idleFade;
-        const float approach = 1.f + 0.065f * easeOutCubic(p);
-        const float pulse = std::sin(clamp01((p - 0.48f) / 0.52f) * kPi);
-
-        StylisedGameCartridge::draw(
-            ren, m_tex, nullptr, nullptr,
-            centerX, centerY,
-            cardW, cardH,
-            std::max(12.f, cardW * (18.f / 286.f)),
-            std::max(12.f, cardW * (22.f / 286.f)),
-            rotY, rotX, approach, 11.f,
-            m_panelColor,
-            nxui::Color(0.42f, 0.78f, 1.0f, 0.30f),
-            1.f);
-
-        if (pulse > 0.001f) {
-            const float rw = cardW * approach + 18.f * pulse;
-            const float rh = cardH * approach + 18.f * pulse;
-            ren.drawRoundedRectOutline(
-                {centerX - rw * 0.5f, centerY - rh * 0.5f, rw, rh},
-                nxui::Color(0.55f, 0.86f, 1.f, 0.20f * pulse),
-                24.f + 5.f * pulse,
-                1.4f);
-        }
-
-        if (m_timer >= kResumeAnimDur) {
-            const float raw = clamp01((m_timer - kResumeAnimDur) / kResumeWipeDur);
-            const float wipeP = smooth01(raw);
-            const float wipeRadius = lerpV10211(10.f, 1050.f, wipeP);
-            ren.drawCircle({centerX, centerY}, wipeRadius,
-                           nxui::Color(0.f, 0.f, 0.f, 1.f), 128);
-            if (raw >= 0.995f)
-                ren.drawRect({0.f, 0.f, kScreenW, kScreenH},
-                             nxui::Color(0.f, 0.f, 0.f, 1.f));
-        }
-        return;
-    }
-
-    float centerX = startCx;
-    float centerY = startCy;
-    float cardW = m_from.width;
-    float cardH = m_from.height;
-    float depth = 1.f;
-    float radius = m_cornerRadius;
-    float rotY = 0.f;
-    float rotX = 0.f;
-    float scale = 1.f;
-    float artworkInset = 8.f;
-
-    const float halfVisibleY = kScreenH;
-    const float seatY = kScreenH + m_target.height * 0.5f - 33.f;
-    const float reboundY = seatY - 5.f;
-    const float lockY = kScreenH + m_target.height * 0.5f - 27.f;
-    const float fullyOffY = kScreenH + m_target.height * 0.5f + 12.f;
-
-    if (m_timer < kSpinStart) {
-        const float p = easeInOutSine(m_timer / kFormDur);
-        centerX = lerpV10211(startCx, targetCx, p);
-        centerY = lerpV10211(startCy, targetCy, p) -
-                  std::sin(clamp01(m_timer / kFormDur) * kPi) * 8.f;
-        cardW = lerpV10211(m_from.width, m_target.width, p);
-        cardH = lerpV10211(m_from.height, m_target.height, p);
-        depth = lerpV10211(1.f, 18.f, p);
-        radius = lerpV10211(m_cornerRadius, 22.f, p);
-        artworkInset = lerpV10211(8.f, 11.f, p);
-        scale = 1.f + 0.018f * std::sin(clamp01(m_timer / kFormDur) * kPi);
-    } else {
-        const float spinRaw = clamp01((m_timer - kSpinStart) / kSpinDur);
-        const float spinP = easeInOutSine(spinRaw);
-        centerX = targetCx;
-        cardW = m_target.width;
-        cardH = m_target.height;
-        depth = 18.f;
-        radius = 22.f;
-        artworkInset = 11.f;
-        rotY = kTwoPi * spinP;
-        rotX = -0.055f * std::sin(spinRaw * kPi);
-        scale = 1.f + 0.014f * std::sin(spinRaw * kPi);
-        centerY = targetCy - 7.f * std::sin(spinRaw * kPi);
-
-        if (m_timer >= kDropStart) {
-            const float dropRaw = clamp01((m_timer - kDropStart) / kDropDur);
-            const float dropP = easeInOutSine(dropRaw);
-            const float spinAtDrop = clamp01((kDropStart - kSpinStart) / kSpinDur);
-            const float dropOriginY = targetCy - 7.f * std::sin(spinAtDrop * kPi);
-            centerY = lerpV10211(dropOriginY, halfVisibleY, dropP);
-
-            // As the falling motion takes over, the tiny pitch/scale flourish
-            // naturally dies away rather than snapping at spin completion.
-            const float settle = 1.f - dropP;
-            rotX *= settle;
-            scale = 1.f + (scale - 1.f) * settle;
-        }
-
-        if (m_timer >= kPreClickHoldStart)
-            centerY = halfVisibleY;
-        if (m_timer >= kClickStart && m_timer < kReboundStart) {
-            const float p = easeOutCubic((m_timer - kClickStart) / kClickDownDur);
-            centerY = lerpV10211(halfVisibleY, seatY, p);
-        } else if (m_timer >= kReboundStart && m_timer < kLockStart) {
-            const float p = easeInOutSine((m_timer - kReboundStart) / kReboundDur);
-            centerY = lerpV10211(seatY, reboundY, p);
-        } else if (m_timer >= kLockStart && m_timer < kLockHoldStart) {
-            const float p = easeInOutSine((m_timer - kLockStart) / kLockDur);
-            centerY = lerpV10211(reboundY, lockY, p);
-        } else if (m_timer >= kLockHoldStart && m_timer < kExitStart) {
-            centerY = lockY;
-        } else if (m_timer >= kExitStart) {
-            const float p = easeInCubic((m_timer - kExitStart) / kExitDur);
-            centerY = lerpV10211(lockY, fullyOffY, p);
-        }
-    }
-
-    if (m_timer < kWipeStart) {
-        StylisedGameCartridge::draw(
-            ren, m_tex, nullptr, nullptr,
-            centerX, centerY, cardW, cardH,
-            depth, radius, rotY, rotX, scale,
-            artworkInset, m_panelColor, m_borderColor, 1.f);
-    }
-
-    if (m_timer >= kWipeStart) {
-        const float raw = clamp01((m_timer - kWipeStart) / kWipeDur);
-        const float p = smooth01(raw);
-        const nxui::Vec2 wipeCenter{kScreenW * 0.5f, kScreenH + 4.f};
-        const float radiusWipe = lerpV10211(8.f, 1080.f, p);
-        ren.drawCircle(wipeCenter, radiusWipe,
-                       nxui::Color(0.f, 0.f, 0.f, 1.f), 128);
-        if (raw >= 0.995f)
-            ren.drawRect({0.f, 0.f, kScreenW, kScreenH},
-                         nxui::Color(0.f, 0.f, 0.f, 1.f));
-    }
 }

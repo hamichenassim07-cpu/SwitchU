@@ -45,6 +45,8 @@ public:
     void setApplicationTitleIds(const std::vector<uint64_t>& titleIds);
     void setShowApplications(bool showApplications);
     bool showApplications() const { return m_showApplications; }
+    void setSuspendedTitleId(uint64_t titleId);
+    void refreshDisplayOrder();
     void setCarouselFocusActive(bool active);
     bool carouselFocusActive() const { return m_carouselFocusActive; }
     int visibleCount() const { return m_displayCount; }
@@ -108,6 +110,7 @@ private:
     std::vector<int> m_displayIndices;
     std::unordered_set<uint64_t> m_applicationTitleIds;
     bool m_showApplications = false;
+    uint64_t m_suspendedTitleId = 0;
     bool m_carouselFocusActive = true;
     nxui::FocusManager m_focus;
 
@@ -133,6 +136,7 @@ private:
     bool m_selectionBounceActive = false;
     bool m_entryBouncePending = false;
     float m_selectionBounceTime = 0.f;
+    float m_suspendedIdleTime = 0.f;
 
     // Stored as a global index into m_allIcons, not a filtered display slot.
     int m_pendingSettledFocusIndex = -1;

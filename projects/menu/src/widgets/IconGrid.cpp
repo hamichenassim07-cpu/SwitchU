@@ -1,6 +1,8 @@
 #include "IconGrid.hpp"
 #include "GlossyIcon.hpp"
 #include "LaunchAnimation.hpp"
+#include "StylisedGameCartridge.hpp"
+#include "../core/HomeOrderStore.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <algorithm>
 #include <cmath>
@@ -94,6 +96,21 @@ void IconGrid::setApplicationTitleIds(const std::vector<uint64_t>& titleIds) {
             m_applicationTitleIds.insert(titleId);
     }
 
+    updateDisplayCount();
+    rebuildFocusRow();
+}
+
+void IconGrid::setSuspendedTitleId(uint64_t titleId) {
+    if (m_suspendedTitleId == titleId)
+        return;
+    m_suspendedTitleId = titleId;
+    HomeOrderStore::instance().setSuspendedTitle(titleId);
+    refreshDisplayOrder();
+}
+
+void IconGrid::refreshDisplayOrder() {
+    // rebuildFocusRow already preserves the previous focus pointer whenever it
+    // is still part of the active category.
     updateDisplayCount();
     rebuildFocusRow();
 }
@@ -202,6 +219,46 @@ void IconGrid::updateDisplayCount() {
         if (isApplication == m_showApplications)
             m_displayIndices.push_back(i);
     }
+
+    // V10.25 hybrid order: suspended first, then manually pinned titles,
+    // then all remaining titles by last real launch time. Equal metadata keeps
+    // the legacy/layout order because stable_sort never disturbs ties.
+    auto& orderStore = HomeOrderStore::instance();
+    uint64_t suspended = m_suspendedTitleId;
+    if (suspended == 0) {
+        for (int idx : m_displayIndices) {
+            if (idx >= 0 && idx < static_cast<int>(m_allIcons.size()) &&
+                m_allIcons[idx] && m_allIcons[idx]->isSuspended()) {
+                suspended = m_allIcons[idx]->titleId();
+                break;
+            }
+        }
+    }
+    if (suspended != 0)
+        orderStore.setSuspendedTitle(suspended);
+
+    std::stable_sort(m_displayIndices.begin(), m_displayIndices.end(),
+        [&](int lhs, int rhs) {
+            const uint64_t a = m_allIcons[lhs] ? m_allIcons[lhs]->titleId() : 0;
+            const uint64_t b = m_allIcons[rhs] ? m_allIcons[rhs]->titleId() : 0;
+            const int ga = (a != 0 && a == suspended) ? 0 :
+                           (orderStore.isPinned(a) ? 1 : 2);
+            const int gb = (b != 0 && b == suspended) ? 0 :
+                           (orderStore.isPinned(b) ? 1 : 2);
+            if (ga != gb) return ga < gb;
+            if (ga == 1) {
+                const int ra = orderStore.manualRank(a);
+                const int rb = orderStore.manualRank(b);
+                if (ra != rb) return ra < rb;
+                return false;
+            }
+            if (ga == 2) {
+                const uint64_t ta = orderStore.lastLaunchTime(a);
+                const uint64_t tb = orderStore.lastLaunchTime(b);
+                if (ta != tb) return ta > tb;
+            }
+            return false;
+        });
 
     m_displayCount = static_cast<int>(m_displayIndices.size());
 
@@ -721,6 +778,7 @@ void IconGrid::startWaveTransition(
 }
 
 void IconGrid::onUpdate(float dt) {
+    m_suspendedIdleTime += std::max(0.f, dt);
     if (m_touchScrolling ||
         m_displayCount <= 0)
         return;
@@ -802,19 +860,51 @@ void IconGrid::render(
 
     renderer.pushClipRect(m_rect);
 
-    nxui::Widget* focused =
-        m_focus.current();
+    nxui::Widget* focused = m_focus.current();
+
+    auto renderSuspendedCartridge = [&](GlossyIcon* icon) {
+        if (!icon) return;
+        const nxui::Rect r = icon->focusRect();
+        const float degrees = 3.14159265358979323846f / 180.f;
+        const float yaw = std::sin(m_suspendedIdleTime * 0.82f) * 2.0f * degrees;
+        const float pitch = std::sin(m_suspendedIdleTime * 0.61f + 0.7f) * 1.0f * degrees;
+        const float floatY = std::sin(m_suspendedIdleTime * 1.08f) * 2.0f;
+        const float breathe = 1.f + 0.004f * std::sin(m_suspendedIdleTime * 0.76f);
+
+        const float cardW = r.width * 0.86f;
+        const float cardH = cardW * (326.f / 286.f);
+        StylisedGameCartridge::draw(
+            renderer, icon->texture(), nullptr, nullptr,
+            r.x + r.width * 0.5f,
+            r.y + r.height * 0.5f + floatY,
+            cardW, cardH,
+            std::max(12.f, cardW * (18.f / 286.f)),
+            std::max(12.f, cardW * (22.f / 286.f)),
+            yaw, pitch, breathe, 11.f,
+            nxui::Color(0.10f, 0.11f, 0.13f, 1.f),
+            nxui::Color(0.28f, 0.62f, 1.00f, 0.20f),
+            m_opacity);
+    };
+
+    auto renderOne = [&](nxui::Widget* widget) {
+        if (!widget) return;
+        auto* glossy = dynamic_cast<GlossyIcon*>(widget);
+        if (glossy && glossy->isSuspended()) {
+            renderSuspendedCartridge(glossy);
+            return;
+        }
+        widget->render(renderer);
+    };
 
     for (auto& child : m_children) {
         if (child.get() != focused)
-            child->render(renderer);
+            renderOne(child.get());
     }
 
-    // V10.20: LaunchAnimation owns a separate real-3D copy of the selected
-    // cover. Hide only the original focused carousel card while that copy is
-    // active so the lift/rotation never leaves a duplicate behind.
+    // The independent launch/resume animation owns the focused cartridge while
+    // active, preventing a duplicate suspended card underneath it.
     if (focused && !LaunchAnimation::globalPlaying())
-        focused->render(renderer);
+        renderOne(focused);
 
     renderer.popClipRect();
 }
