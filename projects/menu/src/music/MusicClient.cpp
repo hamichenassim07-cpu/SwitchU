@@ -1,7 +1,7 @@
 #include "MusicClient.hpp"
 
 #include "smi_commands.hpp"
-#include "DebugLog.hpp"
+#include "core/DebugLog.hpp"
 
 #include <algorithm>
 #include <filesystem>

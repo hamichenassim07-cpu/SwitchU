@@ -1,5 +1,5 @@
 #include "core/WiiUMenuApp.hpp"
-#include "DebugLog.hpp"
+#include "core/DebugLog.hpp"
 
 void WiiUMenuApp::createMusic() {
     if (m_musicScreen) return;

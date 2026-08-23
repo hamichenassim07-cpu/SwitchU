@@ -1,6 +1,6 @@
 #include "MusicLibrary.hpp"
 
-#include "DebugLog.hpp"
+#include "core/DebugLog.hpp"
 
 #include <algorithm>
 #include <array>

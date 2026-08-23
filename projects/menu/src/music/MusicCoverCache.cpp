@@ -1,6 +1,6 @@
 #include "MusicCoverCache.hpp"
 
-#include "DebugLog.hpp"
+#include "core/DebugLog.hpp"
 #include <nxui/core/Renderer.hpp>
 
 #include <algorithm>

@@ -2,7 +2,7 @@
 
 #include <switchu/music_protocol.hpp>
 
-#include "DebugLog.hpp"
+#include "core/DebugLog.hpp"
 
 #include <algorithm>
 #include <chrono>
