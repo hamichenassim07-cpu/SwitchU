@@ -7,6 +7,7 @@
 #include <ctime>
 #include <chrono>
 #include <cstdio>
+#include <cstdint>
 
 namespace {
 constexpr float kTimeScale = 1.28f;
@@ -24,6 +25,22 @@ constexpr float kTabH = 40.f;
 
 float clamp01(float value) {
     return std::clamp(value, 0.f, 1.f);
+}
+
+
+std::string utf8CodepointV1030(uint32_t cp) {
+    std::string out;
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+    return out;
 }
 
 float easeOutBackV109(float t) {
@@ -344,6 +361,47 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Color lightShadow(1.0f, 1.0f, 1.0f, 0.18f * m_opacity);
     const nxui::Color gamesColor = mixColor(inactive, active, gamesActive);
     const nxui::Color gamesShadow = mixColor(darkShadow, lightShadow, gamesActive);
+    const nxui::Color appsColor = mixColor(inactive, active, appsActive);
+    const nxui::Color appsShadow = mixColor(darkShadow, lightShadow, appsActive);
+
+    // V10.30: Nintendo Switch L/R glyphs sit at the true outer edges of the
+    // category capsule. E0E4/E0E5 are the same controller-icon font mappings
+    // already used by upstream SwitchU for L/R hints. Keep them independent
+    // from the sliding active lens so their meaning is always stable.
+    const std::string lGlyph = utf8CodepointV1030(0xE0E4);
+    const std::string rGlyph = utf8CodepointV1030(0xE0E5);
+    nxui::Font* lrFont = m_iconFont ? m_iconFont : dateFont;
+    constexpr float kLRScale = 0.88f;
+    const nxui::Vec2 lBase = lrFont->measure(m_iconFont ? lGlyph : std::string("L"));
+    const nxui::Vec2 rBase = lrFont->measure(m_iconFont ? rGlyph : std::string("R"));
+    const std::string lDraw = m_iconFont ? lGlyph : std::string("L");
+    const std::string rDraw = m_iconFont ? rGlyph : std::string("R");
+    const float lW = lBase.x * kLRScale;
+    const float rW = rBase.x * kLRScale;
+    const float lH = lBase.y * kLRScale;
+    const float rH = rBase.y * kLRScale;
+    const float lCenterX = navRect.x + 25.f;
+    const float rCenterX = navRect.right() - 25.f;
+    const nxui::Color lColor = gamesColor;
+    const nxui::Color rColor = appsColor;
+    const nxui::Color lShadow = gamesShadow;
+    const nxui::Color rShadow = appsShadow;
+    ren.drawText(lDraw,
+                 {lCenterX - lW * 0.5f + 0.8f,
+                  kNavY + (kNavH - lH) * 0.5f + 1.f},
+                 lrFont, lShadow, kLRScale);
+    ren.drawText(lDraw,
+                 {lCenterX - lW * 0.5f,
+                  kNavY + (kNavH - lH) * 0.5f},
+                 lrFont, lColor, kLRScale);
+    ren.drawText(rDraw,
+                 {rCenterX - rW * 0.5f + 0.8f,
+                  kNavY + (kNavH - rH) * 0.5f + 1.f},
+                 lrFont, rShadow, kLRScale);
+    ren.drawText(rDraw,
+                 {rCenterX - rW * 0.5f,
+                  kNavY + (kNavH - rH) * 0.5f},
+                 lrFont, rColor, kLRScale);
     ren.drawText(
         games,
         {gamesCenterX - gamesSz.x * 0.5f + 1.f, textY + 1.3f},
@@ -361,8 +419,6 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
 
     const float appsTextY =
         kNavY + (kNavH - appsSz.y) * 0.5f;
-    const nxui::Color appsColor = mixColor(inactive, active, appsActive);
-    const nxui::Color appsShadow = mixColor(darkShadow, lightShadow, appsActive);
     ren.drawText(
         apps,
         {appsCenterX - appsSz.x * 0.5f + 1.f, appsTextY + 1.3f},

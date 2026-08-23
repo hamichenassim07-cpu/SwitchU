@@ -33,6 +33,7 @@
 #include "launcher/AppListLoader.hpp"
 #include "launcher/IconStreamer.hpp"
 #include "core/SystemMessages.hpp"
+#include "music/MusicScreen.hpp"
 #ifdef SWITCHU_DEBUG_UI
 #include "debug/DebugImGuiOverlay.hpp"
 #endif
@@ -151,6 +152,9 @@ private:
     std::string accessibilityPositionFor(nxui::Widget* w) const;
     void createSettings();
     void createThemeShop();
+    void createMusic();
+    void showMusic();
+    void closeMusic();
     void reloadThemePresets();
     void refreshThemeShopState();
     std::vector<ThemeShopScreen::ThemeShopEntry> buildThemeShopEntries();
@@ -219,8 +223,10 @@ private:
     std::shared_ptr<ProgressDialog>    m_progressDialog;
     std::shared_ptr<SettingsScreen>    m_settings;
     std::shared_ptr<ThemeShopScreen>   m_themeShop;
+    std::shared_ptr<switchu::menu::music::MusicScreen> m_musicScreen;
 
     nxui::Texture m_gameCardTex;
+    nxui::Texture m_musicIconTex;
 
     std::shared_ptr<nxui::Box> m_bgLayer;
     std::shared_ptr<nxui::Box> m_contentLayer;
@@ -277,7 +283,6 @@ private:
 
     int  m_touchHitIndex     = -1;
     bool m_touchOnFocused    = false;
-    bool m_touchEditDragActive = false;
 
     // Scroll tactile de la rangée d'applications.
     bool  m_touchStartedInGrid = false;

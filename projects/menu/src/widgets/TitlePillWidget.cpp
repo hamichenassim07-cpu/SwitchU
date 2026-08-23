@@ -25,7 +25,7 @@ constexpr float kActionPairGap = 42.f;
 // V10.28: play time and A/Lancer share one balanced line. Y is deliberately
 // absent from the permanent HOME and appears only while move mode is active.
 constexpr float kPlayTimeTextScale = 0.83f;
-constexpr float kPlayTimeClockRadius = 8.0f;
+constexpr float kPlayTimeClockDiameter = 25.0f; // V10.30: +56% vs V10.29
 constexpr float kPlayTimeGap = 9.f;
 constexpr float kPlayTimeCenterX = 570.f;
 constexpr float kLaunchCenterX = 710.f;
@@ -423,7 +423,7 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
                 const nxui::Vec2 timeBase = m_font->measure(duration);
                 const float textW = timeBase.x * kPlayTimeTextScale;
                 const float textH = timeBase.y * kPlayTimeTextScale;
-                const float clockDiameter = kPlayTimeClockRadius * 2.f;
+                const float clockDiameter = kPlayTimeClockDiameter;
                 const float groupW = clockDiameter + kPlayTimeGap + textW;
                 const float startX = kPlayTimeCenterX - groupW * 0.5f;
                 const float rowH = std::max(clockDiameter, textH);
@@ -433,24 +433,45 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
                     0.94f, 0.97f, 1.00f,
                     0.90f * m_opacity * launchAlpha);
                 const nxui::Vec2 clockCenter{
-                    startX + kPlayTimeClockRadius, cy
+                    startX + clockDiameter * 0.5f, cy
                 };
 
-                // V10.29: no suitable clock glyph is assumed from the Switch
-                // button font. Draw a tiny native clock instead: solid white
-                // face with black hands, matching the requested icon language.
-                const nxui::Color clockFace(
-                    1.f, 1.f, 1.f, 0.98f * m_opacity * launchAlpha);
-                const nxui::Color clockHands(
-                    0.02f, 0.02f, 0.025f, 0.98f * m_opacity * launchAlpha);
-                ren.drawCircle(clockCenter, kPlayTimeClockRadius, clockFace, 30);
-                ren.drawLine(clockCenter,
-                             {clockCenter.x, clockCenter.y - 4.4f},
-                             clockHands, 1.55f);
-                ren.drawLine(clockCenter,
-                             {clockCenter.x + 3.6f, clockCenter.y + 2.2f},
-                             clockHands, 1.55f);
-                ren.drawCircle(clockCenter, 1.05f, clockHands, 12);
+                // V10.30: use a real high-resolution RGBA asset instead of
+                // rasterising a tiny segmented circle at final size. The 256px
+                // master is reduced to 25px by the texture sampler, giving the
+                // white face and black hands clean antialiased edges.
+                if (!m_playTimeClockLoadAttempted) {
+                    m_playTimeClockLoadAttempted = true;
+                    m_playTimeClockTexture.loadFromFile(
+                        ren.gpu(), ren, "romfs:/icons/playtime_clock_v1030.png", 0);
+                }
+
+                const nxui::Rect clockRect{
+                    startX, cy - clockDiameter * 0.5f,
+                    clockDiameter, clockDiameter
+                };
+                if (m_playTimeClockTexture.valid()) {
+                    ren.drawTexture(
+                        &m_playTimeClockTexture, clockRect,
+                        nxui::Color::white().withAlpha(
+                            0.98f * m_opacity * launchAlpha));
+                } else {
+                    // Safe fallback only if the ROMFS asset failed to load.
+                    const nxui::Color clockFace(
+                        1.f, 1.f, 1.f, 0.98f * m_opacity * launchAlpha);
+                    const nxui::Color clockHands(
+                        0.02f, 0.02f, 0.025f, 0.98f * m_opacity * launchAlpha);
+                    const float radius = clockDiameter * 0.5f;
+                    ren.drawCircle(clockCenter, radius, clockFace, 96);
+                    ren.drawLine(clockCenter,
+                                 {clockCenter.x, clockCenter.y - radius * 0.56f},
+                                 clockHands, 2.15f);
+                    ren.drawLine(clockCenter,
+                                 {clockCenter.x + radius * 0.46f,
+                                  clockCenter.y + radius * 0.29f},
+                                 clockHands, 2.15f);
+                    ren.drawCircle(clockCenter, 1.55f, clockHands, 24);
+                }
                 ren.drawText(
                     duration,
                     {startX + clockDiameter + kPlayTimeGap,

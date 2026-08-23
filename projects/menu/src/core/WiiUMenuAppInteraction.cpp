@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <nxui/core/I18n.hpp>
 #include <nlohmann/json.hpp>
+#include <switchu/music_protocol.hpp>
 
 namespace {
 constexpr const char* kV10ApplicationsPath =
@@ -29,6 +30,7 @@ constexpr const char* kV103ForwarderCachePath =
 constexpr uint64_t kV103SystemAlbumTitleId  = 0xFFFFFFFFFFFFF101ULL;
 constexpr uint64_t kV103SystemMiiTitleId    = 0xFFFFFFFFFFFFF102ULL;
 constexpr uint64_t kV103SystemThemesTitleId = 0xFFFFFFFFFFFFF103ULL;
+constexpr uint64_t kV103SystemMusicTitleId  = switchu::music::kVirtualMusicTitleId;
 
 bool g_v10ApplicationsActive = false;
 
@@ -41,7 +43,8 @@ enum class V103CategoryOverride {
 bool isV103SystemCard(uint64_t titleId) {
     return titleId == kV103SystemAlbumTitleId ||
            titleId == kV103SystemMiiTitleId ||
-           titleId == kV103SystemThemesTitleId;
+           titleId == kV103SystemThemesTitleId ||
+           titleId == kV103SystemMusicTitleId;
 }
 
 // Sphaira's current forwarder builder deliberately allocates its generated
@@ -356,6 +359,7 @@ std::vector<uint64_t> loadV10ApplicationTitleIds(
         kV103SystemAlbumTitleId,
         kV103SystemMiiTitleId,
         kV103SystemThemesTitleId,
+        kV103SystemMusicTitleId,
     };
 
     const auto legacy = loadLegacyV10ApplicationTitleIds();
@@ -1092,6 +1096,8 @@ void WiiUMenuApp::wireFocusCallback() {
         m_titlePill->setIconFont(&m_fontIcons);
         m_titlePill->setGameActionsVisible(false);
     }
+    if (m_clock)
+        m_clock->setIconFont(&m_fontIcons);
 
     // V10.11: keep separator + A/Y inside TitlePillWidget again for a more
     // reliable render path. We keep the optional helper widget disabled.
@@ -1101,7 +1107,7 @@ void WiiUMenuApp::wireFocusCallback() {
     if (m_systemSelectionHalo)
         m_systemSelectionHalo->setVisible(false);
 
-    // V10.3: Album / Mii / Thèmes are first-class carousel entries. They use
+    // Music V0.01: Album / Mii / Thèmes / Musique are first-class carousel entries. They use
     // reserved pseudo title IDs so the rest of IconGrid can treat them exactly
     // like covers without confusing them with Horizon applications.
     bool addedSystemCard = false;
@@ -1134,6 +1140,10 @@ void WiiUMenuApp::wireFocusCallback() {
     ensureSystemCard(
         kV103SystemThemesTitleId,
         i18n.tr("sidebar.themes", "Thèmes")
+    );
+    ensureSystemCard(
+        kV103SystemMusicTitleId,
+        i18n.tr("music.app.title", "Musique")
     );
 
     if (addedSystemCard)
@@ -1592,12 +1602,15 @@ void WiiUMenuApp::closeActiveOverlays() {
         m_settings->hide();
     if (m_themeShop && m_themeShop->isActive())
         m_themeShop->hide();
+    if (m_musicScreen && m_musicScreen->isActive())
+        m_musicScreen->hide();
 }
 
 nxui::Widget* WiiUMenuApp::focusRoot() {
     if (m_lockScreenActive) return nullptr;
     if (m_launchAnim && m_launchAnim->isPlaying()) return nullptr;
     if (m_dialog && m_dialog->isActive()) return m_dialog.get();
+    if (m_musicScreen && m_musicScreen->isActive()) return m_musicScreen.get();
     if (m_themeShop && m_themeShop->isActive()) return m_themeShop.get();
     if (m_settings && m_settings->isActive()) return m_settings.get();
     if (m_userSelect && m_userSelect->isActive()) return m_userSelect.get();
@@ -1640,6 +1653,7 @@ bool WiiUMenuApp::handleAccessibilityToggleCombo() {
 
 void WiiUMenuApp::wireGlobalActions() {
     auto& root = rootBox();
+    createMusic();
 
     // This handler survives app-list refreshes: even if IconGrid recreates the
     // system cards, their pseudo title IDs are routed back to the existing
@@ -1657,6 +1671,10 @@ void WiiUMenuApp::wireGlobalActions() {
         }
         if (titleId == kV103SystemThemesTitleId && right.size() >= 2 && right[1]) {
             right[1]->activate();
+            return true;
+        }
+        if (titleId == kV103SystemMusicTitleId) {
+            showMusic();
             return true;
         }
         return false;
@@ -1692,6 +1710,26 @@ void WiiUMenuApp::wireGlobalActions() {
         bindSystemCard(kV103SystemThemesTitleId, rightSystemButtons[1]);
     }
 
+    // Music is a virtual system application, not a forwarder/NRO. It owns a
+    // dedicated full-screen UI and therefore uses its own card texture/action.
+    {
+        const int index = findTitleIndex(kV103SystemMusicTitleId);
+        if (index >= 0 && index < static_cast<int>(m_grid->allIcons().size())) {
+            auto& card = m_grid->allIcons()[static_cast<size_t>(index)];
+            if (card) {
+                if (!m_musicIconTex.valid()) {
+                    const std::string path = std::string(SD_ASSETS) + "/icons/music_v001.png";
+                    if (!m_musicIconTex.loadFromFile(app().gpu(), app().renderer(), path, 256))
+                        DebugLog::log("[music] card icon unavailable: %s", path.c_str());
+                }
+                if (m_musicIconTex.valid()) card->setTexture(&m_musicIconTex);
+                card->setNotLaunchable(false);
+                card->setOnActivate([this]() { showMusic(); });
+                card->forceVisible();
+            }
+        }
+    }
+
     root.addAction(static_cast<uint64_t>(nxui::Button::L), [this]() {
         setHomeApplicationsCategory(false);
     });
@@ -1704,15 +1742,15 @@ void WiiUMenuApp::wireGlobalActions() {
     });
 
 #ifdef SWITCHU_MENU
-    // V10.29 temporary but real Nintendo Settings entry point. The normal
-    // Settings button continues to open SwitchU settings; pressing PLUS while
-    // that panel is active sends a dedicated daemon command that performs the
-    // Horizon applet launch attempt.
+    // V10.30 qlaunch handoff probe. The normal Settings button still opens
+    // SwitchU settings; PLUS asks the daemon to release the external HOME
+    // surface and evaluate a stock-qlaunch handoff. There is intentionally no
+    // LibraryAppletSet fallback.
     if (m_settings) {
         m_settings->addAction(static_cast<uint64_t>(nxui::Button::Plus), [this]() {
             if (!m_settings || !m_settings->isActive())
                 return;
-            DebugLog::log("[settings-test] PLUS pressed inside SwitchU settings");
+            DebugLog::log("[qlaunch-handoff] PLUS pressed inside SwitchU settings");
             m_audio.playSfx(Sfx::Activate);
             m_launcher.launchSystemSettings();
         });
@@ -1926,12 +1964,20 @@ void WiiUMenuApp::wireGlobalActions() {
 }
 
 void WiiUMenuApp::handleTouch() {
-    // Le seuil dépasse celui du tap générique de nxui (20 px),
-    // afin qu'un scroll ne lance jamais accidentellement un jeu.
-    constexpr float kScrollStartThreshold = 22.f;
-    constexpr float kHorizontalIntentRatio = 1.15f;
-    constexpr float kLongPressThreshold = 0.55f;
-    constexpr float kLongPressMoveThreshold = 18.f;
+    if (m_musicScreen && m_musicScreen->isActive()) {
+        m_musicScreen->handleTouch(app().input());
+        return;
+    }
+
+    // V10.30 touch contract:
+    //   swipe = yes; long-press reorder = no; tap-to-launch = no.
+    // A short tap may only change selection. Actual application launching and
+    // all layout movement remain physical-controller actions.
+    constexpr float kScrollStartThreshold = 16.f;
+    constexpr float kHorizontalIntentRatio = 1.05f;
+    constexpr float kTapMoveThreshold = 18.f;
+    constexpr float kCarouselTouchTop = 170.f;
+    constexpr float kCarouselTouchBottom = 540.f;
 
     auto& input = app().input();
 
@@ -1944,286 +1990,141 @@ void WiiUMenuApp::handleTouch() {
     };
 
     auto hitAvatar =
-        [this](float x, float y)
-        -> UserAvatarButton* {
-            for (auto& avatar :
-                 m_userAvatarButtons) {
-                if (avatar &&
-                    avatar->isVisible() &&
-                    avatar->hitTest(x, y))
+        [this](float x, float y) -> UserAvatarButton* {
+            for (auto& avatar : m_userAvatarButtons) {
+                if (avatar && avatar->isVisible() && avatar->hitTest(x, y))
                     return avatar.get();
             }
-
             return nullptr;
         };
 
     auto focusTouchedIcon =
-        [this](int globalHit)
-        -> GlossyIcon* {
-            if (!m_grid ||
-                globalHit < 0)
+        [this](int globalHit) -> GlossyIcon* {
+            if (!m_grid || globalHit < 0)
+                return nullptr;
+            if (!m_grid->focusGlobalIndex(globalHit))
                 return nullptr;
 
-            if (!m_grid->focusGlobalIndex(
-                    globalHit))
-                return nullptr;
-
-            auto* cur =
-                m_grid->focusManager().current();
-
+            auto* cur = m_grid->focusManager().current();
             if (!cur)
                 return nullptr;
 
             focusManager().setFocus(cur);
             updateCursor();
-
-            if (!isEditableIcon(cur))
-                return nullptr;
-
-            return static_cast<GlossyIcon*>(
-                cur
-            );
+            return static_cast<GlossyIcon*>(cur);
         };
 
     if (input.touchDown()) {
         const float tx = input.touchX();
         const float ty = input.touchY();
 
-        m_touchStartedInGrid =
-            m_grid &&
-            m_grid->rect().contains(tx, ty);
+        m_touchHitIndex = m_grid ? m_grid->hitTest(tx, ty) : -1;
+        // V10.30 restores swipe even when the finger starts in the gap between
+        // covers. The broad vertical zone matches the actual 230/310px
+        // carousel rather than relying exclusively on Widget::rect().
+        m_touchStartedInGrid = m_grid &&
+            (m_touchHitIndex >= 0 ||
+             (ty >= kCarouselTouchTop && ty <= kCarouselTouchBottom));
 
         m_touchScrollActive = false;
         m_touchLastX = tx;
         m_touchLastDuration = 0.f;
         m_touchScrollVelocity = 0.f;
 
-        m_touchAvatarTarget =
-            hitAvatar(tx, ty);
-
+        m_touchAvatarTarget = hitAvatar(tx, ty);
         m_touchAvatarWasFocused =
-            m_touchAvatarTarget &&
-            focusManager().current() ==
-                m_touchAvatarTarget;
+            m_touchAvatarTarget && focusManager().current() == m_touchAvatarTarget;
 
         if (m_touchAvatarTarget) {
             m_touchStartedInGrid = false;
             m_touchHitIndex = -1;
             m_touchOnFocused = false;
-            m_touchEditDragActive = false;
             return;
         }
 
-        m_touchHitIndex =
-            m_grid
-                ? m_grid->hitTest(tx, ty)
-                : -1;
-
         m_touchOnFocused = false;
-        m_touchEditDragActive = false;
-
-        if (m_touchHitIndex >= 0 &&
-            m_grid) {
-            const auto icons =
-                m_grid->pageIcons();
-
-            if (m_touchHitIndex <
-                static_cast<int>(
-                    icons.size()
-                )) {
-                m_touchOnFocused =
-                    icons[m_touchHitIndex] ==
-                    focusManager().current();
-            }
+        if (m_touchHitIndex >= 0 && m_grid) {
+            const int focused = m_grid->focusedGlobalIndex();
+            m_touchOnFocused = focused == m_touchHitIndex;
         }
     }
 
     if (input.isTouching()) {
-        const float totalDx =
-            input.touchDeltaX();
-
-        const float totalDy =
-            input.touchDeltaY();
-
+        const float totalDx = input.touchDeltaX();
+        const float totalDy = input.touchDeltaY();
         const bool horizontalGesture =
-            std::abs(totalDx) >=
-                kScrollStartThreshold &&
-            std::abs(totalDx) >
-                std::abs(totalDy) *
-                kHorizontalIntentRatio;
+            std::abs(totalDx) >= kScrollStartThreshold &&
+            std::abs(totalDx) > std::abs(totalDy) * kHorizontalIntentRatio;
 
-        // En mode normal, le geste horizontal fait défiler.
-        // En mode déplacement, ce bloc est ignoré :
-        // la réorganisation reste donc prioritaire et intacte.
-        if (!m_editMode &&
-            !m_touchScrollActive &&
-            m_touchStartedInGrid &&
-            horizontalGesture &&
-            m_grid &&
-            m_grid->canTouchScroll()) {
+        // Never let touch alter a controller-driven move operation. While move
+        // mode is active, the carousel is intentionally controller-only.
+        if (!m_editMode && !m_touchScrollActive && m_touchStartedInGrid &&
+            horizontalGesture && m_grid && m_grid->canTouchScroll()) {
             m_touchScrollActive = true;
             m_touchOnFocused = false;
             m_grid->beginTouchScroll();
         }
 
-        if (m_touchScrollActive &&
-            m_grid) {
-            const float currentX =
-                input.touchX();
-
-            const float currentDuration =
-                input.touchDuration();
-
-            const float frameDx =
-                currentX - m_touchLastX;
-
-            const float frameDt =
-                currentDuration -
-                m_touchLastDuration;
+        if (m_touchScrollActive && m_grid) {
+            const float currentX = input.touchX();
+            const float currentDuration = input.touchDuration();
+            const float frameDx = currentX - m_touchLastX;
+            const float frameDt = currentDuration - m_touchLastDuration;
 
             m_touchLastX = currentX;
-            m_touchLastDuration =
-                currentDuration;
+            m_touchLastDuration = currentDuration;
 
-            if (frameDt > 0.001f &&
-                frameDt < 0.10f) {
-                const float instantVelocity =
-                    frameDx / frameDt;
-
-                // Lissage léger : la force réelle du geste est conservée,
-                // sans devenir irrégulière à cause d'une seule image.
+            if (frameDt > 0.001f && frameDt < 0.10f) {
+                const float instantVelocity = frameDx / frameDt;
                 m_touchScrollVelocity =
-                    m_touchScrollVelocity *
-                        0.62f +
-                    instantVelocity *
-                        0.38f;
+                    m_touchScrollVelocity * 0.62f + instantVelocity * 0.38f;
             }
 
-            m_grid->dragTouchScroll(
-                frameDx
-            );
-
+            m_grid->dragTouchScroll(frameDx);
             updateCursor();
             return;
         }
 
-        if (m_touchHitIndex >= 0) {
-            if (!m_editMode &&
-                std::abs(totalDx) <=
-                    kLongPressMoveThreshold &&
-                std::abs(totalDy) <=
-                    kLongPressMoveThreshold &&
-                input.touchDuration() >=
-                    kLongPressThreshold) {
-                if (auto* icon =
-                        focusTouchedIcon(
-                            m_touchHitIndex
-                        )) {
-                    enterEditMode();
-
-                    if (m_editMode) {
-                        m_touchEditDragActive =
-                            true;
-
-                        m_audio.playSfx(
-                            Sfx::Activate
-                        );
-
-                        m_editGhostTargetRect =
-                            icon->focusRect()
-                                .expanded(4.f);
-                    }
-                }
-            }
-
-            if (m_editMode &&
-                m_touchEditDragActive &&
-                m_grid) {
-                const int dragHit =
-                    m_grid->hitTest(
-                        input.touchX(),
-                        input.touchY()
-                    );
-
-                if (dragHit >= 0)
-                    focusTouchedIcon(dragHit);
-            }
-        }
+        // No long-press branch here by design. Holding a cover does nothing.
     }
 
     if (input.touchUp()) {
         if (m_touchAvatarTarget) {
-            const float dx =
-                input.touchDeltaX();
-
-            const float dy =
-                input.touchDeltaY();
-
-            UserAvatarButton* avatar =
-                m_touchAvatarTarget;
-
+            const float dx = input.touchDeltaX();
+            const float dy = input.touchDeltaY();
+            UserAvatarButton* avatar = m_touchAvatarTarget;
             m_touchAvatarTarget = nullptr;
 
-            if (std::abs(dx) < 20.f &&
-                std::abs(dy) < 20.f &&
-                hitAvatar(
-                    input.touchX(),
-                    input.touchY()
-                ) == avatar) {
-                focusManager().setFocus(
-                    avatar
-                );
-
+            if (std::abs(dx) < 20.f && std::abs(dy) < 20.f &&
+                hitAvatar(input.touchX(), input.touchY()) == avatar) {
+                focusManager().setFocus(avatar);
                 if (!m_touchAvatarWasFocused)
                     avatar->activate();
             }
 
-            m_touchAvatarWasFocused =
-                false;
-
+            m_touchAvatarWasFocused = false;
             resetScrollState();
             return;
         }
 
-        if (m_touchScrollActive &&
-            m_grid) {
-            m_grid->endTouchScroll(
-                m_touchScrollVelocity
-            );
-
+        if (m_touchScrollActive && m_grid) {
+            m_grid->endTouchScroll(m_touchScrollVelocity);
             m_touchHitIndex = -1;
             m_touchOnFocused = false;
-            m_touchEditDragActive = false;
-
             resetScrollState();
             return;
         }
 
-        // Le déplacement des icônes est conservé tel quel.
-        if (m_editMode &&
-            m_touchEditDragActive) {
-            const bool changed =
-                commitEditModePlacement();
-
-            exitEditMode();
-
-            m_audio.playSfx(
-                changed
-                    ? Sfx::ConfirmPositive
-                    : Sfx::ModalHide
-            );
-
-            m_touchHitIndex = -1;
-            m_touchEditDragActive = false;
-
-            resetScrollState();
-            return;
+        // A tap can select a cover, but NEVER activates it. This keeps touch
+        // useful for positioning without creating accidental launches.
+        if (!m_editMode && m_touchHitIndex >= 0 &&
+            std::abs(input.touchDeltaX()) < kTapMoveThreshold &&
+            std::abs(input.touchDeltaY()) < kTapMoveThreshold) {
+            focusTouchedIcon(m_touchHitIndex);
         }
 
         m_touchHitIndex = -1;
         m_touchOnFocused = false;
-        m_touchEditDragActive = false;
-
         resetScrollState();
     }
 }

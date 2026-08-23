@@ -10,6 +10,7 @@
 #include "app_manager.hpp"
 #include "ecs.hpp"
 #include "menu_launcher.hpp"
+#include "music/music_service.hpp"
 #include <cstdio>
 #include <cstring>
 #include <atomic>
@@ -238,7 +239,7 @@ enum class ActionType : uint32_t {
     OpenMiiEditor,
     OpenControllers,
     OpenNetConnect,
-    OpenSystemSettings,
+    ProbeQlaunchSettingsHandoff,
     OpenUserPage,
 };
 
@@ -989,6 +990,7 @@ static void handleMenuCommand() {
     switchu::FileLog::log("[smi] command=%u", (u32)msg);
 
     Result result = 0;
+    bool skipGenericResponse = false;
 
     switch (msg) {
     case smi::SystemMessage::LaunchApplication: {
@@ -1046,14 +1048,15 @@ static void handleMenuCommand() {
         switchu::FileLog::log("[smi] queued NetConnect launch (actions=%zu)", g_actionQueue.size());
         break;
 
-    case smi::SystemMessage::LaunchSystemSettings:
+    case smi::SystemMessage::RequestQlaunchSettingsHandoff:
         {
             Action action{};
-            action.type = ActionType::OpenSystemSettings;
+            action.type = ActionType::ProbeQlaunchSettingsHandoff;
             g_actionQueue.push_back(action);
         }
-        switchu::FileLog::log("[smi] V10.29 queued Nintendo System Settings test (actions=%zu)",
-                              g_actionQueue.size());
+        switchu::FileLog::log(
+            "[smi] V10.30 queued stock-qlaunch Settings handoff probe (actions=%zu)",
+            g_actionQueue.size());
         break;
 
     case smi::SystemMessage::LaunchUserPage: {
@@ -1074,6 +1077,87 @@ static void handleMenuCommand() {
         }
         switchu::FileLog::log("[smi] queued Controller launch (actions=%zu)", g_actionQueue.size());
         break;
+
+    case smi::SystemMessage::MusicReloadQueue:
+        skipGenericResponse = true;
+        if (!switchu::daemon::music::service().reloadQueue())
+            switchu::FileLog::log("[music] reload queue requested but queue is unavailable/invalid");
+        break;
+
+    case smi::SystemMessage::MusicPlayIndex: {
+        skipGenericResponse = true;
+        const auto args = reader.pop<switchu::music::IndexArgs>();
+        if (!switchu::daemon::music::service().playIndex(args.index))
+            switchu::FileLog::log("[music] play index %d failed", args.index);
+        break;
+    }
+    case smi::SystemMessage::MusicTogglePause:
+        skipGenericResponse = true;
+        switchu::daemon::music::service().togglePause();
+        break;
+    case smi::SystemMessage::MusicPause:
+        skipGenericResponse = true;
+        switchu::daemon::music::service().pause();
+        break;
+    case smi::SystemMessage::MusicResume:
+        skipGenericResponse = true;
+        switchu::daemon::music::service().resume();
+        break;
+    case smi::SystemMessage::MusicNext:
+        skipGenericResponse = true;
+        switchu::daemon::music::service().next();
+        break;
+    case smi::SystemMessage::MusicPrevious:
+        skipGenericResponse = true;
+        switchu::daemon::music::service().previous();
+        break;
+    case smi::SystemMessage::MusicSeek: {
+        skipGenericResponse = true;
+        const auto args = reader.pop<switchu::music::SeekArgs>();
+        switchu::daemon::music::service().seekMs(args.position_ms);
+        break;
+    }
+    case smi::SystemMessage::MusicSetVolume: {
+        skipGenericResponse = true;
+        const auto args = reader.pop<switchu::music::VolumeArgs>();
+        switchu::daemon::music::service().setVolume(args.volume);
+        break;
+    }
+    case smi::SystemMessage::MusicSetShuffle: {
+        skipGenericResponse = true;
+        const auto args = reader.pop<switchu::music::ToggleArgs>();
+        switchu::daemon::music::service().setShuffle(args.enabled != 0);
+        break;
+    }
+    case smi::SystemMessage::MusicSetRepeat: {
+        skipGenericResponse = true;
+        const auto args = reader.pop<switchu::music::RepeatArgs>();
+        const uint8_t raw = std::min<uint8_t>(
+            args.mode, static_cast<uint8_t>(switchu::music::RepeatMode::Track));
+        switchu::daemon::music::service().setRepeat(
+            static_cast<switchu::music::RepeatMode>(raw));
+        break;
+    }
+    case smi::SystemMessage::MusicStop:
+        skipGenericResponse = true;
+        switchu::daemon::music::service().stop(false);
+        break;
+    case smi::SystemMessage::MusicClearSession:
+        skipGenericResponse = true;
+        switchu::daemon::music::service().stop(true);
+        break;
+    case smi::SystemMessage::MusicGetStatus: {
+        const auto status = switchu::daemon::music::service().status();
+        smi::StorageWriter writer(smi::SystemMessage::MusicGetStatus);
+        writer.push(status);
+        AppletStorage respSt;
+        const Result respRc = writer.createStorage(respSt);
+        if (R_SUCCEEDED(respRc))
+            daemon::menu_la::pushStorage(&respSt);
+        else
+            switchu::FileLog::log("[music] status response create FAIL: 0x%X", respRc);
+        return;
+    }
 
     case smi::SystemMessage::EnterSleep:
         startPowerSequence("smi-sleep", smi::SystemMessage::EnterSleep);
@@ -1119,7 +1203,7 @@ static void handleMenuCommand() {
 
     }
 
-    if (msg != smi::SystemMessage::MenuClosing) {
+    if (msg != smi::SystemMessage::MenuClosing && !skipGenericResponse) {
         smi::StorageWriter writer(result);
         AppletStorage respSt;
         Result respRc = writer.createStorage(respSt);
@@ -1137,8 +1221,10 @@ static bool handleAction(Action& action) {
     switchu::FileLog::log("[action] handling type=%u", (u32)action.type);
     switch (action.type) {
         case ActionType::LaunchApplication: {
+            switchu::daemon::music::service().onGameLaunching(action.title_id);
             Result rc = daemon::app::launch(action.title_id, action.uid);
             if (R_FAILED(rc)) {
+                switchu::daemon::music::service().onGameEnded();
                 switchu::FileLog::log("[action] launch 0x%016lX FAIL: 0x%X", action.title_id, rc);
             } else {
                 g_currentSurface = smi::LockReturnTarget::Game;
@@ -1209,25 +1295,46 @@ static bool handleAction(Action& action) {
             return true;
         }
 
-        case ActionType::OpenSystemSettings: {
-            // V10.29 corrective: this is intentionally a REAL Horizon attempt,
-            // not a simulated button. libnx documents AppletId 0x16 as
-            // LibraryAppletSet (010000000000100E). It is normally absent on
-            // retail firmware, so the exact Result is logged for validation.
-            // If a firmware/environment exposes it, the official Nintendo UI
-            // is started here and SwitchU returns when the applet closes.
-            switchu::FileLog::log("[settings-test] attempting AppletId_LibraryAppletSet (0x16)");
-            Result rc = launchLibraryApplet(AppletId_LibraryAppletSet,
-                                            "NintendoSystemSettings");
-            if (R_FAILED(rc)) {
-                switchu::FileLog::log(
-                    "[settings-test] LibraryAppletSet unavailable/failed rc=0x%X", rc);
-                switchu::FileLog::log(
-                    "[settings-test] stock-qlaunch handoff required if retail firmware lacks applet 0x16");
-            } else {
-                switchu::FileLog::log("[settings-test] Nintendo System Settings applet closed normally");
-            }
-            switchu::FileLog::log("[settings-test] relaunching SwitchU menu");
+        case ActionType::ProbeQlaunchSettingsHandoff: {
+            // V10.30 attacks the problem at the real qlaunch level. By the time
+            // this action runs, handleAction() guarantees the external HOME
+            // LibraryApplet holder is gone, and menu_launcher cleanup has
+            // unregistered the PhotoViewer (010000000000100D) external code.
+            //
+            // The remaining blocker is architectural: this daemon itself runs
+            // as ProgramId 0100000000001000 (qlaunch). A reversible handoff
+            // therefore cannot be achieved by merely unregistering 100D.
+            // Restarting ProgramId 1000 while the Atmosphere qlaunch replacement
+            // remains installed just starts SwitchU again; temporarily renaming
+            // the replacement would strand the console in stock qlaunch because
+            // this process would no longer exist to restore it. V10.30 refuses
+            // that unsafe one-way filesystem mutation.
+            std::error_code qlaunchFsEc;
+            const bool overrideDir = std::filesystem::exists(
+                "sdmc:/atmosphere/contents/0100000000001000", qlaunchFsEc);
+            qlaunchFsEc.clear();
+            const bool overrideExefs = std::filesystem::exists(
+                "sdmc:/atmosphere/contents/0100000000001000/exefs.nsp", qlaunchFsEc);
+
+            switchu::FileLog::log(
+                "[qlaunch-handoff] probe begin holder=%d menuActive=%d foregroundApplet=%d",
+                daemon::menu_la::hasHolder() ? 1 : 0,
+                daemon::menu_la::isActive() ? 1 : 0,
+                g_foregroundAppletActive ? 1 : 0);
+            switchu::FileLog::log(
+                "[qlaunch-handoff] current daemon ProgramId=0100000000001000; stock qlaunch owns same ProgramId");
+            switchu::FileLog::log(
+                "[qlaunch-handoff] atmosphere override path dir=%d exefs.nsp=%d",
+                overrideDir ? 1 : 0, overrideExefs ? 1 : 0);
+            switchu::FileLog::log(
+                "[qlaunch-handoff] PhotoViewer HOME takeover released; no LibraryApplet Settings fallback used");
+            switchu::FileLog::log(
+                "[qlaunch-handoff] SAFE HANDOFF NOT VIABLE in single-process architecture: persistent helper/original-ExeFS proxy required for reversible return");
+
+            // Keep the console usable. This is explicitly a failed/unsupported
+            // handoff, not a fake success screen: immediately restore SwitchU.
+            switchu::FileLog::log(
+                "[qlaunch-handoff] restoring SwitchU HOME without mutating Atmosphere override files");
             daemon::menu_la::launch(smi::MenuStartMode::MainMenu, buildSystemStatus());
             return true;
         }
@@ -1262,6 +1369,10 @@ static void mainLoop() {
     handleGeneralChannel();
     handleAppletMessages();
     handleMenuCommand();
+    // The music engine lives in the persistent daemon, not in the full-screen
+    // UI applet. Keep decoder transitions, persistence and next-track timing
+    // alive even while a game owns the foreground.
+    switchu::daemon::music::service().update();
 
     bool didWork = false;
 
@@ -1350,6 +1461,7 @@ static void mainLoop() {
 
     if (daemon::app::checkFinished()) {
         switchu::FileLog::log("[main] app exited");
+        switchu::daemon::music::service().onGameEnded();
         g_currentSurface = smi::LockReturnTarget::Home;
         if (daemon::menu_la::isActive()) {
             pushNotification(smi::MenuMessage::ApplicationExited);
@@ -1590,6 +1702,11 @@ int main(int argc, char* argv[]) {
 
     appletLoadAndApplyIdlePolicySettings();
 
+    // Music V0.01: the daemon is the persistent playback owner. Initialization
+    // is lazy on the audio side, so simply booting SwitchU does not consume an
+    // AudioRenderer session or decoder memory.
+    switchu::daemon::music::service().initialize();
+
     rebuildAppCatalog("boot");
 
     Result rc = startControlCacheWorker();
@@ -1612,6 +1729,7 @@ int main(int argc, char* argv[]) {
 
     stopEventManager();
     stopControlCacheWorker();
+    switchu::daemon::music::service().shutdown();
     daemon::menu_la::terminate();
     daemon::app::cleanup();
     switchu::FileLog::log("[daemon] shutdown complete");

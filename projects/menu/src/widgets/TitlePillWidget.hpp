@@ -1,6 +1,7 @@
 #pragma once
 #include <nxui/widgets/GlassWidget.hpp>
 #include <nxui/core/Font.hpp>
+#include <nxui/core/Texture.hpp>
 #include <nxui/core/Animation.hpp>
 #include <nxui/core/Types.hpp>
 #include <string>
@@ -52,4 +53,6 @@ private:
     std::uint64_t m_selectedTitleId = 0;
     std::uint64_t m_playTimeMinutes = 0;
     bool m_playTimeAvailable = false;
+    nxui::Texture m_playTimeClockTexture;
+    bool m_playTimeClockLoadAttempted = false;
 };

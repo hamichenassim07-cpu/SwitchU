@@ -35,11 +35,10 @@ enum class SystemMessage : uint32_t {
     LaunchControllers     = 12,
     LaunchNetConnect      = 13,
     LaunchUserPage        = 14,
-    // V10.29: explicit experimental path to Nintendo's Settings applet.
-    // Retail units normally do not ship LibraryAppletSet; keeping this as a
-    // real daemon command lets us validate the exact Horizon result on-console
-    // instead of silently omitting the requested feature.
-    LaunchSystemSettings  = 15,
+    // V10.30: qlaunch-level handoff request. This deliberately does NOT use
+    // LibraryAppletSet; the daemon evaluates whether stock qlaunch can be
+    // reached safely/reversibly from the current replacement architecture.
+    RequestQlaunchSettingsHandoff = 15,
 
     EnterSleep            = 20,
     Shutdown              = 21,
@@ -52,6 +51,23 @@ enum class SystemMessage : uint32_t {
 
     MenuReady             = 40,
     MenuClosing           = 41,
+
+    // SwitchU Music V0.01. The daemon owns playback so the music engine can
+    // survive closing the full-screen Music UI and launching an application.
+    MusicReloadQueue      = 50,
+    MusicPlayIndex        = 51,
+    MusicTogglePause      = 52,
+    MusicPause            = 53,
+    MusicResume           = 54,
+    MusicNext             = 55,
+    MusicPrevious         = 56,
+    MusicSeek             = 57,
+    MusicSetVolume        = 58,
+    MusicSetShuffle       = 59,
+    MusicSetRepeat        = 60,
+    MusicStop             = 61,
+    MusicGetStatus        = 62,
+    MusicClearSession     = 63,
 };
 
 enum class MenuStartMode : uint32_t {

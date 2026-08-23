@@ -1,6 +1,7 @@
 #pragma once
 #include <switchu/smi_protocol.hpp>
 #include <switchu/smi_helpers.hpp>
+#include <switchu/music_protocol.hpp>
 #include <switch.h>
 
 #include <cstring>
@@ -75,8 +76,87 @@ inline Result terminateApplication() {
     return sendSimple(smi::SystemMessage::TerminateApplication);
 }
 
-inline Result launchSystemSettings() {
-    return sendSimple(smi::SystemMessage::LaunchSystemSettings);
+inline Result requestQlaunchSettingsHandoff() {
+    return sendSimple(smi::SystemMessage::RequestQlaunchSettingsHandoff);
+}
+
+inline Result sendPayload(smi::SystemMessage msg, const void* payload, size_t payloadSize) {
+    std::vector<uint8_t> buf(sizeof(smi::CommandHeader) + payloadSize, 0);
+    auto* hdr = reinterpret_cast<smi::CommandHeader*>(buf.data());
+    hdr->magic = smi::kCommandMagic;
+    hdr->message = static_cast<uint32_t>(msg);
+    if (payload && payloadSize > 0)
+        std::memcpy(buf.data() + sizeof(smi::CommandHeader), payload, payloadSize);
+    return pushOutStorage(buf.data(), buf.size());
+}
+
+inline Result musicReloadQueue() { return sendSimple(smi::SystemMessage::MusicReloadQueue); }
+inline Result musicTogglePause() { return sendSimple(smi::SystemMessage::MusicTogglePause); }
+inline Result musicPause()       { return sendSimple(smi::SystemMessage::MusicPause); }
+inline Result musicResume()      { return sendSimple(smi::SystemMessage::MusicResume); }
+inline Result musicNext()        { return sendSimple(smi::SystemMessage::MusicNext); }
+inline Result musicPrevious()    { return sendSimple(smi::SystemMessage::MusicPrevious); }
+inline Result musicStop()        { return sendSimple(smi::SystemMessage::MusicStop); }
+inline Result musicClearSession(){ return sendSimple(smi::SystemMessage::MusicClearSession); }
+
+inline Result musicPlayIndex(int index) {
+    switchu::music::IndexArgs args{};
+    args.index = index;
+    return sendPayload(smi::SystemMessage::MusicPlayIndex, &args, sizeof(args));
+}
+
+inline Result musicSeek(uint64_t positionMs) {
+    switchu::music::SeekArgs args{};
+    args.position_ms = positionMs;
+    return sendPayload(smi::SystemMessage::MusicSeek, &args, sizeof(args));
+}
+
+inline Result musicSetVolume(float volume) {
+    switchu::music::VolumeArgs args{};
+    args.volume = volume;
+    return sendPayload(smi::SystemMessage::MusicSetVolume, &args, sizeof(args));
+}
+
+inline Result musicSetShuffle(bool enabled) {
+    switchu::music::ToggleArgs args{};
+    args.enabled = enabled ? 1 : 0;
+    return sendPayload(smi::SystemMessage::MusicSetShuffle, &args, sizeof(args));
+}
+
+inline Result musicSetRepeat(switchu::music::RepeatMode mode) {
+    switchu::music::RepeatArgs args{};
+    args.mode = static_cast<uint8_t>(mode);
+    return sendPayload(smi::SystemMessage::MusicSetRepeat, &args, sizeof(args));
+}
+
+inline Result getMusicStatus(switchu::music::Status& out) {
+    Result rc = sendSimple(smi::SystemMessage::MusicGetStatus);
+    if (R_FAILED(rc)) return rc;
+
+    uint8_t buf[smi::kStorageSize]{};
+    for (int retry = 0; retry < 120; ++retry) {
+        size_t actual = 0;
+        rc = popInStorage(buf, sizeof(buf), &actual);
+        if (R_FAILED(rc)) {
+            svcSleepThread(5'000'000ULL);
+            continue;
+        }
+        if (actual < sizeof(smi::CommandHeader))
+            continue;
+        smi::CommandHeader hdr{};
+        std::memcpy(&hdr, buf, sizeof(hdr));
+        if (hdr.magic != smi::kCommandMagic)
+            continue;
+        // Ignore stale generic responses from older system commands. Music
+        // status is tagged with its own command ID so it can be recognized.
+        if (hdr.message != static_cast<uint32_t>(smi::SystemMessage::MusicGetStatus))
+            continue;
+        if (actual >= sizeof(smi::CommandHeader) + sizeof(out)) {
+            std::memcpy(&out, buf + sizeof(smi::CommandHeader), sizeof(out));
+            return 0;
+        }
+    }
+    return MAKERESULT(Module_Libnx, 0xFC);
 }
 
 inline Result enterSleep()  { return sendSimple(smi::SystemMessage::EnterSleep); }

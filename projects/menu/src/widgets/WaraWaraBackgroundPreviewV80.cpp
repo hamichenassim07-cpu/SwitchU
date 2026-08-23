@@ -2033,7 +2033,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     };
     const float crtAlpha = std::clamp(m_opacity, 0.f, 1.f);
     ren.useShader(nxui::ShaderProgram::Basic);
-    ren.drawRect(crtArea, nxui::Color(0.050f, 0.054f, 0.060f, crtAlpha));
+    ren.drawRect(crtArea, nxui::Color(0.068f, 0.073f, 0.081f, crtAlpha));
 
     constexpr int kCrtBands = 8;
     constexpr int kCrtSlices = 14;
@@ -2044,8 +2044,8 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     for (int band = 0; band < kCrtBands; ++band) {
         const bool lighter = (band & 1) != 0;
         const nxui::Color bandColor = lighter
-            ? nxui::Color(0.104f, 0.110f, 0.120f, 0.38f * crtAlpha)
-            : nxui::Color(0.020f, 0.023f, 0.028f, 0.44f * crtAlpha);
+            ? nxui::Color(0.132f, 0.141f, 0.154f, 0.38f * crtAlpha)
+            : nxui::Color(0.027f, 0.031f, 0.038f, 0.42f * crtAlpha);
 
         for (int slice = 0; slice < kCrtSlices; ++slice) {
             const float y0 = crtArea.y + slice * sliceH;
@@ -2065,7 +2065,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     for (float y = crtArea.y + 3.f; y < crtArea.y + crtArea.height; y += 9.f) {
         ren.drawRect(
             {crtArea.x, y, crtArea.width, 1.f},
-            nxui::Color(0.f, 0.f, 0.f, 0.080f * crtAlpha)
+            nxui::Color(0.f, 0.f, 0.f, 0.070f * crtAlpha)
         );
     }
 
@@ -2395,7 +2395,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     }
 #endif
 
-    (void)previewVisualAlpha;
+    // V10.30: previewVisualAlpha is now authoritative for the dark veil.
+    // A native CRT frame stays untouched; only per-title image/video media
+    // receives the readability filter, including smooth preview transitions.
 
     // V10.29: HOME selection glow removed completely. Nothing is composited
     // between the background media and the dark veil anymore. This also avoids
@@ -2406,14 +2408,19 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     const float lowerStartY = area.y + area.height * 456.f / 720.f;
     const float fadeBand = area.height * 0.14f;
 
-    // V10.29: the dark background filter is deliberately the LAST background
-    // layer, immediately before the opaque lower information block. It cannot
-    // be cancelled by preview alpha and no glow is rendered after it.
-    constexpr float kBackgroundVeilOpacity = 0.26f;
-    ren.drawRect(
-        area,
-        nxui::Color(0.f, 0.f, 0.f, kBackgroundVeilOpacity * baseAlpha)
-    );
+    // V10.30: no veil at all on the native CRT. The veil is the LAST
+    // background layer only when the selected title actually owns an image or
+    // video preview. It is slightly stronger than V10.29, while its alpha
+    // follows media fade-in/out so the switch back to CRT stays natural.
+    constexpr float kBackgroundVeilOpacity = 0.30f;
+    const float customMediaAlpha = std::clamp(previewVisualAlpha, 0.f, 1.f);
+    if (customMediaAlpha > 0.001f) {
+        ren.drawRect(
+            area,
+            nxui::Color(0.f, 0.f, 0.f,
+                        kBackgroundVeilOpacity * baseAlpha * customMediaAlpha)
+        );
+    }
 
     // Existing lower information zone. It is drawn immediately after the veil.
     ren.drawGradientRect(

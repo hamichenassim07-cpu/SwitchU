@@ -192,20 +192,33 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
             ren.drawRoundedRect(fill, levelColor,
                                 std::min(4.0f, fill.width * 0.5f));
         } else {
-            // Draw the animated gradient as inexpensive narrow strips. The
-            // phase moves continuously left-to-right and stays strictly in the
-            // pink/violet <-> blue/cyan family requested for charging.
-            const nxui::Color pink(1.00f, 0.18f, 0.70f, 0.96f * op);
-            const nxui::Color cyan(0.10f, 0.76f, 1.00f, 0.96f * op);
-            constexpr int kChargeSegments = 28;
-            constexpr float kTau = 6.2831853071795864769f;
-            const float phase = m_chargeAnim * 0.72f;
-            const float segmentW = fill.width / static_cast<float>(kChargeSegments);
+            // V10.30: continuous seven-stop colour field. The old 28 wide
+            // strips made pink/cyan look like successive bands. Here the
+            // battery is sampled more finely than its physical pixel width,
+            // with smootherstep interpolation between broad colour stops.
+            // Adjacent sub-pixel samples overlap slightly to eliminate seams.
+            const nxui::Color stops[] = {
+                {1.00f, 0.18f, 0.70f, 0.96f * op}, // pink
+                {0.68f, 0.27f, 1.00f, 0.96f * op}, // violet
+                {0.22f, 0.43f, 1.00f, 0.96f * op}, // blue
+                {0.10f, 0.82f, 1.00f, 0.96f * op}, // cyan
+                {0.22f, 0.43f, 1.00f, 0.96f * op}, // blue
+                {0.68f, 0.27f, 1.00f, 0.96f * op}, // violet
+                {1.00f, 0.18f, 0.70f, 0.96f * op}, // pink
+            };
+            constexpr int kStopCount = 7;
+            constexpr int kChargeSamples = 128;
+            constexpr float kChargeCycles = 1.18f;
+            const float phase = std::fmod(m_chargeAnim * 0.055f, 1.f);
+            const float sampleW = fill.width / static_cast<float>(kChargeSamples);
 
+            auto smoother = [](float t) {
+                t = std::clamp(t, 0.f, 1.f);
+                return t * t * t * (t * (t * 6.f - 15.f) + 10.f);
+            };
             auto mixColor = [](const nxui::Color& a,
                                const nxui::Color& b,
                                float t) {
-                t = std::clamp(t, 0.f, 1.f);
                 return nxui::Color(
                     a.r + (b.r - a.r) * t,
                     a.g + (b.g - a.g) * t,
@@ -213,23 +226,26 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
                     a.a + (b.a - a.a) * t
                 );
             };
+            auto colourAt = [&](float u) {
+                // Moving the pattern toward +X gives a slow left-to-right flow.
+                float wrapped = std::fmod(u * kChargeCycles - phase + 4.f, 1.f);
+                const float scaled = wrapped * static_cast<float>(kStopCount - 1);
+                const int idx = std::min(kStopCount - 2,
+                    static_cast<int>(std::floor(scaled)));
+                const float local = smoother(scaled - static_cast<float>(idx));
+                return mixColor(stops[idx], stops[idx + 1], local);
+            };
 
-            for (int i = 0; i < kChargeSegments; ++i) {
-                const float local =
-                    (static_cast<float>(i) + 0.5f) /
-                    static_cast<float>(kChargeSegments);
-                const float wave = 0.5f + 0.5f *
-                    std::sin(kTau * local - phase);
-                const nxui::Color c = mixColor(pink, cyan, wave);
-                const float x0 = fill.x + segmentW * static_cast<float>(i);
-                const float x1 = (i == kChargeSegments - 1)
-                    ? fill.right()
-                    : fill.x + segmentW * static_cast<float>(i + 1) + 0.6f;
-                ren.drawRect(
-                    {x0, fill.y, std::max(0.f, x1 - x0), fill.height},
-                    c
-                );
+            ren.pushClipRect(fill);
+            for (int i = 0; i < kChargeSamples; ++i) {
+                const float u = (static_cast<float>(i) + 0.5f) /
+                                static_cast<float>(kChargeSamples);
+                const nxui::Color c = colourAt(u);
+                const float x0 = fill.x + sampleW * static_cast<float>(i) - 0.35f;
+                const float x1 = fill.x + sampleW * static_cast<float>(i + 1) + 0.35f;
+                ren.drawRect({x0, fill.y, std::max(0.f, x1 - x0), fill.height}, c);
             }
+            ren.popClipRect();
         }
     }
 

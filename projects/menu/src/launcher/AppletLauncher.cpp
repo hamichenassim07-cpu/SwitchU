@@ -101,13 +101,14 @@ void AppletLauncher::launchNetConnect() {
 }
 
 void AppletLauncher::launchSystemSettings() {
-    DebugLog::log("[launcher] V10.29 requesting Nintendo System Settings via daemon");
-    Result rc = switchu::menu::smi_cmd::launchSystemSettings();
-    DebugLog::log("[launcher] Nintendo System Settings command rc=0x%X", rc);
+    DebugLog::log("[qlaunch-handoff] V10.30 requesting stock qlaunch Settings handoff");
+    Result rc = switchu::menu::smi_cmd::requestQlaunchSettingsHandoff();
+    DebugLog::log("[qlaunch-handoff] daemon request rc=0x%X", rc);
     if (R_SUCCEEDED(rc)) {
         if (m_cb.playSfxModalHide) m_cb.playSfxModalHide();
-        // The daemon must own the actual applet creation attempt. Closing the
-        // external HOME menu releases the foreground LibraryApplet slot first.
+        // Closing the external PhotoViewer HOME surface is required before the
+        // daemon can evaluate/perform a qlaunch-level handoff. No Settings
+        // LibraryApplet is created by this path.
         if (m_cb.requestExit) m_cb.requestExit();
     }
 }

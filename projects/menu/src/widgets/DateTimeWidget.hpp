@@ -9,6 +9,7 @@ public:
     DateTimeWidget();
     void setFont(nxui::Font* f) { m_font = f; }
     void setSmallFont(nxui::Font* sf) { m_smallFont = sf; }
+    void setIconFont(nxui::Font* f) { m_iconFont = f; }
     void setTextColor(const nxui::Color& c) { m_textColor = c; }
     void setSecondaryTextColor(const nxui::Color& c) { m_secondaryColor = c; }
     void setUse12HourClock(bool enabled);
@@ -31,6 +32,7 @@ protected:
 private:
     nxui::Font* m_font = nullptr;
     nxui::Font* m_smallFont = nullptr;
+    nxui::Font* m_iconFont = nullptr;
     float m_timer = 0.f;
     std::string m_timeStr;
     std::string m_dateStr;
