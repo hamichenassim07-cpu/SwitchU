@@ -123,14 +123,6 @@ private:
     nxui::Texture m_backgroundImage;
     float m_time = 0.f;
 
-    // V10.28 OBJ integration test: prerendered floating Joy-Con sprites
-    // derived from the real user-provided mesh. Loaded lazily at runtime so
-    // they can be tested without touching the rest of the menu pipeline.
-    nxui::Texture m_bgJoyconA;
-    nxui::Texture m_bgJoyconB;
-    nxui::Texture m_bgJoyconC;
-    bool m_bgJoyconsAttempted = false;
-
     // V8.1/V9 : tout l'etat preview est encapsule ici.
     std::shared_ptr<WaraPreviewRuntime> m_previewRuntime;
     bool m_previewActive = true;

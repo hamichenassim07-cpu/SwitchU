@@ -92,17 +92,6 @@ float wrapValueV80(float value, float minValue, float maxValue) {
     return value;
 }
 
-bool loadFloatingJoyconTexture(nxui::Texture& tex,
-                               nxui::Renderer& ren,
-                               const char* romfsPath,
-                               const char* sdmcPath) {
-    if (tex.valid())
-        return true;
-    if (tex.loadFromFile(ren.gpu(), ren, romfsPath, 0))
-        return true;
-    return tex.loadFromFile(ren.gpu(), ren, sdmcPath, 0);
-}
-
 std::string titleIdHex(uint64_t titleId) {
     char buffer[17] = {};
     std::snprintf(buffer, sizeof(buffer), "%016llX",
@@ -316,7 +305,7 @@ AmbientSwatch mixAmbient(const AmbientSwatch& a,
     };
 }
 
-void extractAmbientSwatches(const std::vector<uint8_t>& rgba,
+bool extractAmbientSwatches(const std::vector<uint8_t>& rgba,
                             int w,
                             int h,
                             AmbientSwatch& primary,
@@ -324,7 +313,7 @@ void extractAmbientSwatches(const std::vector<uint8_t>& rgba,
     primary = defaultAmbientA();
     secondary = defaultAmbientB();
     if (rgba.empty() || w <= 0 || h <= 0)
-        return;
+        return false;
 
     constexpr int kBins = 12;
     std::array<float, kBins> weight{};
@@ -429,6 +418,33 @@ void extractAmbientSwatches(const std::vector<uint8_t>& rgba,
 
     primary = swatchFor(first, primary);
     secondary = swatchFor(second, secondary);
+    return first >= 0 && weight[first] > 0.0001f;
+}
+
+AmbientSwatch energizeAmbient(const AmbientSwatch& input) {
+    // V10.28: preserve the artwork hue while ensuring a usable, saturated
+    // accent survives the dark veil. This is intentionally not a fixed HOME
+    // palette: each title keeps its own colour identity.
+    const float luma =
+        0.2126f * input.r + 0.7152f * input.g + 0.0722f * input.b;
+    AmbientSwatch out{
+        luma + (input.r - luma) * 1.38f,
+        luma + (input.g - luma) * 1.38f,
+        luma + (input.b - luma) * 1.38f
+    };
+
+    out.r = std::clamp(out.r, 0.f, 1.f);
+    out.g = std::clamp(out.g, 0.f, 1.f);
+    out.b = std::clamp(out.b, 0.f, 1.f);
+
+    const float peak = std::max(out.r, std::max(out.g, out.b));
+    if (peak > 0.001f && peak < 0.92f) {
+        const float boost = std::min(1.75f, 0.92f / peak);
+        out.r = std::clamp(out.r * boost, 0.f, 1.f);
+        out.g = std::clamp(out.g * boost, 0.f, 1.f);
+        out.b = std::clamp(out.b * boost, 0.f, 1.f);
+    }
+    return out;
 }
 
 void extractAmbientFromSelectedIcon(uint64_t titleId,
@@ -606,10 +622,23 @@ void decodePreviewOnWorker(const std::shared_ptr<DecodedPreview>& out) {
     if (out->decoded && !out->rgba.empty()) {
         AmbientSwatch bgPrimary = defaultAmbientA();
         AmbientSwatch bgSecondary = defaultAmbientB();
-        extractAmbientSwatches(out->rgba, out->width, out->height,
-                               bgPrimary, bgSecondary);
-        out->glowPrimary = mixAmbient(out->glowPrimary, bgPrimary, 0.78f);
-        out->glowSecondary = mixAmbient(out->glowSecondary, bgSecondary, 0.78f);
+        const bool hasUsefulBackgroundPalette =
+            extractAmbientSwatches(out->rgba, out->width, out->height,
+                                   bgPrimary, bgSecondary);
+
+        // V10.28 source priority: a real custom background owns the ambience.
+        // If it has no usable chromatic accent (near-grey/black/white), retain
+        // the icon-derived palette instead of producing an invisible glow.
+        if (hasUsefulBackgroundPalette) {
+            out->glowPrimary = energizeAmbient(bgPrimary);
+            out->glowSecondary = energizeAmbient(bgSecondary);
+        } else {
+            out->glowPrimary = energizeAmbient(out->glowPrimary);
+            out->glowSecondary = energizeAmbient(out->glowSecondary);
+        }
+    } else {
+        out->glowPrimary = energizeAmbient(out->glowPrimary);
+        out->glowSecondary = energizeAmbient(out->glowSecondary);
     }
 }
 
@@ -1658,13 +1687,9 @@ void processReadyFallback(WaraPreviewRuntime& r) {
     r.nextTitle = 0;
     r.fade = 0.f;
 
-    if (r.currentAvailable) {
-        r.transitioning = true;
-    } else {
-        r.resolvedTitle = title;
-        r.currentGlowPrimary = readyGlowPrimary;
-        r.currentGlowSecondary = readyGlowSecondary;
-    }
+    // V10.28: palette changes cross-fade even when neither title has a
+    // custom background. The old code snapped icon-only palettes instantly.
+    r.transitioning = true;
 
     DebugLog::log(hadAsset
         ? "[home-preview] decode failed %016llX -> theme fallback"
@@ -1996,33 +2021,83 @@ void WaraWaraBackground::onUpdate(float dt) {
 }
 
 void WaraWaraBackground::onRender(nxui::Renderer& ren) {
-    // Base Switch U actuelle : toujours presente derriere la preview.
-    ren.useShader(nxui::ShaderProgram::Gradient);
-    nxui::FsUniforms fs = {};
-    fs.useTexture = 0;
-    fs.param1 = m_time;
-    fs.extra[0] = m_accent.r;  fs.extra[1] = m_accent.g;
-    fs.extra[2] = m_accent.b;  fs.extra[3] = m_accent.a;
-    fs.extra[4] = m_secondary.r;  fs.extra[5] = m_secondary.g;
-    fs.extra[6] = m_secondary.b;  fs.extra[7] = m_secondary.a;
-    fs.extra[8]  = m_shapeColor.r * 2.f;
-    fs.extra[9]  = m_shapeColor.g * 2.f;
-    fs.extra[10] = m_shapeColor.b * 2.f;
-    fs.extra[11] = m_shapeColor.a;
-    ren.pushFsUniforms(fs);
-    ren.drawRect(m_rect, nxui::Color::white());
-    ren.flush();
+    // V10.28 default HOME background: lightweight procedural CRT. It replaces
+    // the old purple floating-shape scene without allocating new textures or a
+    // 3D scene. Broad curved bands + restrained scanlines reproduce the visual
+    // reference while keeping the background cheap.
+    const nxui::Rect crtArea = {
+        m_rect.x,
+        m_rect.y,
+        (m_rect.width > 1.f) ? m_rect.width : 1280.f,
+        (m_rect.height > 1.f) ? m_rect.height : 720.f
+    };
+    const float crtAlpha = std::clamp(m_opacity, 0.f, 1.f);
     ren.useShader(nxui::ShaderProgram::Basic);
+    ren.drawRect(crtArea, nxui::Color(0.050f, 0.054f, 0.060f, crtAlpha));
 
+    constexpr int kCrtBands = 8;
+    constexpr int kCrtSlices = 14;
+    const float bandW = crtArea.width / static_cast<float>(kCrtBands);
+    const float sliceH = crtArea.height / static_cast<float>(kCrtSlices);
+    const float drift = std::sin(m_time * 0.075f) * 5.f;
+
+    for (int band = 0; band < kCrtBands; ++band) {
+        const bool lighter = (band & 1) != 0;
+        const nxui::Color bandColor = lighter
+            ? nxui::Color(0.104f, 0.110f, 0.120f, 0.38f * crtAlpha)
+            : nxui::Color(0.020f, 0.023f, 0.028f, 0.44f * crtAlpha);
+
+        for (int slice = 0; slice < kCrtSlices; ++slice) {
+            const float y0 = crtArea.y + slice * sliceH;
+            const float yn = ((slice + 0.5f) / static_cast<float>(kCrtSlices)) * 2.f - 1.f;
+            const float curve = (yn * yn - 0.38f) * 24.f;
+            const float direction = (band < kCrtBands / 2) ? -1.f : 1.f;
+            const float x0 =
+                crtArea.x + band * bandW + direction * curve + drift;
+            ren.drawRect(
+                {x0 - 5.f, y0, bandW + 10.f, sliceH + 1.5f},
+                bandColor
+            );
+        }
+    }
+
+    // Fine scanlines: visible enough to read as CRT at 720p, but never noisy.
+    for (float y = crtArea.y + 3.f; y < crtArea.y + crtArea.height; y += 9.f) {
+        ren.drawRect(
+            {crtArea.x, y, crtArea.width, 1.f},
+            nxui::Color(0.f, 0.f, 0.f, 0.080f * crtAlpha)
+        );
+    }
+
+    // Soft vignette made from simple edge bands; no expensive post-process.
+    constexpr float kVignette = 74.f;
+    ren.drawGradientRect(
+        {crtArea.x, crtArea.y, crtArea.width, kVignette},
+        nxui::Color(0.f, 0.f, 0.f, 0.28f * crtAlpha),
+        nxui::Color(0.f, 0.f, 0.f, 0.00f)
+    );
+    ren.drawGradientRect(
+        {crtArea.x, crtArea.y + crtArea.height - kVignette,
+         crtArea.width, kVignette},
+        nxui::Color(0.f, 0.f, 0.f, 0.00f),
+        nxui::Color(0.f, 0.f, 0.f, 0.34f * crtAlpha)
+    );
+    ren.drawRect(
+        {crtArea.x, crtArea.y, 34.f, crtArea.height},
+        nxui::Color(0.f, 0.f, 0.f, 0.16f * crtAlpha)
+    );
+    ren.drawRect(
+        {crtArea.x + crtArea.width - 34.f, crtArea.y, 34.f, crtArea.height},
+        nxui::Color(0.f, 0.f, 0.f, 0.16f * crtAlpha)
+    );
+
+    // Explicit theme imagery can still sit above the new default CRT base.
     if (m_backgroundImage.valid() && m_config.imageOpacity > 0.f) {
         ren.drawTexture(&m_backgroundImage,
                         backgroundImageRect(),
                         nxui::Color::white().withAlpha(
                             m_config.imageOpacity * m_opacity));
     }
-
-    for (const auto& s : m_shapes)
-        drawShapeWithSymmetry(ren, s);
 
     ren.flush();
 
@@ -2203,10 +2278,9 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         } else {
             r.nextAvailable = false;
             r.nextTitle = 0;
-            if (r.currentAvailable)
-                r.transitioning = true;
-            else
-                r.resolvedTitle = ready->titleId;
+            // Keep the palette transition alive even when the background
+            // texture itself could not be uploaded. Never leave stale colours.
+            r.transitioning = true;
             DebugLog::log("[home-preview] async upload failed %016llX -> theme fallback",
                           static_cast<unsigned long long>(ready->titleId));
         }
@@ -2323,22 +2397,20 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
     (void)previewVisualAlpha;
 
-    // V10.27: background darkness and carousel glow are intentionally two
-    // independent layers. The veil affects media only; the additive glow is
-    // composited afterwards and can no longer multiply the black filter.
+    // V10.28: explicit post-background veil. It is drawn unconditionally after
+    // every background source (CRT/theme image/JPG/MP4), never multiplied by a
+    // preview-alpha inherited from another layer. This fixes the "filter exists
+    // in code but is invisible" failure from V10.27.
     const nxui::Color lowerBase(0.030f, 0.032f, 0.039f, 1.f);
     const float baseAlpha = std::clamp(m_opacity, 0.f, 1.f);
-    constexpr float kBackgroundVeilOpacity = 0.18f;
-
-    if (previewVisualAlpha > 0.001f) {
-        ren.drawRect(
-            area,
-            nxui::Color(
-                0.f, 0.f, 0.f,
-                kBackgroundVeilOpacity * previewVisualAlpha * baseAlpha
-            )
-        );
-    }
+    constexpr float kBackgroundVeilOpacity = 0.22f;
+    ren.drawRect(
+        area,
+        nxui::Color(
+            0.f, 0.f, 0.f,
+            kBackgroundVeilOpacity * baseAlpha
+        )
+    );
 
     // The opaque information band begins here. The glow is composited before
     // this band and clipped at this exact Y, so it can illuminate the selected
@@ -2346,103 +2418,22 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
     const float lowerStartY = area.y + area.height * 456.f / 720.f;
     const float fadeBand = area.height * 0.14f;
 
-    // V10.28 test: floating monochrome Joy-Con objects derived from the real
-    // user-provided model. They remain behind the selected card and are clipped
-    // above the lower black band.
-    if (!m_bgJoyconsAttempted) {
-        m_bgJoyconsAttempted = true;
-        loadFloatingJoyconTexture(
-            m_bgJoyconA, ren,
-            "romfs:/background_fx/joycon_bg_a.png",
-            "sdmc:/switch/SwitchU/background_fx/joycon_bg_a.png"
-        );
-        loadFloatingJoyconTexture(
-            m_bgJoyconB, ren,
-            "romfs:/background_fx/joycon_bg_b.png",
-            "sdmc:/switch/SwitchU/background_fx/joycon_bg_b.png"
-        );
-        loadFloatingJoyconTexture(
-            m_bgJoyconC, ren,
-            "romfs:/background_fx/joycon_bg_c.png",
-            "sdmc:/switch/SwitchU/background_fx/joycon_bg_c.png"
-        );
-    }
-
-    if (m_bgJoyconA.valid() || m_bgJoyconB.valid() || m_bgJoyconC.valid()) {
-        const float upperHeight = std::max(0.f, lowerStartY - area.y);
-        if (upperHeight > 4.f) {
-            ren.pushClipRect({area.x, area.y, area.width, upperHeight});
-
-            auto drawObj = [&](nxui::Texture& tex,
-                               float anchorX,
-                               float anchorY,
-                               float drawW,
-                               float aspect,
-                               float alpha) {
-                if (!tex.valid() || drawW <= 1.f || aspect <= 0.f || alpha <= 0.001f)
-                    return;
-                const float drawH = drawW / aspect;
-                ren.drawTexture(
-                    &tex,
-                    {anchorX - drawW * 0.5f, anchorY - drawH * 0.5f, drawW, drawH},
-                    nxui::Color(1.f, 1.f, 1.f, alpha)
-                );
-            };
-
-            const float t = m_time;
-            drawObj(
-                m_bgJoyconA,
-                area.x + area.width * 0.19f + std::sin(t * 0.18f) * 18.f,
-                area.y + area.height * 0.29f + std::cos(t * 0.14f) * 12.f,
-                area.width * 0.29f,
-                1.0f,
-                0.24f * baseAlpha
-            );
-            drawObj(
-                m_bgJoyconB,
-                area.x + area.width * 0.79f + std::cos(t * 0.11f) * 14.f,
-                area.y + area.height * 0.18f + std::sin(t * 0.09f) * 10.f,
-                area.width * 0.20f,
-                1.0f,
-                0.19f * baseAlpha
-            );
-            drawObj(
-                m_bgJoyconC,
-                area.x + area.width * 0.61f + std::sin(t * 0.08f + 1.2f) * 10.f,
-                area.y + area.height * 0.62f + std::cos(t * 0.06f + 0.8f) * 8.f,
-                area.width * 0.12f,
-                1.0f,
-                0.10f * baseAlpha
-            );
-
-            ren.popClipRect();
-        }
-    }
-
     // Resolve selected-artwork colours only for the carousel ambience.
-    AmbientSwatch glowPrimary = r.currentGlowPrimary;
-    AmbientSwatch glowSecondary = r.currentGlowSecondary;
-    if (r.transitioning && r.nextAvailable) {
+    AmbientSwatch glowPrimary = energizeAmbient(r.currentGlowPrimary);
+    AmbientSwatch glowSecondary = energizeAmbient(r.currentGlowSecondary);
+    if (r.transitioning) {
         const float t = smoothStep01(r.fade);
-        glowPrimary = mixAmbient(r.currentGlowPrimary, r.nextGlowPrimary, t);
-        glowSecondary = mixAmbient(r.currentGlowSecondary, r.nextGlowSecondary, t);
-    } else if (!r.currentAvailable && r.nextAvailable) {
-        glowPrimary = r.nextGlowPrimary;
-        glowSecondary = r.nextGlowSecondary;
+        glowPrimary = energizeAmbient(
+            mixAmbient(r.currentGlowPrimary, r.nextGlowPrimary, t));
+        glowSecondary = energizeAmbient(
+            mixAmbient(r.currentGlowSecondary, r.nextGlowSecondary, t));
     }
 
-    // Reference layout requested for V10.27:
-    // violet / pink on the LEFT, blue / cyan on the RIGHT.
-    const AmbientSwatch conceptViolet{
-        glowSecondary.r * 0.36f + 0.64f * 0.66f,
-        glowSecondary.g * 0.36f + 0.64f * 0.30f,
-        glowSecondary.b * 0.36f + 0.64f * 0.98f
-    };
-    const AmbientSwatch conceptBlue{
-        glowPrimary.r * 0.38f + 0.62f * 0.20f,
-        glowPrimary.g * 0.38f + 0.62f * 0.62f,
-        glowPrimary.b * 0.38f + 0.62f * 1.00f
-    };
+    // V10.28: no forced violet/cyan recolouring. These are the actual accent
+    // swatches extracted from the selected custom background, or from the
+    // selected cover/icon when no custom background exists.
+    const AmbientSwatch glowLeft = glowSecondary;
+    const AmbientSwatch glowRight = glowPrimary;
 
     const float glowTime = std::chrono::duration<float>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -2461,19 +2452,19 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
                                 float strength) {
             ren.drawCircle(
                 {cx * hs, cy * hs},
-                184.f * hs,
+                244.f * hs,
                 nxui::Color(c.r, c.g, c.b, strength),
                 64
             );
             ren.drawCircle(
-                {(cx - 92.f) * hs, (cy + 10.f) * hs},
-                132.f * hs,
+                {(cx - 118.f) * hs, (cy + 12.f) * hs},
+                176.f * hs,
                 nxui::Color(c.r, c.g, c.b, strength * 0.62f),
                 60
             );
             ren.drawCircle(
-                {(cx + 88.f) * hs, (cy - 28.f) * hs},
-                126.f * hs,
+                {(cx + 112.f) * hs, (cy - 34.f) * hs},
+                158.f * hs,
                 nxui::Color(c.r, c.g, c.b, strength * 0.54f),
                 60
             );
@@ -2485,18 +2476,18 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         emitSoftMist(
             area.x + area.width * 0.445f + driftX,
             glowY,
-            conceptViolet,
-            0.30f * breathe * baseAlpha
+            glowLeft,
+            0.43f * breathe * baseAlpha
         );
         emitSoftMist(
             area.x + area.width * 0.555f - driftX * 0.45f,
             glowY - 4.f,
-            conceptBlue,
-            0.32f * breathe * baseAlpha
+            glowRight,
+            0.45f * breathe * baseAlpha
         );
 
         endHomeGlowTargetV102(ren);
-        ren.applyBlur(6.6f, 2);
+        ren.applyBlur(8.0f, 2);
 
         // Clip the additive composite to the background side of the black
         // separation. The lower band is drawn afterwards as a second safety
@@ -2511,7 +2502,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
             ren,
             0,
             {0.f, 0.f, (float)ren.width() * 2.f, (float)ren.height() * 2.f},
-            0.70f * baseAlpha
+            0.90f * baseAlpha
         );
         ren.popClipRect();
     }

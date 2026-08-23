@@ -608,6 +608,12 @@ void WiiUMenuApp::startEditGhost(GlossyIcon* sourceIcon) {
     ghost->setGameCardTexture(sourceIcon->gameCardTexture());
     ghost->setNotLaunchable(sourceIcon->isNotLaunchable());
     ghost->setCornerRadius(sourceIcon->cornerRadius());
+    // V10.28: restore the original move visual. A freshly-created GlossyIcon
+    // does not pass through IconGrid::setup(), so explicitly disable every
+    // Liquid Glass path here instead of allowing a giant glass tile ghost.
+    ghost->setLiquidGlassEnabled(false);
+    ghost->setLiquidGlassShaderEnabled(false);
+    ghost->setForceLiquidGlass(false);
     ghost->setBlurEnabled(false);
     ghost->setPanelOpacity(0.84f);
     ghost->setOpacity(0.84f);
@@ -687,6 +693,7 @@ void WiiUMenuApp::enterEditMode() {
     m_editHeldTitle = icon->title();
     startEditGhost(icon);
     bindEditActions(icon);
+    m_titlePill->setMoveMode(true);
     m_titlePill->setSelectedTitleId(0);
     m_titlePill->setText(nxui::I18n::instance().tr("game.move_prefix", "Move: ") + m_editHeldTitle);
     m_titlePill->setVisible(true);
@@ -701,6 +708,8 @@ void WiiUMenuApp::exitEditMode() {
 
     m_editMode = false;
     m_editMoved = false;
+    if (m_titlePill)
+        m_titlePill->setMoveMode(false);
     unbindEditActions();
     m_editSourceIndex = -1;
     m_editHeldTitle.clear();

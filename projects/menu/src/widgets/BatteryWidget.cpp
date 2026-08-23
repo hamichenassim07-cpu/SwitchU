@@ -173,8 +173,9 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     ren.drawRoundedRect({body.right() + 2.2f, body.y + 6.5f, 4.5f, 11.f},
                         edge.withAlpha(0.82f * op), 1.8f);
 
-    // V10.27: charge level and charge state are two independent signals.
-    // The fill colour always describes the real battery level.
+    // V10.28: fill WIDTH is always the real charge percentage. Colour only
+    // communicates state: green/yellow/red while unplugged, animated HOME
+    // pink-violet/cyan while charging. No lightning glyph and no hard blink.
     nxui::Color levelColor;
     if (level <= kBatteryCriticalLevel) {
         levelColor = nxui::Color(1.00f, 0.24f, 0.22f, 0.96f * op);
@@ -187,32 +188,49 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     nxui::Rect fill = body.shrunk(3.4f);
     fill.width *= level;
     if (fill.width > 0.5f) {
-        ren.drawRoundedRect(fill, levelColor,
-                            std::min(4.0f, fill.width * 0.5f));
-    }
+        if (!m_charging) {
+            ren.drawRoundedRect(fill, levelColor,
+                                std::min(4.0f, fill.width * 0.5f));
+        } else {
+            // Draw the animated gradient as inexpensive narrow strips. The
+            // phase moves continuously left-to-right and stays strictly in the
+            // pink/violet <-> blue/cyan family requested for charging.
+            const nxui::Color pink(1.00f, 0.18f, 0.70f, 0.96f * op);
+            const nxui::Color cyan(0.10f, 0.76f, 1.00f, 0.96f * op);
+            constexpr int kChargeSegments = 28;
+            constexpr float kTau = 6.2831853071795864769f;
+            const float phase = m_chargeAnim * 0.72f;
+            const float segmentW = fill.width / static_cast<float>(kChargeSegments);
 
-    if (m_charging) {
-        // Charging never replaces red/yellow/green with a fourth colour. The
-        // same level colour gently pulses around the battery, while a neutral
-        // lightning glyph makes the charging state explicit.
-        const float pulse = 0.5f + 0.5f * std::sin(m_chargeAnim * 4.8f);
-        ren.drawRoundedRectOutline(
-            body.expanded(1.2f),
-            levelColor.withAlpha((0.18f + 0.30f * pulse) * op),
-            6.6f,
-            1.45f
-        );
+            auto mixColor = [](const nxui::Color& a,
+                               const nxui::Color& b,
+                               float t) {
+                t = std::clamp(t, 0.f, 1.f);
+                return nxui::Color(
+                    a.r + (b.r - a.r) * t,
+                    a.g + (b.g - a.g) * t,
+                    a.b + (b.b - a.b) * t,
+                    a.a + (b.a - a.a) * t
+                );
+            };
 
-        const float cx = body.x + body.width * 0.5f;
-        const float cy = body.y + body.height * 0.5f;
-        const nxui::Color bolt =
-            nxui::Color(1.f, 1.f, 1.f, (0.70f + 0.20f * pulse) * op);
-        ren.drawLine({cx + 1.6f, cy - 7.0f},
-                     {cx - 2.0f, cy - 0.8f}, bolt, 2.0f);
-        ren.drawLine({cx - 2.0f, cy - 0.8f},
-                     {cx + 2.1f, cy - 0.8f}, bolt, 2.0f);
-        ren.drawLine({cx + 2.1f, cy - 0.8f},
-                     {cx - 1.8f, cy + 7.0f}, bolt, 2.0f);
+            for (int i = 0; i < kChargeSegments; ++i) {
+                const float local =
+                    (static_cast<float>(i) + 0.5f) /
+                    static_cast<float>(kChargeSegments);
+                const float wave = 0.5f + 0.5f *
+                    std::sin(kTau * local - phase);
+                const nxui::Color c = mixColor(pink, cyan, wave);
+                const float x0 = fill.x + segmentW * static_cast<float>(i);
+                const float x1 = (i == kChargeSegments - 1)
+                    ? fill.right()
+                    : fill.x + segmentW * static_cast<float>(i + 1) + 0.6f;
+                ren.drawRect(
+                    {x0, fill.y, std::max(0.f, x1 - x0), fill.height},
+                    c
+                );
+            }
+        }
     }
 
     if (m_font) {

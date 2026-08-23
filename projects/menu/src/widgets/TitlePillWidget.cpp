@@ -14,7 +14,7 @@ constexpr float kV9TitleScale = 1.42f;
 constexpr float kV9TitleMaxWidth = 900.f;
 
 constexpr float kActionsSeparatorY = 596.f;
-constexpr float kActionsSeparatorWidth = 364.f;
+constexpr float kActionsSeparatorWidth = 420.f;
 constexpr float kActionsSeparatorHeight = 2.4f;
 constexpr float kActionsRowY = 622.f;
 constexpr float kActionLabelScale = 0.83f;
@@ -22,11 +22,13 @@ constexpr float kActionGlyphScale = 0.97f;
 constexpr float kActionGap = 8.f;
 constexpr float kActionPairGap = 42.f;
 
-// V10.27: compact play-time row under A Lancer / Y Déplacer.
-constexpr float kPlayTimeY = 661.f;
-constexpr float kPlayTimeTextScale = 0.70f;
-constexpr float kPlayTimeClockRadius = 6.8f;
-constexpr float kPlayTimeGap = 8.f;
+// V10.28: play time and A/Lancer share one balanced line. Y is deliberately
+// absent from the permanent HOME and appears only while move mode is active.
+constexpr float kPlayTimeTextScale = 0.83f;
+constexpr float kPlayTimeClockRadius = 8.0f;
+constexpr float kPlayTimeGap = 9.f;
+constexpr float kPlayTimeCenterX = 525.f;
+constexpr float kLaunchCenterX = 755.f;
 
 std::string utf8CodepointTP(unsigned cp) {
     std::string out;
@@ -321,7 +323,6 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
     const float tx = cr.x + (cr.width - textSz.x) * 0.5f;
     const float ty = cr.y;
     const float reveal = std::clamp(m_textReveal.value(), 0.f, 1.f);
-    const float lift = (1.f - reveal) * 4.f;
 
     ren.pushClipRect(cr);
 
@@ -329,22 +330,22 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
     // heavier. Sub-pixel duplicate passes emulate a semibold face without
     // enlarging the text or changing the rest of the HOME typography.
     ren.drawText(m_text,
-                 {tx + 1.2f, ty + 1.6f + lift},
+                 {tx + 1.2f, ty + 1.6f},
                  m_font,
                  nxui::Color(0.f, 0.f, 0.f, 0.44f * m_opacity * reveal * launchAlpha),
                  scale);
     ren.drawText(m_text,
-                 {tx, ty + lift},
+                 {tx, ty},
                  m_font,
                  m_textColor.withAlpha(m_opacity * reveal * launchAlpha),
                  scale);
     ren.drawText(m_text,
-                 {tx + 0.48f, ty + lift},
+                 {tx + 0.48f, ty},
                  m_font,
                  m_textColor.withAlpha(0.62f * m_opacity * reveal * launchAlpha),
                  scale);
     ren.drawText(m_text,
-                 {tx - 0.38f, ty + lift},
+                 {tx - 0.38f, ty},
                  m_font,
                  m_textColor.withAlpha(0.42f * m_opacity * reveal * launchAlpha),
                  scale);
@@ -363,118 +364,110 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
         );
 
         auto& i18n = nxui::I18n::instance();
-        const std::string launch = i18n.tr("hint.launch", "Lancer");
-        const std::string move = i18n.tr("hint.move", "Déplacer");
-        const std::string aGlyph = utf8CodepointTP(0xE0E0);
-        const std::string yGlyph = utf8CodepointTP(0xE0E3);
         nxui::Font* glyphFont = m_iconFont ? m_iconFont : m_font;
+        const nxui::Color glyphColor(
+            0.98f, 1.f, 0.99f, 0.98f * m_opacity * launchAlpha);
+        const nxui::Color labelColor(
+            0.94f, 0.96f, 0.98f, 0.92f * m_opacity * launchAlpha);
 
-        const nxui::Vec2 launchBase = m_font->measure(launch);
-        const nxui::Vec2 moveBase = m_font->measure(move);
-        const nxui::Vec2 aBase = glyphFont->measure(aGlyph);
-        const nxui::Vec2 yBase = glyphFont->measure(yGlyph);
-
-        const float launchW = launchBase.x * kActionLabelScale;
-        const float moveW = moveBase.x * kActionLabelScale;
-        const float aW = aBase.x * kActionGlyphScale;
-        const float yW = yBase.x * kActionGlyphScale;
-        const float firstW = aW + kActionGap + launchW;
-        const float secondW = yW + kActionGap + moveW;
-        const float rowW = firstW + kActionPairGap + secondW;
-        float x = kV9TitleCenterX - rowW * 0.5f;
-
-        auto drawAction = [&](const std::string& glyph,
-                              const std::string& label,
-                              float glyphW,
-                              float labelW) {
+        auto drawActionCentered = [&](float centerX,
+                                      const std::string& glyph,
+                                      const std::string& label) {
             const nxui::Vec2 glyphBase = glyphFont->measure(glyph);
             const nxui::Vec2 labelBase = m_font->measure(label);
+            const float glyphW = glyphBase.x * kActionGlyphScale;
             const float glyphH = glyphBase.y * kActionGlyphScale;
+            const float labelW = labelBase.x * kActionLabelScale;
             const float labelH = labelBase.y * kActionLabelScale;
             const float rowH = std::max(glyphH, labelH);
+            const float groupW = glyphW + kActionGap + labelW;
+            const float x = centerX - groupW * 0.5f;
 
             ren.drawText(
                 glyph,
                 {x, kActionsRowY + launchYOffset + (rowH - glyphH) * 0.5f},
-                glyphFont,
-                nxui::Color(0.98f, 1.f, 0.99f, 0.98f * m_opacity * launchAlpha),
-                kActionGlyphScale
-            );
+                glyphFont, glyphColor, kActionGlyphScale);
             ren.drawText(
                 label,
                 {x + glyphW + kActionGap,
                  kActionsRowY + launchYOffset + (rowH - labelH) * 0.5f},
-                m_font,
-                nxui::Color(0.94f, 0.96f, 0.98f, 0.92f * m_opacity * launchAlpha),
-                kActionLabelScale
-            );
-            x += glyphW + kActionGap + labelW;
+                m_font, labelColor, kActionLabelScale);
         };
 
-        drawAction(aGlyph, launch, aW, launchW);
-        x += kActionPairGap;
-        drawAction(yGlyph, move, yW, moveW);
+        if (m_moveMode) {
+            // Context-only move hints. They replace the normal launch/play-time
+            // line while Y-move mode is active, never on the idle HOME.
+            const std::string place = i18n.tr("hint.place", "Placer");
+            const std::string cancel = i18n.tr("button.cancel", "Annuler");
+            const std::string yGlyph = utf8CodepointTP(0xE0E3);
+            const std::string bGlyph = utf8CodepointTP(0xE0E1);
+            drawActionCentered(565.f, yGlyph, place);
+            drawActionCentered(715.f, bGlyph, cancel);
+        } else {
+            const std::string launch = i18n.tr("hint.launch", "Lancer");
+            const std::string aGlyph = utf8CodepointTP(0xE0E0);
 
-        // V10.27: real Horizon play time, with no label and no colon. A small
-        // vector clock is used instead of an emoji so rendering is font-safe.
-        if (m_playTimeAvailable) {
-            char duration[48] = {};
-            const unsigned long long totalMinutes =
-                static_cast<unsigned long long>(m_playTimeMinutes);
-            if (m_playTimeMinutes < 60) {
-                std::snprintf(duration, sizeof(duration), "%llu min", totalMinutes);
-            } else {
-                const unsigned long long hours = totalMinutes / 60ULL;
-                const unsigned long long minutes = totalMinutes % 60ULL;
-                std::snprintf(duration, sizeof(duration),
-                              "%llu h %02llu min", hours, minutes);
-            }
+            if (m_playTimeAvailable) {
+                char duration[48] = {};
+                const unsigned long long totalMinutes =
+                    static_cast<unsigned long long>(m_playTimeMinutes);
+                if (m_playTimeMinutes < 60) {
+                    std::snprintf(duration, sizeof(duration), "%llu min", totalMinutes);
+                } else {
+                    const unsigned long long hours = totalMinutes / 60ULL;
+                    const unsigned long long minutes = totalMinutes % 60ULL;
+                    std::snprintf(duration, sizeof(duration),
+                                  "%llu h %02llu min", hours, minutes);
+                }
 
-            const nxui::Vec2 timeBase = m_font->measure(duration);
-            const float textW = timeBase.x * kPlayTimeTextScale;
-            const float clockDiameter = kPlayTimeClockRadius * 2.f;
-            const float groupW = clockDiameter + kPlayTimeGap + textW;
-            const float startX = kV9TitleCenterX - groupW * 0.5f;
-            const float cy = kPlayTimeY + launchYOffset + kPlayTimeClockRadius;
-            const nxui::Color timeColor(0.92f, 0.95f, 0.98f,
-                                        0.72f * m_opacity * launchAlpha);
-
-            const nxui::Vec2 clockCenter{
-                startX + kPlayTimeClockRadius,
-                cy
-            };
-            // drawCircle has no outline mode; approximate a clean clock ring
-            // with short line segments to keep the icon minimal.
-            constexpr int segments = 28;
-            nxui::Vec2 previous{
-                clockCenter.x + kPlayTimeClockRadius, clockCenter.y
-            };
-            for (int i = 1; i <= segments; ++i) {
-                const float a = 6.2831853071795864769f *
-                    (static_cast<float>(i) / static_cast<float>(segments));
-                const nxui::Vec2 current{
-                    clockCenter.x + std::cos(a) * kPlayTimeClockRadius,
-                    clockCenter.y + std::sin(a) * kPlayTimeClockRadius
+                const nxui::Vec2 timeBase = m_font->measure(duration);
+                const float textW = timeBase.x * kPlayTimeTextScale;
+                const float textH = timeBase.y * kPlayTimeTextScale;
+                const float clockDiameter = kPlayTimeClockRadius * 2.f;
+                const float groupW = clockDiameter + kPlayTimeGap + textW;
+                const float startX = kPlayTimeCenterX - groupW * 0.5f;
+                const float rowH = std::max(clockDiameter, textH);
+                const float rowTop = kActionsRowY + launchYOffset;
+                const float cy = rowTop + rowH * 0.5f;
+                const nxui::Color timeColor(
+                    0.94f, 0.97f, 1.00f,
+                    0.90f * m_opacity * launchAlpha);
+                const nxui::Vec2 clockCenter{
+                    startX + kPlayTimeClockRadius, cy
                 };
-                ren.drawLine(previous, current, timeColor, 1.35f);
-                previous = current;
-            }
-            ren.drawLine(clockCenter,
-                         {clockCenter.x, clockCenter.y - 3.7f},
-                         timeColor, 1.45f);
-            ren.drawLine(clockCenter,
-                         {clockCenter.x + 3.0f, clockCenter.y + 1.8f},
-                         timeColor, 1.45f);
 
-            const float textH = timeBase.y * kPlayTimeTextScale;
-            ren.drawText(
-                duration,
-                {startX + clockDiameter + kPlayTimeGap,
-                 cy - textH * 0.5f},
-                m_font,
-                timeColor,
-                kPlayTimeTextScale
-            );
+                constexpr int segments = 30;
+                nxui::Vec2 previous{
+                    clockCenter.x + kPlayTimeClockRadius, clockCenter.y
+                };
+                for (int i = 1; i <= segments; ++i) {
+                    const float a = 6.2831853071795864769f *
+                        (static_cast<float>(i) / static_cast<float>(segments));
+                    const nxui::Vec2 current{
+                        clockCenter.x + std::cos(a) * kPlayTimeClockRadius,
+                        clockCenter.y + std::sin(a) * kPlayTimeClockRadius
+                    };
+                    ren.drawLine(previous, current, timeColor, 1.45f);
+                    previous = current;
+                }
+                ren.drawLine(clockCenter,
+                             {clockCenter.x, clockCenter.y - 4.3f},
+                             timeColor, 1.55f);
+                ren.drawLine(clockCenter,
+                             {clockCenter.x + 3.5f, clockCenter.y + 2.1f},
+                             timeColor, 1.55f);
+                ren.drawText(
+                    duration,
+                    {startX + clockDiameter + kPlayTimeGap,
+                     cy - textH * 0.5f},
+                    m_font, timeColor, kPlayTimeTextScale);
+
+                drawActionCentered(kLaunchCenterX, aGlyph, launch);
+            } else {
+                // No simulated play time: keep the only available action
+                // visually centred instead of leaving an empty left slot.
+                drawActionCentered(kV9TitleCenterX, aGlyph, launch);
+            }
         }
     }
 }

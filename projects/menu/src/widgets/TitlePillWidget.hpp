@@ -19,6 +19,8 @@ public:
     void setSelectedTitleId(std::uint64_t titleId);
     void setGameActionsVisible(bool visible);
     bool gameActionsVisible() const { return m_showGameActions; }
+    void setMoveMode(bool active) { m_moveMode = active; }
+    bool moveMode() const { return m_moveMode; }
 
     // V10.6 profile mode. The implementation below reuses the exact
     // TitlePillWidget behaviour from Switch U master for profile focus.
@@ -45,6 +47,7 @@ private:
     bool m_layoutInitialized = false;
     bool m_hideOnCollapse = false;
     bool m_showGameActions = false;
+    bool m_moveMode = false;
     bool m_profileOriginalMode = false;
     std::uint64_t m_selectedTitleId = 0;
     std::uint64_t m_playTimeMinutes = 0;
