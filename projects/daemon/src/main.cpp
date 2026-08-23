@@ -238,6 +238,7 @@ enum class ActionType : uint32_t {
     OpenMiiEditor,
     OpenControllers,
     OpenNetConnect,
+    OpenSystemSettings,
     OpenUserPage,
 };
 
@@ -1045,6 +1046,16 @@ static void handleMenuCommand() {
         switchu::FileLog::log("[smi] queued NetConnect launch (actions=%zu)", g_actionQueue.size());
         break;
 
+    case smi::SystemMessage::LaunchSystemSettings:
+        {
+            Action action{};
+            action.type = ActionType::OpenSystemSettings;
+            g_actionQueue.push_back(action);
+        }
+        switchu::FileLog::log("[smi] V10.29 queued Nintendo System Settings test (actions=%zu)",
+                              g_actionQueue.size());
+        break;
+
     case smi::SystemMessage::LaunchUserPage: {
         auto args = reader.pop<smi::UserArgs>();
         Action action{};
@@ -1194,6 +1205,29 @@ static bool handleAction(Action& action) {
             if (R_FAILED(rc))
                 switchu::FileLog::log("[action] NetConnect FAIL: 0x%X", rc);
             switchu::FileLog::log("[action] relaunching menu after NetConnect");
+            daemon::menu_la::launch(smi::MenuStartMode::MainMenu, buildSystemStatus());
+            return true;
+        }
+
+        case ActionType::OpenSystemSettings: {
+            // V10.29 corrective: this is intentionally a REAL Horizon attempt,
+            // not a simulated button. libnx documents AppletId 0x16 as
+            // LibraryAppletSet (010000000000100E). It is normally absent on
+            // retail firmware, so the exact Result is logged for validation.
+            // If a firmware/environment exposes it, the official Nintendo UI
+            // is started here and SwitchU returns when the applet closes.
+            switchu::FileLog::log("[settings-test] attempting AppletId_LibraryAppletSet (0x16)");
+            Result rc = launchLibraryApplet(AppletId_LibraryAppletSet,
+                                            "NintendoSystemSettings");
+            if (R_FAILED(rc)) {
+                switchu::FileLog::log(
+                    "[settings-test] LibraryAppletSet unavailable/failed rc=0x%X", rc);
+                switchu::FileLog::log(
+                    "[settings-test] stock-qlaunch handoff required if retail firmware lacks applet 0x16");
+            } else {
+                switchu::FileLog::log("[settings-test] Nintendo System Settings applet closed normally");
+            }
+            switchu::FileLog::log("[settings-test] relaunching SwitchU menu");
             daemon::menu_la::launch(smi::MenuStartMode::MainMenu, buildSystemStatus());
             return true;
         }

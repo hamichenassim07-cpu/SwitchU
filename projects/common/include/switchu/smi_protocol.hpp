@@ -35,6 +35,11 @@ enum class SystemMessage : uint32_t {
     LaunchControllers     = 12,
     LaunchNetConnect      = 13,
     LaunchUserPage        = 14,
+    // V10.29: explicit experimental path to Nintendo's Settings applet.
+    // Retail units normally do not ship LibraryAppletSet; keeping this as a
+    // real daemon command lets us validate the exact Horizon result on-console
+    // instead of silently omitting the requested feature.
+    LaunchSystemSettings  = 15,
 
     EnterSleep            = 20,
     Shutdown              = 21,

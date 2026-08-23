@@ -1703,6 +1703,22 @@ void WiiUMenuApp::wireGlobalActions() {
         openSuspendedCartridgeCustomizer();
     });
 
+#ifdef SWITCHU_MENU
+    // V10.29 temporary but real Nintendo Settings entry point. The normal
+    // Settings button continues to open SwitchU settings; pressing PLUS while
+    // that panel is active sends a dedicated daemon command that performs the
+    // Horizon applet launch attempt.
+    if (m_settings) {
+        m_settings->addAction(static_cast<uint64_t>(nxui::Button::Plus), [this]() {
+            if (!m_settings || !m_settings->isActive())
+                return;
+            DebugLog::log("[settings-test] PLUS pressed inside SwitchU settings");
+            m_audio.playSfx(Sfx::Activate);
+            m_launcher.launchSystemSettings();
+        });
+    }
+#endif
+
     root.addAction(static_cast<uint64_t>(nxui::Button::ZL), [this]() {
         int p = m_grid->currentPage() - 1;
         if (p >= 0 && !m_grid->isTransitioning()) {

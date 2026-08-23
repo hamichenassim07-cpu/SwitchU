@@ -27,8 +27,8 @@ constexpr float kActionPairGap = 42.f;
 constexpr float kPlayTimeTextScale = 0.83f;
 constexpr float kPlayTimeClockRadius = 8.0f;
 constexpr float kPlayTimeGap = 9.f;
-constexpr float kPlayTimeCenterX = 525.f;
-constexpr float kLaunchCenterX = 755.f;
+constexpr float kPlayTimeCenterX = 570.f;
+constexpr float kLaunchCenterX = 710.f;
 
 std::string utf8CodepointTP(unsigned cp) {
     std::string out;
@@ -436,26 +436,21 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
                     startX + kPlayTimeClockRadius, cy
                 };
 
-                constexpr int segments = 30;
-                nxui::Vec2 previous{
-                    clockCenter.x + kPlayTimeClockRadius, clockCenter.y
-                };
-                for (int i = 1; i <= segments; ++i) {
-                    const float a = 6.2831853071795864769f *
-                        (static_cast<float>(i) / static_cast<float>(segments));
-                    const nxui::Vec2 current{
-                        clockCenter.x + std::cos(a) * kPlayTimeClockRadius,
-                        clockCenter.y + std::sin(a) * kPlayTimeClockRadius
-                    };
-                    ren.drawLine(previous, current, timeColor, 1.45f);
-                    previous = current;
-                }
+                // V10.29: no suitable clock glyph is assumed from the Switch
+                // button font. Draw a tiny native clock instead: solid white
+                // face with black hands, matching the requested icon language.
+                const nxui::Color clockFace(
+                    1.f, 1.f, 1.f, 0.98f * m_opacity * launchAlpha);
+                const nxui::Color clockHands(
+                    0.02f, 0.02f, 0.025f, 0.98f * m_opacity * launchAlpha);
+                ren.drawCircle(clockCenter, kPlayTimeClockRadius, clockFace, 30);
                 ren.drawLine(clockCenter,
-                             {clockCenter.x, clockCenter.y - 4.3f},
-                             timeColor, 1.55f);
+                             {clockCenter.x, clockCenter.y - 4.4f},
+                             clockHands, 1.55f);
                 ren.drawLine(clockCenter,
-                             {clockCenter.x + 3.5f, clockCenter.y + 2.1f},
-                             timeColor, 1.55f);
+                             {clockCenter.x + 3.6f, clockCenter.y + 2.2f},
+                             clockHands, 1.55f);
+                ren.drawCircle(clockCenter, 1.05f, clockHands, 12);
                 ren.drawText(
                     duration,
                     {startX + clockDiameter + kPlayTimeGap,

@@ -10,7 +10,6 @@
 
 namespace switchu::menu::smi_cmd {
 
-
 static Result pushOutStorage(const void* data, size_t size) {
     AppletStorage stor{};
     Result rc = appletCreateStorage(&stor, static_cast<s64>(size));
@@ -76,11 +75,15 @@ inline Result terminateApplication() {
     return sendSimple(smi::SystemMessage::TerminateApplication);
 }
 
+inline Result launchSystemSettings() {
+    return sendSimple(smi::SystemMessage::LaunchSystemSettings);
+}
+
 inline Result enterSleep()  { return sendSimple(smi::SystemMessage::EnterSleep); }
 inline Result shutdown()    { return sendSimple(smi::SystemMessage::Shutdown); }
 inline Result reboot()      { return sendSimple(smi::SystemMessage::Reboot); }
-inline Result menuReady()      { return sendSimple(smi::SystemMessage::MenuReady); }
-inline Result menuClosing()    { return sendSimple(smi::SystemMessage::MenuClosing); }
+inline Result menuReady()   { return sendSimple(smi::SystemMessage::MenuReady); }
+inline Result menuClosing() { return sendSimple(smi::SystemMessage::MenuClosing); }
 
 struct AppEntry {
     uint64_t titleId;
@@ -136,7 +139,6 @@ inline Result getAppList(std::vector<AppEntry>& outList, bool waitForDaemon = tr
 
     return 0;
 }
-
 
 inline Result getSystemStatus(smi::SystemStatus& out) {
     Result rc = sendSimple(smi::SystemMessage::GetSystemStatus);

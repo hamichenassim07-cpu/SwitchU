@@ -20,6 +20,7 @@ public:
     void launchMiiEditor();
     void launchControllerPairing();
     void launchNetConnect();
+    void launchSystemSettings();
     void launchUserPage(AccountUid uid);
     void enterSleep();
     void shutdown();

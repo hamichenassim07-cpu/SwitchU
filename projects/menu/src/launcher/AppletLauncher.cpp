@@ -100,6 +100,18 @@ void AppletLauncher::launchNetConnect() {
     }
 }
 
+void AppletLauncher::launchSystemSettings() {
+    DebugLog::log("[launcher] V10.29 requesting Nintendo System Settings via daemon");
+    Result rc = switchu::menu::smi_cmd::launchSystemSettings();
+    DebugLog::log("[launcher] Nintendo System Settings command rc=0x%X", rc);
+    if (R_SUCCEEDED(rc)) {
+        if (m_cb.playSfxModalHide) m_cb.playSfxModalHide();
+        // The daemon must own the actual applet creation attempt. Closing the
+        // external HOME menu releases the foreground LibraryApplet slot first.
+        if (m_cb.requestExit) m_cb.requestExit();
+    }
+}
+
 void AppletLauncher::launchUserPage(AccountUid uid) {
     DebugLog::log("[launcher] requesting User Page launch via daemon");
     Result rc = switchu::menu::smi_cmd::launchUserPage(uid);
@@ -186,6 +198,7 @@ void AppletLauncher::launchAlbum() {}
 void AppletLauncher::launchMiiEditor() {}
 void AppletLauncher::launchControllerPairing() {}
 void AppletLauncher::launchNetConnect() {}
+void AppletLauncher::launchSystemSettings() {}
 void AppletLauncher::launchUserPage(AccountUid) {}
 void AppletLauncher::enterSleep() {}
 void AppletLauncher::shutdown() {}
