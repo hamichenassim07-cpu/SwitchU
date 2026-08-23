@@ -284,6 +284,11 @@ private:
     int  m_touchHitIndex     = -1;
     bool m_touchOnFocused    = false;
 
+    // V10.30 FIX2: compatibility-only state for the legacy reset still present
+    // in WiiUMenuApp::showLockScreen(). Touch reordering remains disabled:
+    // this flag is never armed by the V10.30 interaction path.
+    bool m_touchEditDragActive = false;
+
     // Scroll tactile de la rangée d'applications.
     bool  m_touchStartedInGrid = false;
     bool  m_touchScrollActive = false;
