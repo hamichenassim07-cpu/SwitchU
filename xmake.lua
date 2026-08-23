@@ -257,7 +257,6 @@ target("switchu-daemon")
     add_includedirs("projects/common/include", {public = false})
     add_includedirs("lib/Atmosphere-libs/libstratosphere/include")
     add_includedirs("lib/Atmosphere-libs/libvapours/include")
-
     add_defines(
         "ATMOSPHERE",
         "ATMOSPHERE_IS_STRATOSPHERE",
@@ -265,13 +264,21 @@ target("switchu-daemon")
         "ATMOSPHERE_BOARD_NINTENDO_NX",
         "ATMOSPHERE_ARCH_ARM64",
         "ATMOSPHERE_ARCH_ARM_V8A",
-        "_GNU_SOURCE"
+        "_GNU_SOURCE",
+        "SWITCHU_MUSIC_DAEMON_SDL_LINK_FIX4"
     )
     add_cxxflags("-fno-rtti", "-fexceptions", "-std=gnu++23", {force = true})
-    add_packages("zlib")
+
+    -- SwitchU Music V0.01: the persistent daemon owns audio playback.
+    -- IMPORTANT: use the same xmake package mechanism as the main SwitchU
+    -- target. libsdl_mixer brings its codec dependencies transitively and
+    -- libsdl provides the Switch SDL2 link flags. This is intentionally kept
+    -- package-driven instead of hard-coding every static codec library.
+    add_packages("zlib", "libsdl", "libsdl_mixer")
+
     add_linkdirs("lib/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release")
     add_links("stratosphere")
-    add_syslinks("nx")
+    add_syslinks("m", "nx")
 
     if is_mode("release") then
         add_cxflags("-O3", "-flto=auto", "-ffast-math", {force = true})
