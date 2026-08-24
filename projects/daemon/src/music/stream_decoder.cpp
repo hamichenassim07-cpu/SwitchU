@@ -35,55 +35,96 @@ std::string lowerExtension(const std::string& path) {
 class Mpg123Decoder final : public StreamDecoder {
 public:
     explicit Mpg123Decoder(const std::string& path) {
-        switchu::FileLog::log("[music-decoder] mpg123 ctor begin path=%s", path.c_str());
+        // FIX6: Keep the libmpg123 handle local until the whole compressed
+        // stream setup has succeeded. FIX5 hardware logs showed m_handle
+        // becoming null between getformat() and the old format_none()/format()
+        // sequence. Committing the handle only at the end prevents a partially
+        // constructed decoder from exposing a damaged member state.
+        const std::string stablePath = path;
+        switchu::FileLog::log("[music-decoder] mpg123 FIX6 ctor begin path=%s", stablePath.c_str());
         if (!ensureMpg123Initialized()) {
             m_failed = true;
             m_error = "mpg123_init failed";
             return;
         }
+
         int err = MPG123_OK;
-        switchu::FileLog::log("[music-decoder] mpg123_new begin");
-        m_handle = mpg123_new(nullptr, &err);
-        switchu::FileLog::log("[music-decoder] mpg123_new done handle=%p err=%d", static_cast<void*>(m_handle), err);
-        if (!m_handle) {
+        mpg123_handle* handle = nullptr;
+
+        auto failCtor = [&](const char* where, int rc) {
             m_failed = true;
-            m_error = "mpg123_new: " + std::string(mpg123_plain_strerror(err));
+            const char* detail = mpg123_plain_strerror(rc);
+            m_error = std::string(where) + ": " + (detail ? detail : "unknown");
+            switchu::FileLog::log("[music-decoder] mpg123 FIX6 ctor FAIL where=%s rc=%d detail=%s handle=%p",
+                                  where, rc, detail ? detail : "unknown", static_cast<void*>(handle));
+            if (handle) {
+                mpg123_delete(handle); // delete() also closes an opened source.
+                handle = nullptr;
+            }
+        };
+
+        switchu::FileLog::log("[music-decoder] mpg123_new begin");
+        handle = mpg123_new(nullptr, &err);
+        switchu::FileLog::log("[music-decoder] mpg123_new done local=%p err=%d", static_cast<void*>(handle), err);
+        if (!handle) {
+            failCtor("mpg123_new", err);
             return;
         }
 
-        switchu::FileLog::log("[music-decoder] mpg123_open begin handle=%p", static_cast<void*>(m_handle));
-        if (mpg123_open(m_handle, path.c_str()) != MPG123_OK) {
-            fail("mpg123_open");
+        // devkitPro currently ships switch-mpg123 1.31.3. Older libmpg123
+        // releases are vulnerable to the 'Frankenstein stream' format-change
+        // corruption fixed upstream in 1.32.8. The daemon only needs raw audio
+        // (metadata is parsed by SwitchU's library), so disable ID3v2 parsing
+        // and explicitly reject changing/concatenated MPEG stream formats.
+        const long safeFlags = static_cast<long>(MPG123_NO_FRANKENSTEIN) |
+                               static_cast<long>(MPG123_SKIP_ID3V2);
+        const int flagRc = mpg123_param(handle, MPG123_ADD_FLAGS, safeFlags, 0.0);
+        switchu::FileLog::log("[music-decoder] mpg123 FIX6 flags rc=%d flags=0x%lX local=%p",
+                              flagRc, safeFlags, static_cast<void*>(handle));
+        if (flagRc != MPG123_OK) {
+            failCtor("mpg123_param", flagRc);
             return;
         }
-        switchu::FileLog::log("[music-decoder] mpg123_open done handle=%p", static_cast<void*>(m_handle));
+
+        // Use libmpg123's dedicated fixed-output path instead of configuring
+        // format_none()/format() after the stream has already been parsed.
+        // SwitchU's AudioOut is stereo signed-16; mono MP3s are duplicated by
+        // libmpg123. The source sample rate remains native and is resampled by
+        // SwitchU's own PcmResampler.
+        switchu::FileLog::log("[music-decoder] mpg123_open_fixed begin local=%p path=%s",
+                              static_cast<void*>(handle), stablePath.c_str());
+        const int openRc = mpg123_open_fixed(handle, stablePath.c_str(),
+                                             MPG123_STEREO, MPG123_ENC_SIGNED_16);
+        switchu::FileLog::log("[music-decoder] mpg123_open_fixed done rc=%d local=%p",
+                              openRc, static_cast<void*>(handle));
+        if (openRc != MPG123_OK) {
+            failCtor("mpg123_open_fixed", openRc);
+            return;
+        }
 
         long rate = 0;
         int channels = 0;
         int encoding = 0;
-        switchu::FileLog::log("[music-decoder] mpg123_getformat begin handle=%p", static_cast<void*>(m_handle));
-        if (mpg123_getformat(m_handle, &rate, &channels, &encoding) != MPG123_OK ||
-            rate <= 0 || channels <= 0) {
-            fail("mpg123_getformat");
+        switchu::FileLog::log("[music-decoder] mpg123_getformat begin local=%p", static_cast<void*>(handle));
+        const int formatRc = mpg123_getformat(handle, &rate, &channels, &encoding);
+        switchu::FileLog::log(
+            "[music-decoder] mpg123_getformat done rc=%d local=%p rate=%ld ch=%d enc=0x%X",
+            formatRc, static_cast<void*>(handle), rate, channels, static_cast<unsigned int>(encoding));
+        if (formatRc != MPG123_OK || rate <= 0 || channels != 2 ||
+            encoding != MPG123_ENC_SIGNED_16) {
+            failCtor("mpg123_getformat/fixed-format", formatRc != MPG123_OK ? formatRc : MPG123_BAD_OUTFORMAT);
             return;
         }
-        switchu::FileLog::log("[music-decoder] mpg123_getformat done rate=%ld ch=%d enc=0x%X", rate, channels, encoding);
 
-        // Lock the decoder to signed 16-bit PCM at its native sample rate and
-        // channel count. SwitchU performs channel conversion/resampling itself.
-        switchu::FileLog::log("[music-decoder] mpg123_format_none begin handle=%p", static_cast<void*>(m_handle));
-        mpg123_format_none(m_handle);
-        switchu::FileLog::log("[music-decoder] mpg123_format_none done handle=%p", static_cast<void*>(m_handle));
-        switchu::FileLog::log("[music-decoder] mpg123_format begin rate=%ld ch=%d", rate, channels);
-        if (mpg123_format(m_handle, rate, channels, MPG123_ENC_SIGNED_16) != MPG123_OK) {
-            fail("mpg123_format");
-            return;
-        }
-        switchu::FileLog::log("[music-decoder] mpg123_format done handle=%p", static_cast<void*>(m_handle));
-
+        // Commit only after every setup call succeeded. There is intentionally
+        // no mpg123_format_none()/mpg123_format() call after this point.
+        m_handle = handle;
+        handle = nullptr;
         m_rate = static_cast<int>(rate);
         m_channels = channels;
-        switchu::FileLog::log("[music-decoder] mpg123 ctor ready handle=%p rate=%d ch=%d", static_cast<void*>(m_handle), m_rate, m_channels);
+        switchu::FileLog::log(
+            "[music-decoder] mpg123 FIX6 ctor ready member=%p rate=%d ch=%d",
+            static_cast<void*>(m_handle), m_rate, m_channels);
     }
 
     ~Mpg123Decoder() override {
@@ -92,11 +133,12 @@ public:
             mpg123_close(m_handle);
             switchu::FileLog::log("[music-decoder] mpg123 dtor close done handle=%p", static_cast<void*>(m_handle));
             mpg123_delete(m_handle);
+            m_handle = nullptr;
             switchu::FileLog::log("[music-decoder] mpg123 dtor delete done");
         }
     }
 
-    bool valid() const { return m_handle && !m_failed && m_rate > 0 && m_channels > 0; }
+    bool valid() const { return m_handle && !m_failed && m_rate > 0 && m_channels == 2; }
 
     int sampleRate() const override { return m_rate; }
     int channels() const override { return m_channels; }
@@ -105,14 +147,20 @@ public:
         if (!valid() || !out || frames == 0 || m_eof) return 0;
         const std::size_t bytesWanted = frames * static_cast<std::size_t>(m_channels) * sizeof(std::int16_t);
         std::size_t bytesDone = 0;
-        const int rc = mpg123_read(m_handle,
+        mpg123_handle* const handle = m_handle;
+        const int rc = mpg123_read(handle,
                                    reinterpret_cast<unsigned char*>(out),
                                    bytesWanted,
                                    &bytesDone);
         if (rc == MPG123_DONE) {
             m_eof = true;
-        } else if (rc != MPG123_OK && rc != MPG123_NEW_FORMAT) {
-            fail("mpg123_read");
+        } else if (rc == MPG123_NEW_FORMAT) {
+            // open_fixed()+NO_FRANKENSTEIN promises one stable output format.
+            // Do not attempt a late renegotiation on the vulnerable 1.31.x
+            // backend; fail cleanly instead of risking heap corruption.
+            failCode("mpg123_read unexpected format change", rc);
+        } else if (rc != MPG123_OK) {
+            failCode("mpg123_read", rc);
         }
         return bytesDone / (static_cast<std::size_t>(m_channels) * sizeof(std::int16_t));
     }
@@ -121,7 +169,8 @@ public:
         if (!valid()) return false;
         const off_t frame = static_cast<off_t>((positionMs * static_cast<std::uint64_t>(m_rate)) / 1000ULL);
         if (mpg123_seek(m_handle, frame, SEEK_SET) < 0) {
-            fail("mpg123_seek");
+            m_failed = true;
+            m_error = "mpg123_seek failed";
             return false;
         }
         m_eof = false;
@@ -133,9 +182,9 @@ public:
     const std::string& error() const override { return m_error; }
 
 private:
-    void fail(const char* where) {
+    void failCode(const char* where, int rc) {
         m_failed = true;
-        const char* detail = m_handle ? mpg123_strerror(m_handle) : "unknown";
+        const char* detail = mpg123_plain_strerror(rc);
         m_error = std::string(where) + ": " + (detail ? detail : "unknown");
     }
 

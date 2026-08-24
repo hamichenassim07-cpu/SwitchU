@@ -354,7 +354,12 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
     if (index < 0 || index >= static_cast<int>(m_queue.size())) return false;
     if (!ensureAudioLocked()) return false;
 
-    const auto& entry = m_queue[static_cast<size_t>(index)];
+    // FIX6: Snapshot the target queue entry before touching the old mpg123
+    // decoder. Hardware traces showed an impossible transient extension (.mp
+    // instead of .mp3) after a decoder boundary. Keeping an independent copy
+    // prevents this switch operation from depending on vector/string storage
+    // that could be damaged by a faulty third-party decoder lifecycle.
+    const QueueEntry entry = m_queue[static_cast<size_t>(index)];
     persistentMusicTrace("PCM_SWITCH enter from=%d to=%d id=%016lX session=%d queued=%u",
                          m_currentIndex, index, static_cast<unsigned long>(entry.trackId),
                          m_sessionActive ? 1 : 0,
