@@ -363,26 +363,59 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
                           m_currentIndex, index, static_cast<unsigned long>(entry.trackId),
                           entry.path.c_str());
 
-    // Open/prepare the new decoder BEFORE touching the old source or its queued
-    // PCM. This is the crucial difference from Mix_Music: file parsing has no
-    // ownership relationship with the live AudioOut device, so the current
-    // song can continue while the next source is prepared.
-    std::unique_ptr<StreamDecoder> nextDecoder;
-    if (m_preloadedIndex == index && m_preloadedDecoder) {
-        nextDecoder = std::move(m_preloadedDecoder);
+    // FIX5: never keep two compressed-audio decoders alive at the same time.
+    //
+    // The Atmosphere crash report for PCM Engine V1 points into libmpg123, and
+    // every observed crash happened while opening decoder B with decoder A still
+    // alive. The queued PCM already belongs to SDL/Horizon AudioOut, not to the
+    // decoder, so it can continue playing for ~250 ms while A is destroyed and B
+    // is opened. This gives us a strict single-decoder boundary without closing
+    // the audio device and without introducing the large FIX3 silence.
+    //
+    // Preloaded decoders are explicitly discarded here as an additional guard.
+    // FIX5 never creates them while a live decoder exists.
+    if (m_preloadedDecoder) {
+        persistentMusicTrace("PCM_SWITCH boundary discard-preload index=%d", m_preloadedIndex);
+        m_preloadedDecoder.reset();
         m_preloadedIndex = -1;
-        persistentMusicTrace("PCM_SWITCH using preload to=%d", index);
-    } else {
-        std::string decoderError;
-        nextDecoder = openStreamDecoder(entry.path, decoderError);
-        if (!nextDecoder) {
-            m_lastError = 0x2004;
-            switchu::FileLog::log("[music] decoder open FAIL path=%s error=%s",
-                                  entry.path.c_str(), decoderError.c_str());
-            persistentMusicTrace("PCM_SWITCH open FAIL to=%d error=%s", index, decoderError.c_str());
-            return false; // old track is untouched and keeps playing
-        }
     }
+
+    if (m_decoder) {
+        persistentMusicTrace("PCM_SWITCH boundary destroy-old begin from=%d queued=%u",
+                             m_currentIndex,
+                             m_audioDevice ? SDL_GetQueuedAudioSize(m_audioDevice) : 0);
+        m_decoder.reset();
+        m_resampler.reset();
+        m_sourceEof = false;
+        persistentMusicTrace("PCM_SWITCH boundary destroy-old done from=%d queued=%u",
+                             m_currentIndex,
+                             m_audioDevice ? SDL_GetQueuedAudioSize(m_audioDevice) : 0);
+    }
+
+    std::string decoderError;
+    persistentMusicTrace("PCM_SWITCH decoder-open begin to=%d", index);
+    std::unique_ptr<StreamDecoder> nextDecoder = openStreamDecoder(entry.path, decoderError);
+    if (!nextDecoder) {
+        m_lastError = 0x2004;
+        switchu::FileLog::log("[music] decoder open FAIL path=%s error=%s",
+                              entry.path.c_str(), decoderError.c_str());
+        persistentMusicTrace("PCM_SWITCH decoder-open FAIL to=%d error=%s", index, decoderError.c_str());
+
+        // Decoder A is already gone, so do not leave a ghost active session.
+        if (m_audioDevice) {
+            SDL_PauseAudioDevice(m_audioDevice, 1);
+            SDL_ClearQueuedAudio(m_audioDevice);
+        }
+        m_playing = false;
+        m_paused = false;
+        m_sessionActive = false;
+        m_playStartTick = 0;
+        writeSessionFlagLocked(false);
+        persistLocked(true);
+        return false;
+    }
+    persistentMusicTrace("PCM_SWITCH decoder-open done to=%d src=%d/%d",
+                         index, nextDecoder->sampleRate(), nextDecoder->channels());
 
     const int sourceRate = nextDecoder->sampleRate();
     const int sourceChannels = nextDecoder->channels();
@@ -470,30 +503,41 @@ void MusicService::pause() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (!m_sessionActive || !m_decoder || m_paused) return;
     m_positionBaseMs = currentPositionMsLocked();
+    persistentMusicTrace("PAUSE enter index=%d pos=%lums queued=%u",
+                         m_currentIndex, static_cast<unsigned long>(m_positionBaseMs),
+                         m_audioDevice ? SDL_GetQueuedAudioSize(m_audioDevice) : 0);
     if (m_audioDevice) SDL_PauseAudioDevice(m_audioDevice, 1);
+    persistentMusicTrace("PAUSE device-paused index=%d", m_currentIndex);
     m_playing = false;
     m_paused = true;
     m_playStartTick = 0;
     persistLocked(true);
-    persistentMusicTrace("PAUSE index=%d pos=%lums", m_currentIndex,
+    persistentMusicTrace("PAUSE done index=%d pos=%lums", m_currentIndex,
                          static_cast<unsigned long>(m_positionBaseMs));
 }
 
 void MusicService::resume() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (!m_sessionActive) return;
+    persistentMusicTrace("RESUME enter index=%d pos=%lums decoder=%d queued=%u",
+                         m_currentIndex, static_cast<unsigned long>(m_positionBaseMs),
+                         m_decoder ? 1 : 0,
+                         m_audioDevice ? SDL_GetQueuedAudioSize(m_audioDevice) : 0);
     if (!m_decoder) {
         loadTrackLocked(m_currentIndex, true, m_positionBaseMs);
         return;
     }
     if (!m_paused && m_playing) return;
     pumpAudioLocked(kStartFrames * kBytesPerOutputFrame);
+    persistentMusicTrace("RESUME primed index=%d queued=%u", m_currentIndex,
+                         m_audioDevice ? SDL_GetQueuedAudioSize(m_audioDevice) : 0);
     if (m_audioDevice) SDL_PauseAudioDevice(m_audioDevice, 0);
+    persistentMusicTrace("RESUME device-running index=%d", m_currentIndex);
     m_paused = false;
     m_playing = true;
     m_playStartTick = nowTick();
     persistLocked(true);
-    persistentMusicTrace("RESUME index=%d pos=%lums", m_currentIndex,
+    persistentMusicTrace("RESUME done index=%d pos=%lums", m_currentIndex,
                          static_cast<unsigned long>(m_positionBaseMs));
 }
 
@@ -674,24 +718,11 @@ void MusicService::updateNextSoonLocked() {
     const uint64_t position = currentPositionMsLocked();
     m_nextSoon = duration > position && (duration - position) <= kNextSoonThresholdMs;
 
-    // Pre-open only deterministic sequential next tracks. The live decoder and
-    // AudioOut queue continue untouched while this happens. At natural EOF the
-    // actual handoff then only needs a PCM swap + tiny priming buffer.
-    if (m_nextSoon && !m_shuffle && m_repeat != switchu::music::RepeatMode::Track &&
-        !m_preloadedDecoder) {
-        const int target = nextIndexLocked(true);
-        if (target >= 0 && target < static_cast<int>(m_queue.size()) && target != m_currentIndex) {
-            std::string error;
-            auto prepared = openStreamDecoder(m_queue[static_cast<size_t>(target)].path, error);
-            if (prepared) {
-                m_preloadedIndex = target;
-                m_preloadedDecoder = std::move(prepared);
-                persistentMusicTrace("PRELOAD ready current=%d next=%d", m_currentIndex, target);
-            } else {
-                persistentMusicTrace("PRELOAD fail target=%d error=%s", target, error.c_str());
-            }
-        }
-    }
+    // FIX5 deliberately does not pre-open a second compressed decoder here.
+    // PCM Engine V1 proved that the output queue itself is stable, while the
+    // crash happens at the second decoder-open boundary. We keep the NextSoon
+    // status bit for the UI, but decoder preloading stays disabled until the
+    // backend is proven stable on hardware.
 }
 
 void MusicService::handleFinishedLocked() {

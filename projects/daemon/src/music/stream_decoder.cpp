@@ -2,6 +2,7 @@
 
 #include <FLAC/stream_decoder.h>
 #include <mpg123.h>
+#include <switchu/file_log.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -34,49 +35,64 @@ std::string lowerExtension(const std::string& path) {
 class Mpg123Decoder final : public StreamDecoder {
 public:
     explicit Mpg123Decoder(const std::string& path) {
+        switchu::FileLog::log("[music-decoder] mpg123 ctor begin path=%s", path.c_str());
         if (!ensureMpg123Initialized()) {
             m_failed = true;
             m_error = "mpg123_init failed";
             return;
         }
         int err = MPG123_OK;
+        switchu::FileLog::log("[music-decoder] mpg123_new begin");
         m_handle = mpg123_new(nullptr, &err);
+        switchu::FileLog::log("[music-decoder] mpg123_new done handle=%p err=%d", static_cast<void*>(m_handle), err);
         if (!m_handle) {
             m_failed = true;
             m_error = "mpg123_new: " + std::string(mpg123_plain_strerror(err));
             return;
         }
 
+        switchu::FileLog::log("[music-decoder] mpg123_open begin handle=%p", static_cast<void*>(m_handle));
         if (mpg123_open(m_handle, path.c_str()) != MPG123_OK) {
             fail("mpg123_open");
             return;
         }
+        switchu::FileLog::log("[music-decoder] mpg123_open done handle=%p", static_cast<void*>(m_handle));
 
         long rate = 0;
         int channels = 0;
         int encoding = 0;
+        switchu::FileLog::log("[music-decoder] mpg123_getformat begin handle=%p", static_cast<void*>(m_handle));
         if (mpg123_getformat(m_handle, &rate, &channels, &encoding) != MPG123_OK ||
             rate <= 0 || channels <= 0) {
             fail("mpg123_getformat");
             return;
         }
+        switchu::FileLog::log("[music-decoder] mpg123_getformat done rate=%ld ch=%d enc=0x%X", rate, channels, encoding);
 
         // Lock the decoder to signed 16-bit PCM at its native sample rate and
         // channel count. SwitchU performs channel conversion/resampling itself.
+        switchu::FileLog::log("[music-decoder] mpg123_format_none begin handle=%p", static_cast<void*>(m_handle));
         mpg123_format_none(m_handle);
+        switchu::FileLog::log("[music-decoder] mpg123_format_none done handle=%p", static_cast<void*>(m_handle));
+        switchu::FileLog::log("[music-decoder] mpg123_format begin rate=%ld ch=%d", rate, channels);
         if (mpg123_format(m_handle, rate, channels, MPG123_ENC_SIGNED_16) != MPG123_OK) {
             fail("mpg123_format");
             return;
         }
+        switchu::FileLog::log("[music-decoder] mpg123_format done handle=%p", static_cast<void*>(m_handle));
 
         m_rate = static_cast<int>(rate);
         m_channels = channels;
+        switchu::FileLog::log("[music-decoder] mpg123 ctor ready handle=%p rate=%d ch=%d", static_cast<void*>(m_handle), m_rate, m_channels);
     }
 
     ~Mpg123Decoder() override {
         if (m_handle) {
+            switchu::FileLog::log("[music-decoder] mpg123 dtor close begin handle=%p", static_cast<void*>(m_handle));
             mpg123_close(m_handle);
+            switchu::FileLog::log("[music-decoder] mpg123 dtor close done handle=%p", static_cast<void*>(m_handle));
             mpg123_delete(m_handle);
+            switchu::FileLog::log("[music-decoder] mpg123 dtor delete done");
         }
     }
 
