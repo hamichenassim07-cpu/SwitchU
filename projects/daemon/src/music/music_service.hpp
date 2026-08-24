@@ -2,15 +2,16 @@
 
 #include <switchu/music_protocol.hpp>
 
+#include "pcm_resampler.hpp"
+
 #include <switch.h>
 #ifndef SDL_MAIN_HANDLED
 #define SDL_MAIN_HANDLED
 #endif
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_mixer.h>
 
-#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <string>
@@ -18,6 +19,8 @@
 #include <vector>
 
 namespace switchu::daemon::music {
+
+class StreamDecoder;
 
 class MusicService {
 public:
@@ -55,15 +58,11 @@ private:
         std::string artist;
     };
 
-    static std::atomic<MusicService*> s_active;
-    static void onMusicFinishedStatic();
-
     bool ensureAudioLocked();
     void closeAudioLocked();
+    void resetSourceLocked(bool clearQueuedAudio);
     bool loadTrackLocked(int index, bool autoplay, uint64_t startMs = 0);
-    void freeMusicLocked();
-    void retireCurrentMusicLocked(bool haltPlayback);
-    void collectRetiredMusicLocked(bool force = false);
+    bool pumpAudioLocked(uint32_t targetQueuedBytes);
     void handleFinishedLocked();
     int nextIndexLocked(bool forward) const;
     uint64_t currentPositionMsLocked() const;
@@ -79,13 +78,20 @@ private:
     mutable std::recursive_mutex m_mutex;
     std::vector<QueueEntry> m_queue;
     int m_currentIndex = -1;
-    Mix_Music* m_music = nullptr;
 
-    struct RetiredMusic {
-        Mix_Music* handle = nullptr;
-        uint64_t retiredTick = 0;
-    };
-    std::vector<RetiredMusic> m_retiredMusic;
+    // SwitchU-native streaming engine: decoder and output device have separate
+    // lifetimes. Track A -> B destroys only the source; the SDL Switch audio
+    // device (which maps to Horizon AudioOut) stays open and keeps ownership of
+    // already queued PCM, avoiding the Mix_Music lifetime crash entirely.
+    SDL_AudioDeviceID m_audioDevice = 0;
+    SDL_AudioSpec m_audioSpec{};
+    std::unique_ptr<StreamDecoder> m_decoder;
+    std::unique_ptr<StreamDecoder> m_preloadedDecoder;
+    int m_preloadedIndex = -1;
+    PcmResampler m_resampler;
+    std::vector<int16_t> m_decodeScratch;
+    std::vector<int16_t> m_outputScratch;
+    bool m_sourceEof = false;
 
     bool m_initialized = false;
     bool m_audioReady = false;
@@ -102,11 +108,6 @@ private:
     uint64_t m_positionBaseMs = 0;
     uint64_t m_playStartTick = 0;
     uint64_t m_lastPersistTick = 0;
-    std::atomic<bool> m_finishedPending{false};
-    // Track switches can race the SDL_mixer audio callback.  Keep the callback
-    // from treating a late completion from the previous decoder as completion
-    // of the newly started track.
-    std::atomic<uint64_t> m_lastTrackSwitchTick{0};
 
     std::unordered_set<uint64_t> m_blacklist;
     std::mt19937 m_rng;
