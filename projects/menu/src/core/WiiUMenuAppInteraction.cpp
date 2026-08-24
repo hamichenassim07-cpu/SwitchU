@@ -2152,6 +2152,12 @@ void WiiUMenuApp::handleSystemAction(SysAction a) {
 #endif
 
 void WiiUMenuApp::updateCursor() {
+    if (m_musicScreen && m_musicScreen->isActive()) {
+        if (m_cursor) m_cursor->setVisible(false);
+        if (m_systemSelectionHalo) m_systemSelectionHalo->setVisible(false);
+        return;
+    }
+
     if ((m_themeShop && m_themeShop->isActive()) ||
         (m_settings && m_settings->isActive()) ||
         (m_dialog && m_dialog->isActive()) ||

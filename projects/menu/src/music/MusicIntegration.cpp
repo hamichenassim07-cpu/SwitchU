@@ -2,18 +2,27 @@
 #include "core/DebugLog.hpp"
 
 void WiiUMenuApp::createMusic() {
-    if (m_musicScreen) return;
+    // wireGlobalActions() is called before the HOME overlay layer is built.
+    // Music can therefore already exist here while still having no parent.
+    // Always (re)attach it once m_overlayLayer becomes available; otherwise
+    // it receives focus/input but never participates in the render tree.
+    if (!m_musicScreen) {
+        m_musicScreen = std::make_shared<switchu::menu::music::MusicScreen>();
+        m_musicScreen->setFonts(&m_fontNormal, &m_fontSmall, &m_fontIcons);
+        m_musicScreen->onClose([this]() { closeMusic(); });
+        m_musicScreen->onSessionGuard([this]() {
+            if (m_audio.isPlaying())
+                m_audio.stop();
+        });
+        DebugLog::log("[music] full-screen Music V0.01 UI created");
+    }
 
-    m_musicScreen = std::make_shared<switchu::menu::music::MusicScreen>();
-    m_musicScreen->setFonts(&m_fontNormal, &m_fontSmall, &m_fontIcons);
-    m_musicScreen->onClose([this]() { closeMusic(); });
-    m_musicScreen->onSessionGuard([this]() {
-        if (m_audio.isPlaying())
-            m_audio.stop();
-    });
-    if (m_overlayLayer)
+    if (m_overlayLayer && m_musicScreen->parent() != m_overlayLayer.get()) {
+        if (auto* oldParent = m_musicScreen->parent())
+            oldParent->removeChild(m_musicScreen.get());
         m_overlayLayer->addChild(m_musicScreen);
-    DebugLog::log("[music] full-screen Music V0.01 UI created");
+        DebugLog::log("[music] MusicScreen attached to overlay render tree");
+    }
 }
 
 void WiiUMenuApp::showMusic() {
@@ -30,6 +39,8 @@ void WiiUMenuApp::showMusic() {
     if (m_themeShop && m_themeShop->isActive()) m_themeShop->hide();
 
     m_musicScreen->show();
+    if (m_cursor) m_cursor->setVisible(false);
+    if (m_systemSelectionHalo) m_systemSelectionHalo->setVisible(false);
     focusManager().setFocus(m_musicScreen.get());
     DebugLog::log("[music] opened full-screen Music application");
 }

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iterator>
+#include <switchu/music_protocol.hpp>
 #ifdef SWITCHU_MENU
 #include <switchu/control_cache.hpp>
 #include <switchu/ns_ext.hpp>
@@ -17,11 +18,13 @@ namespace {
 static constexpr uint64_t kV103SystemAlbumTitleId  = 0xFFFFFFFFFFFFF101ULL;
 static constexpr uint64_t kV103SystemMiiTitleId    = 0xFFFFFFFFFFFFF102ULL;
 static constexpr uint64_t kV103SystemThemesTitleId = 0xFFFFFFFFFFFFF103ULL;
+static constexpr uint64_t kV103SystemMusicTitleId  = switchu::music::kVirtualMusicTitleId;
 
 bool isV103SystemTitleId(uint64_t titleId) {
     return titleId == kV103SystemAlbumTitleId ||
            titleId == kV103SystemMiiTitleId ||
-           titleId == kV103SystemThemesTitleId;
+           titleId == kV103SystemThemesTitleId ||
+           titleId == kV103SystemMusicTitleId;
 }
 
 std::vector<uint8_t> readV103FileBytes(const std::string& path) {
@@ -37,10 +40,12 @@ const char* v103SystemIconPath(uint64_t titleId) {
     if (titleId == kV103SystemAlbumTitleId)  return "romfs:/icons/album.png";
     if (titleId == kV103SystemMiiTitleId)    return "romfs:/icons/mii_editor.png";
     if (titleId == kV103SystemThemesTitleId) return "romfs:/icons/themes.png";
+    if (titleId == kV103SystemMusicTitleId)  return "romfs:/icons/music_v001.png";
 #else
     if (titleId == kV103SystemAlbumTitleId)  return "sdmc:/switch/SwitchU/icons/album.png";
     if (titleId == kV103SystemMiiTitleId)    return "sdmc:/switch/SwitchU/icons/mii_editor.png";
     if (titleId == kV103SystemThemesTitleId) return "sdmc:/switch/SwitchU/icons/themes.png";
+    if (titleId == kV103SystemMusicTitleId)  return "sdmc:/switch/SwitchU/icons/music_v001.png";
 #endif
     return nullptr;
 }
@@ -57,10 +62,11 @@ void prependV103SystemCards(std::vector<PendingApp>& apps) {
         {kV103SystemAlbumTitleId,  "Album"},
         {kV103SystemMiiTitleId,    "Mii"},
         {kV103SystemThemesTitleId, "Thèmes"},
+        {kV103SystemMusicTitleId,  "Musique"},
     };
 
     std::vector<PendingApp> system;
-    system.reserve(3);
+    system.reserve(4);
     for (const auto& def : defs) {
         if (hasId(def.id))
             continue;

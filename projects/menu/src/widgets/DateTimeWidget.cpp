@@ -380,8 +380,11 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float rW = rBase.x * kLRScale;
     const float lH = lBase.y * kLRScale;
     const float rH = rBase.y * kLRScale;
-    const float lCenterX = navRect.x + 25.f;
-    const float rCenterX = navRect.right() - 25.f;
+    // FIX6: L/R belong outside the glass capsule, not inside it. Keep a
+    // real gap so the glyph bounding boxes never overlap the pill.
+    constexpr float kLROuterGap = 14.f;
+    const float lCenterX = navRect.x - kLROuterGap - lW * 0.5f;
+    const float rCenterX = navRect.right() + kLROuterGap + rW * 0.5f;
     const nxui::Color lColor = gamesColor;
     const nxui::Color rColor = appsColor;
     const nxui::Color lShadow = gamesShadow;
