@@ -200,9 +200,13 @@ void MusicScreen::hide() {
     setOpacity(1.f);
     setFocusable(false);
     m_modal = Modal::None;
-    // Do not destroy GPU covers on the same frame as HOME restoration.
-    // Delayed release avoids the V0.01 corrupted/pixel frame on return.
-    m_hiddenCoverReleaseTimer = 1.0f;
+    // FIX1: never destroy Music GPU cover resources during the HOME handoff.
+    // The V0.02 preview still rendered a HOME mini-player and then cleared the
+    // same cover cache one second later. On hardware, returning with an active
+    // music session can therefore overlap HOME restoration with Music texture
+    // lifetime changes. Keep this small bounded cache alive until Music is
+    // shown again / the UI is destroyed.
+    m_hiddenCoverReleaseTimer = 0.f;
 }
 
 
@@ -250,8 +254,14 @@ void MusicScreen::refreshStatus(bool force) {
             m_nextToastTimer = 3.5f;
         m_nextSoonWasVisible = nextSoon;
         m_status = fresh;
+        // FIX2 stability rule: playback state changes never launch artwork or
+        // palette decoding. Palette follows navigation/selected album instead.
+        // This removes an unnecessary async texture/cover path from the exact
+        // moment the daemon swaps decoders.
         if (fresh.track_id != previousTrackId)
-            refreshAdaptivePalette();
+            DebugLog::log("[music-diag] STATUS track changed %016llX -> %016llX",
+                          static_cast<unsigned long long>(previousTrackId),
+                          static_cast<unsigned long long>(fresh.track_id));
 
         const bool session = statusFlag(fresh, switchu::music::MusicStatus_SessionActive);
         if (session != m_lastSessionGuardState) {
@@ -299,13 +309,9 @@ void MusicScreen::onUpdate(float dt) {
 
     if (!m_active) {
         m_hiddenGuardTimer += dt;
-        if (m_hiddenCoverReleaseTimer > 0.f) {
-            m_hiddenCoverReleaseTimer = std::max(0.f, m_hiddenCoverReleaseTimer - dt);
-            if (m_hiddenCoverReleaseTimer == 0.f && m_coverCache.size() > 0) {
-                DebugLog::log("[music-diag] UNLOAD_COVER deferred cache=%zu", m_coverCache.size());
-                m_coverCache.clear();
-            }
-        }
+        // FIX1: intentionally no cover-cache destruction while HOME is active.
+        // GPU resource lifetime changes are deferred away from the Music->HOME
+        // transition, which is the hardware crash path reported for V0.02.
         if (m_hiddenGuardTimer >= 0.50f) {
             m_hiddenGuardTimer = 0.f;
             refreshStatus(true);
@@ -484,8 +490,10 @@ void MusicScreen::activateSelection() {
             m_tabIndex = 0;
             break;
         case View::Albums:
+            // FIX1 UX: an album is a container. A opens its detail/tracklist;
+            // playback only begins after the user selects a track in that view.
             if (m_selection >= 0 && static_cast<size_t>(m_selection) < m_library.albums.size())
-                playTrackIds(albumTrackIds(static_cast<size_t>(m_selection)), 0);
+                openAlbum(static_cast<size_t>(m_selection));
             break;
         case View::Artists:
             openArtist(static_cast<size_t>(m_selection));
@@ -1647,9 +1655,10 @@ void MusicScreen::onRender(nxui::Renderer& ren) {
     if (!m_font || !m_smallFont) return;
 
     if (!m_active) {
-        gMusicUiAlpha = 1.f;
-        gMusicAccent = m_paletteAccent;
-        drawHomeMiniModule(ren);
+        // FIX1: the V0.02 preview mini-player is disabled during the stability
+        // pass. Rendering it immediately after Music closes re-entered the
+        // Music cover cache on the exact frame range where HOME is restored.
+        // A redesigned mini-player/overlay can be reintroduced on a safe path.
         return;
     }
 

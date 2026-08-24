@@ -39,6 +39,37 @@ static bool g_lblReady = false;
 static bool g_hidReady = false;
 static bool g_bpcReady = false;
 
+static void rotateDaemonLogsForCrashRecovery() {
+    // FIX2: FileLog::open("daemon") starts a fresh daemon.log. Preserve the
+    // previous boots before opening the new file so a crash/restart does not
+    // erase the only useful tail of the failing run. Keep three generations.
+    const std::filesystem::path dir{"sdmc:/config/SwitchU"};
+    const std::filesystem::path current = dir / "daemon.log";
+    const std::filesystem::path previous = dir / "daemon.previous.log";
+    const std::filesystem::path previous2 = dir / "daemon.previous2.log";
+    const std::filesystem::path previous3 = dir / "daemon.previous3.log";
+
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ec.clear();
+    std::filesystem::remove(previous3, ec);
+    ec.clear();
+    if (std::filesystem::exists(previous2, ec)) {
+        ec.clear();
+        std::filesystem::rename(previous2, previous3, ec);
+    }
+    ec.clear();
+    if (std::filesystem::exists(previous, ec)) {
+        ec.clear();
+        std::filesystem::rename(previous, previous2, ec);
+    }
+    ec.clear();
+    if (std::filesystem::exists(current, ec)) {
+        ec.clear();
+        std::filesystem::rename(current, previous, ec);
+    }
+}
+
 extern "C" {
     u32 __nx_applet_type = AppletType_SystemApplet;
     u32 __nx_fs_num_sessions = 3;
@@ -153,6 +184,7 @@ extern "C" void __appInit(void) {
         rc = fsdevMountSdmc();
     }
 
+    rotateDaemonLogsForCrashRecovery();
     switchu::FileLog::open("daemon");
     switchu::FileLog::log("[daemon] __appInit complete (sd mount: 0x%X)", rc);
     switchu::FileLog::log("[daemon] services time=%d setsys=%d set=%d ns=%d ldr=%d account=%d nssu=%d avm=%d psm=%d lbl=%d hid=%d",

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -17,11 +18,29 @@ namespace {
 
 constexpr uint64_t kPersistIntervalNs = 2'000'000'000ULL;
 constexpr uint64_t kNextSoonThresholdMs = 10'000ULL;
-constexpr uint64_t kRetiredMusicGraceNs = 1'500'000'000ULL;
 constexpr uint64_t kLateFinishGuardNs = 120'000'000ULL;
 
 uint64_t nowTick() {
     return armGetSystemTick();
+}
+
+void persistentMusicTrace(const char* fmt, ...) {
+    // Independent append-only trace: unlike daemon.log this survives a daemon
+    // restart and is flushed at every critical switch stage. This makes the
+    // last completed audio operation recoverable even after a hard crash.
+    std::error_code ec;
+    std::filesystem::create_directories(switchu::music::kConfigDirectory, ec);
+    FILE* file = std::fopen("sdmc:/config/SwitchU/music_switch_trace.log", "a");
+    if (!file) return;
+
+    std::fprintf(file, "[tick=%llu] ", static_cast<unsigned long long>(nowTick()));
+    va_list args;
+    va_start(args, fmt);
+    std::vfprintf(file, fmt, args);
+    va_end(args);
+    std::fputc('\n', file);
+    std::fflush(file);
+    std::fclose(file);
 }
 
 uint64_t elapsedMs(uint64_t fromTick) {
@@ -87,12 +106,15 @@ bool MusicService::initialize() {
     loadBlacklistLocked();
     reloadQueue();
 
-    // A daemon restart restores the queue/position and keeps the local music
-    // session logically alive, but does not unexpectedly auto-start audio.
+    // FIX1: a daemon restart cannot truthfully claim a live Music session
+    // because SDL_mixer has not reopened or resumed the decoder yet. Preserve
+    // queue/position for diagnostics, but clear the externally visible session
+    // state so HOME never creates a phantom player after a crash/restart.
     if (m_sessionActive) {
+        m_sessionActive = false;
         m_playing = false;
-        m_paused = true;
-        writeSessionFlagLocked(true);
+        m_paused = false;
+        writeSessionFlagLocked(false);
     }
 
     m_initialized = true;
@@ -111,7 +133,6 @@ void MusicService::shutdown() {
 
     persistLocked(true);
     freeMusicLocked();
-    closeAudioLocked();
     if (!m_sessionActive)
         writeSessionFlagLocked(false);
     s_active.store(nullptr);
@@ -141,7 +162,10 @@ bool MusicService::ensureAudioLocked() {
     }
 
     Mix_VolumeMusic(static_cast<int>(std::clamp(m_volume, 0.f, 1.f) * MIX_MAX_VOLUME));
-    Mix_HookMusicFinished(&MusicService::onMusicFinishedStatic);
+    // FIX2: do not register SDL_mixer's audio-thread completion callback.
+    // Completion is detected from the daemon update loop instead, eliminating
+    // a cross-thread transition path shared by manual and automatic changes.
+    Mix_HookMusicFinished(nullptr);
     m_audioReady = true;
     m_lastError = 0;
     switchu::FileLog::log("[music] audio session opened 48kHz stereo");
@@ -151,22 +175,26 @@ bool MusicService::ensureAudioLocked() {
 void MusicService::closeAudioLocked() {
     if (!m_audioReady)
         return;
+    persistentMusicTrace("AUDIO_CLOSE begin retired=%zu", m_retiredMusic.size());
     Mix_HookMusicFinished(nullptr);
     Mix_HaltMusic();
     Mix_CloseAudio();
     m_audioReady = false;
+    persistentMusicTrace("AUDIO_CLOSE done");
 }
 
 void MusicService::retireCurrentMusicLocked(bool haltPlayback) {
     if (!m_music)
         return;
 
-    // The finished hook executes on SDL_mixer's audio thread.  V0.01 freed the
-    // current Mix_Music immediately after Mix_HaltMusic(), which makes every
-    // next/previous/end-of-track transition a possible decoder lifetime race.
-    // Detach the callback before touching playback and defer the actual free.
-    Mix_HookMusicFinished(nullptr);
+    // FIX2 stability quarantine: never free a decoder while the SDL audio
+    // device remains active. Manual next/previous and natural completion all
+    // pass through this function, so the old handle is retained until a full
+    // session teardown after Mix_CloseAudio().
     m_finishedPending.store(false);
+    persistentMusicTrace("RETIRE begin index=%d handle=%p halt=%d playing=%d paused=%d",
+                         m_currentIndex, static_cast<void*>(m_music), haltPlayback ? 1 : 0,
+                         Mix_PlayingMusic() ? 1 : 0, Mix_PausedMusic() ? 1 : 0);
 
     if (haltPlayback && (Mix_PlayingMusic() || Mix_PausedMusic()))
         Mix_HaltMusic();
@@ -175,29 +203,27 @@ void MusicService::retireCurrentMusicLocked(bool haltPlayback) {
                           m_currentIndex, static_cast<void*>(m_music));
     m_retiredMusic.push_back({m_music, nowTick()});
     m_music = nullptr;
+    persistentMusicTrace("RETIRE done retained=%zu", m_retiredMusic.size());
 }
 
 void MusicService::collectRetiredMusicLocked(bool force) {
-    if (m_retiredMusic.empty())
+    if (m_retiredMusic.empty() || !force)
         return;
 
-    const uint64_t tick = nowTick();
-    auto it = m_retiredMusic.begin();
-    while (it != m_retiredMusic.end()) {
-        const bool oldEnough = it->retiredTick == 0 ||
-            armTicksToNs(tick - it->retiredTick) >= kRetiredMusicGraceNs;
-        if (!force && !oldEnough) {
-            ++it;
-            continue;
-        }
-
-        if (it->handle) {
-            switchu::FileLog::log("[music-diag] FREE_RETIRED_TRACK handle=%p force=%d",
-                                  static_cast<void*>(it->handle), force ? 1 : 0);
-            Mix_FreeMusic(it->handle);
-        }
-        it = m_retiredMusic.erase(it);
+    // Never call Mix_FreeMusic during an active audio session. The caller must
+    // close SDL_mixer first, then force this collection. This deliberately
+    // trades a small temporary decoder-retention cost for deterministic life-
+    // time while we remove the hardware crash on track transitions.
+    persistentMusicTrace("FREE_RETIRED begin count=%zu audioReady=%d",
+                         m_retiredMusic.size(), m_audioReady ? 1 : 0);
+    for (auto& retired : m_retiredMusic) {
+        if (!retired.handle) continue;
+        switchu::FileLog::log("[music-diag] FREE_RETIRED_TRACK handle=%p force=1",
+                              static_cast<void*>(retired.handle));
+        Mix_FreeMusic(retired.handle);
     }
+    m_retiredMusic.clear();
+    persistentMusicTrace("FREE_RETIRED done");
 }
 
 void MusicService::freeMusicLocked() {
@@ -205,9 +231,9 @@ void MusicService::freeMusicLocked() {
         switchu::FileLog::log("[music-diag] UNLOAD_TRACK begin index=%d", m_currentIndex);
         retireCurrentMusicLocked(true);
     }
-    // This path is used only for full service/session teardown.  The audio
-    // callback is detached and playback halted, so all deferred decoders can
-    // now be released deterministically.
+    // FIX2: destroy the SDL audio device before freeing any retained decoder.
+    // This gives the audio thread a hard synchronization boundary.
+    closeAudioLocked();
     collectRetiredMusicLocked(true);
     switchu::FileLog::log("[music-diag] UNLOAD_TRACK done");
 }
@@ -304,6 +330,10 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
         return false;
 
     const auto& entry = m_queue[static_cast<size_t>(index)];
+    const bool hadSession = m_sessionActive;
+    persistentMusicTrace("SWITCH enter from=%d to=%d id=%016lX hadSession=%d retained=%zu",
+                         m_currentIndex, index, static_cast<unsigned long>(entry.trackId),
+                         hadSession ? 1 : 0, m_retiredMusic.size());
     switchu::FileLog::log("[music-diag] SWITCH_TRACK prepare from=%d to=%d id=%016lX path=%s",
                           m_currentIndex, index, static_cast<unsigned long>(entry.trackId),
                           entry.path.c_str());
@@ -315,12 +345,16 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
         m_lastError = 0x1003;
         switchu::FileLog::log("[music] Mix_LoadMUS FAIL path=%s error=%s",
                               entry.path.c_str(), Mix_GetError());
+        persistentMusicTrace("SWITCH load FAIL to=%d error=%s", index, Mix_GetError());
         return false;
     }
+    persistentMusicTrace("SWITCH load done to=%d next=%p", index, static_cast<void*>(nextMusic));
 
     // Stop ownership of the old decoder without freeing it on the same tick as
     // the audio callback.  Deferred release is the central V0.02 crash fix.
+    persistentMusicTrace("SWITCH retire-old begin from=%d", m_currentIndex);
     retireCurrentMusicLocked(true);
+    persistentMusicTrace("SWITCH retire-old done retained=%zu", m_retiredMusic.size());
     m_finishedPending.store(false);
     m_lastTrackSwitchTick.store(nowTick());
     m_music = nextMusic;
@@ -329,8 +363,14 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
     m_positionBaseMs = std::min(startMs, entry.durationMs > 0 ? entry.durationMs : startMs);
     m_playStartTick = 0;
     m_nextSoon = false;
-    m_sessionActive = true;
-    writeSessionFlagLocked(true);
+
+    // Keep an already-active session logically active across a normal track
+    // switch. FIX1 briefly removed/recreated session.flag on every change,
+    // which made HOME react to a transient false state. First playback still
+    // remains inactive until Mix_PlayMusic succeeds.
+    m_sessionActive = hadSession;
+    if (!hadSession)
+        writeSessionFlagLocked(false);
 
     Mix_VolumeMusic(static_cast<int>(m_volume * MIX_MAX_VOLUME));
 
@@ -338,14 +378,16 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
         // SDL_mixer loops=0 means play exactly once. V0.01 used 1, which
         // replayed every track a second time before advancing the queue.
         switchu::FileLog::log("[music-diag] PLAY_TRACK begin index=%d", index);
-        // Re-enable the hook only for the newly-owned decoder.
-        Mix_HookMusicFinished(&MusicService::onMusicFinishedStatic);
+        persistentMusicTrace("PLAY begin index=%d handle=%p", index, static_cast<void*>(m_music));
         if (Mix_PlayMusic(m_music, 0) < 0) {
             m_lastError = 0x1004;
             m_playing = false;
             m_paused = false;
+            m_sessionActive = false;
+            writeSessionFlagLocked(false);
             switchu::FileLog::log("[music-diag] PLAY_TRACK FAIL index=%d error=%s",
                                   index, Mix_GetError());
+            persistentMusicTrace("PLAY FAIL index=%d error=%s", index, Mix_GetError());
             retireCurrentMusicLocked(false);
             return false;
         }
@@ -359,12 +401,19 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
         }
         m_playing = true;
         m_paused = false;
+        m_sessionActive = true;
+        writeSessionFlagLocked(true);
         m_playStartTick = nowTick();
         switchu::FileLog::log("[music-diag] PLAY_TRACK started index=%d start=%lums",
                               index, static_cast<unsigned long>(m_positionBaseMs));
+        persistentMusicTrace("PLAY started index=%d start=%lums retained=%zu",
+                             index, static_cast<unsigned long>(m_positionBaseMs),
+                             m_retiredMusic.size());
     } else {
         m_playing = false;
         m_paused = true;
+        m_sessionActive = true;
+        writeSessionFlagLocked(true);
     }
 
     m_lastError = 0;
@@ -455,6 +504,7 @@ void MusicService::next() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_finishedPending.store(false);
     switchu::FileLog::log("[music-diag] NEXT current=%d queue=%zu", m_currentIndex, m_queue.size());
+    persistentMusicTrace("NEXT command current=%d queue=%zu", m_currentIndex, m_queue.size());
     if (m_queue.empty())
         return;
 
@@ -480,6 +530,8 @@ void MusicService::previous() {
     m_finishedPending.store(false);
     switchu::FileLog::log("[music-diag] PREVIOUS current=%d position=%lums",
                           m_currentIndex, static_cast<unsigned long>(currentPositionMsLocked()));
+    persistentMusicTrace("PREVIOUS command current=%d position=%lums",
+                         m_currentIndex, static_cast<unsigned long>(currentPositionMsLocked()));
     if (m_queue.empty())
         return;
 
@@ -558,11 +610,13 @@ void MusicService::stop(bool clearSession) {
     m_positionBaseMs = 0;
     m_nextSoon = false;
     if (clearSession) {
+        persistentMusicTrace("STOP clear-session begin retained=%zu", m_retiredMusic.size());
+        closeAudioLocked();
         collectRetiredMusicLocked(true);
         m_sessionActive = false;
         m_currentIndex = -1;
         writeSessionFlagLocked(false);
-        closeAudioLocked();
+        persistentMusicTrace("STOP clear-session done");
     }
     persistLocked(true);
 }
@@ -643,9 +697,10 @@ void MusicService::onMusicFinishedStatic() {
     if (!active)
         return;
 
-    // A completion callback from the decoder we just replaced may arrive a
-    // few milliseconds late.  Ignoring that tiny post-switch window prevents
-    // an immediate second NEXT from targeting/freing the fresh track.
+    // Legacy defensive callback path. FIX2 no longer registers this callback;
+    // natural completion is polled from update() to keep transitions on one
+    // serialized daemon thread. Keep the guard in case a third-party path ever
+    // registers it again.
     const uint64_t switchedAt = active->m_lastTrackSwitchTick.load();
     if (switchedAt != 0 &&
         armTicksToNs(nowTick() - switchedAt) < kLateFinishGuardNs)
@@ -659,12 +714,23 @@ void MusicService::update() {
     if (!m_initialized)
         return;
 
-    if (m_finishedPending.exchange(false)) {
-        switchu::FileLog::log("[music-diag] FINISH_EVENT index=%d", m_currentIndex);
+    // FIX2: natural completion is polled from this serialized daemon thread.
+    // SDL_mixer's Mix_HookMusicFinished callback is intentionally disabled,
+    // so automatic and manual changes can no longer race through two threads.
+    const uint64_t switchedAt = m_lastTrackSwitchTick.load();
+    const bool outsideStartGuard = switchedAt == 0 ||
+        armTicksToNs(nowTick() - switchedAt) >= 250'000'000ULL;
+    if (outsideStartGuard && m_sessionActive && m_playing && !m_paused &&
+        m_music && Mix_PlayingMusic() == 0) {
+        m_finishedPending.store(false);
+        switchu::FileLog::log("[music-diag] FINISH_EVENT index=%d source=poll", m_currentIndex);
+        persistentMusicTrace("FINISH poll index=%d retained=%zu",
+                             m_currentIndex, m_retiredMusic.size());
         handleFinishedLocked();
     }
 
-    collectRetiredMusicLocked(false);
+    // Retired decoders are intentionally not collected here. They are only
+    // released after a full Mix_CloseAudio() boundary during session teardown.
     updateNextSoonLocked();
     persistLocked(false);
 }
@@ -679,7 +745,7 @@ switchu::music::Status MusicService::status() const {
     st.volume = m_volume;
     st.repeat_mode = static_cast<uint8_t>(m_repeat);
     st.last_error = m_lastError;
-    if (m_currentIndex >= 0 && m_currentIndex < static_cast<int>(m_queue.size()))
+    if (m_sessionActive && m_currentIndex >= 0 && m_currentIndex < static_cast<int>(m_queue.size()))
         st.track_id = m_queue[static_cast<size_t>(m_currentIndex)].trackId;
     if (m_sessionActive) st.flags |= switchu::music::MusicStatus_SessionActive;
     if (m_playing) st.flags |= switchu::music::MusicStatus_Playing;

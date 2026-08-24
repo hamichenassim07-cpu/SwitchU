@@ -77,25 +77,39 @@ void WiiUMenuApp::closeMusic() {
     if (!m_musicScreen || !m_musicScreen->isActive()) return;
 
     const bool sessionActive = m_musicScreen->hasMusicSession();
-    m_musicScreen->hide();
+    DebugLog::log("[music-diag] CLOSE_SAFE begin session=%d returnCategory=%d",
+                  sessionActive ? 1 : 0, m_musicReturnHomeCategory);
 
+    // First remove Music from input/render ownership. Its audio service remains
+    // independent and may continue playing.
+    m_musicScreen->hide();
+    DebugLog::log("[music-diag] CLOSE_SAFE music_hidden");
+
+    // Restore one stable HOME focus target, but do not update the cursor yet:
+    // setHomeApplicationsCategory() may rebuild the visible carousel/filter.
     if (m_grid) {
         if (auto* cur = m_grid->focusManager().current())
             focusManager().setFocus(cur);
-        updateCursor();
     }
+    DebugLog::log("[music-diag] CLOSE_SAFE focus_restored");
 
-    // Restore the HOME category under the fading Music surface. Music audio
-    // itself stays in the daemon and therefore survives this UI transition.
+    // Restore the HOME category while Music is already render-silent. Music
+    // audio itself stays in the daemon and therefore survives this transition.
     const bool applications = m_musicReturnHomeCategory != 0;
+    DebugLog::log("[music-diag] CLOSE_SAFE category_begin applications=%d", applications ? 1 : 0);
     setHomeApplicationsCategory(applications);
     if (m_clock)
         m_clock->setHomeCategory(applications ? 1 : 0);
+    DebugLog::log("[music-diag] CLOSE_SAFE category_done");
+
+    // Cursor/halo are updated only after HOME is back in its final category.
+    updateCursor();
+    DebugLog::log("[music-diag] CLOSE_SAFE cursor_done");
 
     // If no local session exists, ensure HOME theme audio comes back softly.
     if (!sessionActive)
         m_audio.playHome(350);
 
-    DebugLog::log("[music-diag] CLOSE_MUSIC complete session=%d returnCategory=%d",
+    DebugLog::log("[music-diag] CLOSE_SAFE complete session=%d returnCategory=%d",
                   sessionActive ? 1 : 0, applications ? 1 : 0);
 }
