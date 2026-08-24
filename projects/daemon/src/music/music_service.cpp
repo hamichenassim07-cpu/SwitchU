@@ -17,6 +17,8 @@ namespace {
 
 constexpr uint64_t kPersistIntervalNs = 2'000'000'000ULL;
 constexpr uint64_t kNextSoonThresholdMs = 10'000ULL;
+constexpr uint64_t kRetiredMusicGraceNs = 1'500'000'000ULL;
+constexpr uint64_t kLateFinishGuardNs = 120'000'000ULL;
 
 uint64_t nowTick() {
     return armGetSystemTick();
@@ -155,12 +157,59 @@ void MusicService::closeAudioLocked() {
     m_audioReady = false;
 }
 
+void MusicService::retireCurrentMusicLocked(bool haltPlayback) {
+    if (!m_music)
+        return;
+
+    // The finished hook executes on SDL_mixer's audio thread.  V0.01 freed the
+    // current Mix_Music immediately after Mix_HaltMusic(), which makes every
+    // next/previous/end-of-track transition a possible decoder lifetime race.
+    // Detach the callback before touching playback and defer the actual free.
+    Mix_HookMusicFinished(nullptr);
+    m_finishedPending.store(false);
+
+    if (haltPlayback && (Mix_PlayingMusic() || Mix_PausedMusic()))
+        Mix_HaltMusic();
+
+    switchu::FileLog::log("[music-diag] RETIRE_TRACK index=%d handle=%p",
+                          m_currentIndex, static_cast<void*>(m_music));
+    m_retiredMusic.push_back({m_music, nowTick()});
+    m_music = nullptr;
+}
+
+void MusicService::collectRetiredMusicLocked(bool force) {
+    if (m_retiredMusic.empty())
+        return;
+
+    const uint64_t tick = nowTick();
+    auto it = m_retiredMusic.begin();
+    while (it != m_retiredMusic.end()) {
+        const bool oldEnough = it->retiredTick == 0 ||
+            armTicksToNs(tick - it->retiredTick) >= kRetiredMusicGraceNs;
+        if (!force && !oldEnough) {
+            ++it;
+            continue;
+        }
+
+        if (it->handle) {
+            switchu::FileLog::log("[music-diag] FREE_RETIRED_TRACK handle=%p force=%d",
+                                  static_cast<void*>(it->handle), force ? 1 : 0);
+            Mix_FreeMusic(it->handle);
+        }
+        it = m_retiredMusic.erase(it);
+    }
+}
+
 void MusicService::freeMusicLocked() {
     if (m_music) {
-        Mix_HaltMusic();
-        Mix_FreeMusic(m_music);
-        m_music = nullptr;
+        switchu::FileLog::log("[music-diag] UNLOAD_TRACK begin index=%d", m_currentIndex);
+        retireCurrentMusicLocked(true);
     }
+    // This path is used only for full service/session teardown.  The audio
+    // callback is detached and playback halted, so all deferred decoders can
+    // now be released deterministically.
+    collectRetiredMusicLocked(true);
+    switchu::FileLog::log("[music-diag] UNLOAD_TRACK done");
 }
 
 bool MusicService::reloadQueue() {
@@ -254,19 +303,27 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
     if (!ensureAudioLocked())
         return false;
 
-    freeMusicLocked();
-    m_finishedPending.store(false);
-
     const auto& entry = m_queue[static_cast<size_t>(index)];
-    m_music = Mix_LoadMUS(entry.path.c_str());
-    if (!m_music) {
+    switchu::FileLog::log("[music-diag] SWITCH_TRACK prepare from=%d to=%d id=%016lX path=%s",
+                          m_currentIndex, index, static_cast<unsigned long>(entry.trackId),
+                          entry.path.c_str());
+
+    // Load the next decoder BEFORE destroying/retiring the current one.  If a
+    // malformed file cannot be opened, the current session is left intact.
+    Mix_Music* nextMusic = Mix_LoadMUS(entry.path.c_str());
+    if (!nextMusic) {
         m_lastError = 0x1003;
-        m_playing = false;
-        m_paused = false;
         switchu::FileLog::log("[music] Mix_LoadMUS FAIL path=%s error=%s",
                               entry.path.c_str(), Mix_GetError());
         return false;
     }
+
+    // Stop ownership of the old decoder without freeing it on the same tick as
+    // the audio callback.  Deferred release is the central V0.02 crash fix.
+    retireCurrentMusicLocked(true);
+    m_finishedPending.store(false);
+    m_lastTrackSwitchTick.store(nowTick());
+    m_music = nextMusic;
 
     m_currentIndex = index;
     m_positionBaseMs = std::min(startMs, entry.durationMs > 0 ? entry.durationMs : startMs);
@@ -278,9 +335,18 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
     Mix_VolumeMusic(static_cast<int>(m_volume * MIX_MAX_VOLUME));
 
     if (autoplay) {
-        if (Mix_PlayMusic(m_music, 1) < 0) {
+        // SDL_mixer loops=0 means play exactly once. V0.01 used 1, which
+        // replayed every track a second time before advancing the queue.
+        switchu::FileLog::log("[music-diag] PLAY_TRACK begin index=%d", index);
+        // Re-enable the hook only for the newly-owned decoder.
+        Mix_HookMusicFinished(&MusicService::onMusicFinishedStatic);
+        if (Mix_PlayMusic(m_music, 0) < 0) {
             m_lastError = 0x1004;
-            switchu::FileLog::log("[music] Mix_PlayMusic FAIL: %s", Mix_GetError());
+            m_playing = false;
+            m_paused = false;
+            switchu::FileLog::log("[music-diag] PLAY_TRACK FAIL index=%d error=%s",
+                                  index, Mix_GetError());
+            retireCurrentMusicLocked(false);
             return false;
         }
         if (m_positionBaseMs > 0) {
@@ -294,6 +360,8 @@ bool MusicService::loadTrackLocked(int index, bool autoplay, uint64_t startMs) {
         m_playing = true;
         m_paused = false;
         m_playStartTick = nowTick();
+        switchu::FileLog::log("[music-diag] PLAY_TRACK started index=%d start=%lums",
+                              index, static_cast<unsigned long>(m_positionBaseMs));
     } else {
         m_playing = false;
         m_paused = true;
@@ -385,6 +453,8 @@ int MusicService::nextIndexLocked(bool forward) const {
 
 void MusicService::next() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_finishedPending.store(false);
+    switchu::FileLog::log("[music-diag] NEXT current=%d queue=%zu", m_currentIndex, m_queue.size());
     if (m_queue.empty())
         return;
 
@@ -407,6 +477,9 @@ void MusicService::next() {
 
 void MusicService::previous() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_finishedPending.store(false);
+    switchu::FileLog::log("[music-diag] PREVIOUS current=%d position=%lums",
+                          m_currentIndex, static_cast<unsigned long>(currentPositionMsLocked()));
     if (m_queue.empty())
         return;
 
@@ -433,6 +506,8 @@ void MusicService::seekMs(uint64_t positionMs) {
 
     const bool wasPlaying = m_playing && !m_paused;
     const double seconds = static_cast<double>(positionMs) / 1000.0;
+    switchu::FileLog::log("[music-diag] SEEK begin index=%d position=%lums playing=%d",
+                          m_currentIndex, static_cast<unsigned long>(positionMs), wasPlaying ? 1 : 0);
     if (Mix_SetMusicPosition(seconds) < 0) {
         m_lastError = 0x1005;
         switchu::FileLog::log("[music] seek %.3fs FAIL: %s", seconds, Mix_GetError());
@@ -443,6 +518,8 @@ void MusicService::seekMs(uint64_t positionMs) {
     m_playStartTick = wasPlaying ? nowTick() : 0;
     m_nextSoon = false;
     persistLocked(true);
+    switchu::FileLog::log("[music-diag] SEEK done index=%d position=%lums",
+                          m_currentIndex, static_cast<unsigned long>(positionMs));
 }
 
 void MusicService::setVolume(float volume) {
@@ -467,15 +544,21 @@ void MusicService::setRepeat(switchu::music::RepeatMode mode) {
 
 void MusicService::stop(bool clearSession) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_finishedPending.store(false);
+
+    // Do not leave a halted decoder registered with the finished callback.
+    // Keeping it around was another way a late callback could restart/advance
+    // the queue after an explicit stop.
     if (m_music)
-        Mix_HaltMusic();
+        retireCurrentMusicLocked(true);
+
     m_playing = false;
     m_paused = false;
     m_playStartTick = 0;
     m_positionBaseMs = 0;
     m_nextSoon = false;
     if (clearSession) {
-        freeMusicLocked();
+        collectRetiredMusicLocked(true);
         m_sessionActive = false;
         m_currentIndex = -1;
         writeSessionFlagLocked(false);
@@ -556,8 +639,19 @@ void MusicService::handleFinishedLocked() {
 }
 
 void MusicService::onMusicFinishedStatic() {
-    if (auto* active = s_active.load())
-        active->m_finishedPending.store(true);
+    auto* active = s_active.load();
+    if (!active)
+        return;
+
+    // A completion callback from the decoder we just replaced may arrive a
+    // few milliseconds late.  Ignoring that tiny post-switch window prevents
+    // an immediate second NEXT from targeting/freing the fresh track.
+    const uint64_t switchedAt = active->m_lastTrackSwitchTick.load();
+    if (switchedAt != 0 &&
+        armTicksToNs(nowTick() - switchedAt) < kLateFinishGuardNs)
+        return;
+
+    active->m_finishedPending.store(true);
 }
 
 void MusicService::update() {
@@ -565,9 +659,12 @@ void MusicService::update() {
     if (!m_initialized)
         return;
 
-    if (m_finishedPending.exchange(false))
+    if (m_finishedPending.exchange(false)) {
+        switchu::FileLog::log("[music-diag] FINISH_EVENT index=%d", m_currentIndex);
         handleFinishedLocked();
+    }
 
+    collectRetiredMusicLocked(false);
     updateNextSoonLocked();
     persistLocked(false);
 }
@@ -680,7 +777,15 @@ bool MusicService::isBlacklistedLocked(uint64_t titleId) const {
 void MusicService::onGameLaunching(uint64_t titleId) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     loadBlacklistLocked();
-    if (!isBlacklistedLocked(titleId) || !m_sessionActive || !m_music || m_paused)
+    const bool blacklisted = isBlacklistedLocked(titleId);
+    switchu::FileLog::log(
+        "[music-diag] OPEN_GAME title=%016lX blacklisted=%d session=%d playing=%d paused=%d",
+        static_cast<unsigned long>(titleId), blacklisted ? 1 : 0,
+        m_sessionActive ? 1 : 0, m_playing ? 1 : 0, m_paused ? 1 : 0);
+    // Default V0.02 policy: keep playing. Only explicitly incompatible
+    // titles are auto-paused. Hardware audio-session arbitration may still
+    // force pauses on some games; diagnostics make those cases distinguishable.
+    if (!blacklisted || !m_sessionActive || !m_music || m_paused)
         return;
     m_positionBaseMs = currentPositionMsLocked();
     Mix_PauseMusic();
@@ -695,6 +800,8 @@ void MusicService::onGameLaunching(uint64_t titleId) {
 
 void MusicService::onGameEnded() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    switchu::FileLog::log("[music-diag] GAME_ENDED autoPaused=%d session=%d current=%d",
+                          m_autoPausedForGame ? 1 : 0, m_sessionActive ? 1 : 0, m_currentIndex);
     if (!m_autoPausedForGame)
         return;
     m_autoPausedForGame = false;

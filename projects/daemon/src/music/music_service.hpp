@@ -62,6 +62,8 @@ private:
     void closeAudioLocked();
     bool loadTrackLocked(int index, bool autoplay, uint64_t startMs = 0);
     void freeMusicLocked();
+    void retireCurrentMusicLocked(bool haltPlayback);
+    void collectRetiredMusicLocked(bool force = false);
     void handleFinishedLocked();
     int nextIndexLocked(bool forward) const;
     uint64_t currentPositionMsLocked() const;
@@ -79,6 +81,12 @@ private:
     int m_currentIndex = -1;
     Mix_Music* m_music = nullptr;
 
+    struct RetiredMusic {
+        Mix_Music* handle = nullptr;
+        uint64_t retiredTick = 0;
+    };
+    std::vector<RetiredMusic> m_retiredMusic;
+
     bool m_initialized = false;
     bool m_audioReady = false;
     bool m_sessionActive = false;
@@ -95,6 +103,10 @@ private:
     uint64_t m_playStartTick = 0;
     uint64_t m_lastPersistTick = 0;
     std::atomic<bool> m_finishedPending{false};
+    // Track switches can race the SDL_mixer audio callback.  Keep the callback
+    // from treating a late completion from the previous decoder as completion
+    // of the newly started track.
+    std::atomic<uint64_t> m_lastTrackSwitchTick{0};
 
     std::unordered_set<uint64_t> m_blacklist;
     std::mt19937 m_rng;

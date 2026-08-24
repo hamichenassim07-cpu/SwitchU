@@ -994,7 +994,7 @@ void WiiUMenuApp::setHomeApplicationsCategory(bool applications) {
     }
 
     g_v10ApplicationsActive = applications;
-    m_clock->setHomeApplicationsActive(applications);
+    m_clock->setHomeCategory(applications ? 1 : 0);
     m_grid->setShowApplications(applications);
 
     // L/R changes content, never the navigation zone. If the user was on a
@@ -1107,7 +1107,9 @@ void WiiUMenuApp::wireFocusCallback() {
     if (m_systemSelectionHalo)
         m_systemSelectionHalo->setVisible(false);
 
-    // Music V0.01: Album / Mii / Thèmes / Musique are first-class carousel entries. They use
+    // V0.02: Album / Mii / Thèmes remain first-class carousel entries. Music is now
+    // a native HOME category and is intentionally NOT injected as a carousel card.
+    // The remaining system cards use
     // reserved pseudo title IDs so the rest of IconGrid can treat them exactly
     // like covers without confusing them with Horizon applications.
     bool addedSystemCard = false;
@@ -1141,11 +1143,6 @@ void WiiUMenuApp::wireFocusCallback() {
         kV103SystemThemesTitleId,
         i18n.tr("sidebar.themes", "Thèmes")
     );
-    ensureSystemCard(
-        kV103SystemMusicTitleId,
-        i18n.tr("music.app.title", "Musique")
-    );
-
     if (addedSystemCard)
         reflowHomeGrid();
 
@@ -1165,7 +1162,7 @@ void WiiUMenuApp::wireFocusCallback() {
         );
         m_grid->setShowApplications(false);
 
-        m_clock->setHomeApplicationsActive(false);
+        m_clock->setHomeCategory(0);
         m_clock->setHomeTabsFocused(false);
         m_clock->setFocusable(false);
         m_clock->setTag("home_category_indicator");
@@ -1710,31 +1707,24 @@ void WiiUMenuApp::wireGlobalActions() {
         bindSystemCard(kV103SystemThemesTitleId, rightSystemButtons[1]);
     }
 
-    // Music is a virtual system application, not a forwarder/NRO. It owns a
-    // dedicated full-screen UI and therefore uses its own card texture/action.
-    {
-        const int index = findTitleIndex(kV103SystemMusicTitleId);
-        if (index >= 0 && index < static_cast<int>(m_grid->allIcons().size())) {
-            auto& card = m_grid->allIcons()[static_cast<size_t>(index)];
-            if (card) {
-                if (!m_musicIconTex.valid()) {
-                    const std::string path = std::string(SD_ASSETS) + "/icons/music_v001.png";
-                    if (!m_musicIconTex.loadFromFile(app().gpu(), app().renderer(), path, 256))
-                        DebugLog::log("[music] card icon unavailable: %s", path.c_str());
-                }
-                if (m_musicIconTex.valid()) card->setTexture(&m_musicIconTex);
-                card->setNotLaunchable(false);
-                card->setOnActivate([this]() { showMusic(); });
-                card->forceVisible();
-            }
-        }
-    }
+    // V0.02: no Music card. Music is reached natively from the HOME category pill.
 
+    // V0.02 native HOME category path: Jeux -> Applications -> Musique.
+    // Music owns L/R internally once its surface has focus.
     root.addAction(static_cast<uint64_t>(nxui::Button::L), [this]() {
-        setHomeApplicationsCategory(false);
+        if (m_musicScreen && m_musicScreen->isActive())
+            return;
+        if (g_v10ApplicationsActive)
+            setHomeApplicationsCategory(false);
     });
     root.addAction(static_cast<uint64_t>(nxui::Button::R), [this]() {
-        setHomeApplicationsCategory(true);
+        if (m_musicScreen && m_musicScreen->isActive())
+            return;
+        if (!g_v10ApplicationsActive) {
+            setHomeApplicationsCategory(true);
+            return;
+        }
+        showMusic();
     });
 
     root.addAction(static_cast<uint64_t>(nxui::Button::RStick), [this]() {

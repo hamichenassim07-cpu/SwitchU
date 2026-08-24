@@ -318,7 +318,13 @@ bool parseMp3(const std::filesystem::path& path, Track& track) {
 
                 if (id == "TIT2") track.title = decodeId3Text(data, frameSize);
                 else if (id == "TPE1") track.artist = decodeId3Text(data, frameSize);
+                else if (id == "TPE2") {
+                    track.albumArtist = decodeId3Text(data, frameSize);
+                    track.albumArtistExplicit = !track.albumArtist.empty();
+                }
                 else if (id == "TALB") track.album = decodeId3Text(data, frameSize);
+                else if (id == "TCON") track.genre = decodeId3Text(data, frameSize);
+                else if (id == "TPOS") track.discNumber = parseLeadingInt(decodeId3Text(data, frameSize));
                 else if (id == "TRCK") track.trackNumber = parseLeadingInt(decodeId3Text(data, frameSize));
                 else if (id == "TYER" || id == "TDRC") track.year = parseLeadingInt(decodeId3Text(data, frameSize));
                 else if (id == "APIC" && frameSize > 4 && !track.cover.valid()) {
@@ -408,10 +414,14 @@ bool parseFlac(const std::filesystem::path& path, Track& track) {
                 const std::string key = lower(kv.substr(0, eq));
                 const std::string value = trim(kv.substr(eq + 1));
                 if (key == "title") track.title = value;
-                else if (key == "artist" || key == "albumartist") {
-                    if (track.artist.empty() || key == "artist") track.artist = value;
+                else if (key == "artist") track.artist = value;
+                else if (key == "albumartist" || key == "album artist") {
+                    track.albumArtist = value;
+                    track.albumArtistExplicit = !track.albumArtist.empty();
                 }
                 else if (key == "album") track.album = value;
+                else if (key == "genre") track.genre = value;
+                else if (key == "discnumber" || key == "disc") track.discNumber = parseLeadingInt(value);
                 else if (key == "tracknumber") track.trackNumber = parseLeadingInt(value);
                 else if (key == "date" || key == "year") track.year = parseLeadingInt(value);
             }
@@ -538,10 +548,48 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
         if (tracksFound) ++(*tracksFound);
     }
 
+    // V0.02 Album Artist inference. Proper TPE2/ALBUMARTIST metadata always
+    // wins. When it is missing, infer one value from sibling tracks in the
+    // same album folder. This fixes common featured-artist duplicates while
+    // avoiding unsafe global merges of unrelated albums with the same title.
+    struct ArtistVote { int score = 0; std::string display; };
+    std::map<std::string, std::map<std::string, ArtistVote>> albumArtistVotes;
+    auto albumAnchor = [](const Track& track) {
+        std::filesystem::path parent = std::filesystem::path(track.path).parent_path();
+        const std::string leaf = lower(parent.filename().string());
+        if (leaf.rfind("disc ", 0) == 0 || leaf.rfind("disk ", 0) == 0 ||
+            leaf.rfind("cd ", 0) == 0 || leaf.rfind("cd", 0) == 0) {
+            parent = parent.parent_path();
+        }
+        return lower(parent.lexically_normal().string()) + "\n" + normalizedKey(track.album);
+    };
+    for (const auto& track : result.tracks) {
+        const std::string candidate = track.albumArtistExplicit && !track.albumArtist.empty()
+            ? track.albumArtist : track.artist;
+        auto& vote = albumArtistVotes[albumAnchor(track)][normalizedKey(candidate)];
+        vote.score += track.albumArtistExplicit ? 100 : 1;
+        if (vote.display.empty()) vote.display = candidate;
+    }
+    for (auto& track : result.tracks) {
+        if (track.albumArtistExplicit && !track.albumArtist.empty())
+            continue;
+        const auto votesIt = albumArtistVotes.find(albumAnchor(track));
+        if (votesIt == albumArtistVotes.end() || votesIt->second.empty()) {
+            track.albumArtist = track.artist;
+            continue;
+        }
+        const ArtistVote* best = nullptr;
+        for (const auto& [key, vote] : votesIt->second) {
+            (void)key;
+            if (!best || vote.score > best->score) best = &vote;
+        }
+        track.albumArtist = best && !best->display.empty() ? best->display : track.artist;
+    }
+
     std::map<std::string, size_t> albumMap;
     for (size_t ti = 0; ti < result.tracks.size(); ++ti) {
         const auto& track = result.tracks[ti];
-        const std::string key = normalizedKey(track.artist) + "\n" + normalizedKey(track.album);
+        const std::string key = normalizedKey(track.albumArtist) + "\n" + normalizedKey(track.album);
         auto found = albumMap.find(key);
         size_t ai = 0;
         if (found == albumMap.end()) {
@@ -550,7 +598,8 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
             Album album{};
             album.key = key;
             album.title = track.album;
-            album.artist = track.artist;
+            album.artist = track.albumArtist;
+            album.genre = track.genre;
             album.year = track.year;
             album.cover = track.cover;
             album.newestStamp = track.modifiedStamp;
@@ -563,17 +612,28 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
         album.newestStamp = std::max(album.newestStamp, track.modifiedStamp);
         if (!album.cover.valid() && track.cover.valid()) album.cover = track.cover;
         if (album.year == 0 && track.year != 0) album.year = track.year;
+        if (album.genre.empty() && !track.genre.empty()) album.genre = track.genre;
     }
 
     for (auto& album : result.albums) {
         std::stable_sort(album.tracks.begin(), album.tracks.end(), [&](size_t a, size_t b) {
             const auto& ta = result.tracks[a];
             const auto& tb = result.tracks[b];
+
+            // V0.02: album order is metadata-driven, never filesystem-driven.
+            // DISC -> TRACK NUMBER -> TITLE -> PATH provides deterministic
+            // ordering for deluxe/multi-disc releases and sane fallbacks.
+            const int da = ta.discNumber > 0 ? ta.discNumber : 1;
+            const int db = tb.discNumber > 0 ? tb.discNumber : 1;
+            if (da != db) return da < db;
             if (ta.trackNumber > 0 && tb.trackNumber > 0 && ta.trackNumber != tb.trackNumber)
                 return ta.trackNumber < tb.trackNumber;
             if ((ta.trackNumber > 0) != (tb.trackNumber > 0))
                 return ta.trackNumber > 0;
-            return lower(ta.title) < lower(tb.title);
+            const std::string titleA = lower(ta.title);
+            const std::string titleB = lower(tb.title);
+            if (titleA != titleB) return titleA < titleB;
+            return lower(ta.path) < lower(tb.path);
         });
     }
 
@@ -603,7 +663,7 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
             ai = found->second;
         }
         result.artists[ai].tracks.push_back(ti);
-        const std::string albumKey = normalizedKey(track.artist) + "\n" + normalizedKey(track.album);
+        const std::string albumKey = normalizedKey(track.albumArtist) + "\n" + normalizedKey(track.album);
         auto albumIt = albumByKey.find(albumKey);
         if (albumIt != albumByKey.end()) {
             auto& albums = result.artists[ai].albums;
@@ -611,6 +671,27 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
                 albums.push_back(albumIt->second);
         }
     }
+    // Ensure every Album Artist has an artist entry and owns its album, even
+    // when every track uses a featured per-track Artist value.
+    for (size_t albumIndex = 0; albumIndex < result.albums.size(); ++albumIndex) {
+        const auto& album = result.albums[albumIndex];
+        const std::string key = normalizedKey(album.artist);
+        auto found = artistMap.find(key);
+        size_t artistIndex = 0;
+        if (found == artistMap.end()) {
+            artistIndex = result.artists.size();
+            artistMap[key] = artistIndex;
+            Artist artist{};
+            artist.name = album.artist;
+            result.artists.push_back(std::move(artist));
+        } else {
+            artistIndex = found->second;
+        }
+        auto& albums = result.artists[artistIndex].albums;
+        if (std::find(albums.begin(), albums.end(), albumIndex) == albums.end())
+            albums.push_back(albumIndex);
+    }
+
     std::sort(result.artists.begin(), result.artists.end(), [](const Artist& a, const Artist& b) {
         return lower(a.name) < lower(b.name);
     });

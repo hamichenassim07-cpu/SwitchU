@@ -26,7 +26,11 @@ struct Track {
     std::string path;
     std::string title;
     std::string artist;
+    std::string albumArtist;
+    bool albumArtistExplicit = false;
     std::string album;
+    std::string genre;
+    int discNumber = 0;
     int trackNumber = 0;
     int year = 0;
     uint64_t durationMs = 0;
@@ -38,6 +42,7 @@ struct Album {
     std::string key;
     std::string title;
     std::string artist;
+    std::string genre;
     int year = 0;
     std::vector<size_t> tracks;
     CoverRef cover;

@@ -18,7 +18,9 @@ public:
     // historical top-left box while also owning the centered Jeux/Applications
     // capsule used as a focus target by WiiUMenuAppInteraction.cpp.
     void setHomeApplicationsActive(bool active);
-    bool homeApplicationsActive() const { return m_homeApplicationsActive; }
+    void setHomeCategory(int category); // 0 Jeux, 1 Applications, 2 Musique
+    int homeCategory() const { return m_homeCategory; }
+    bool homeApplicationsActive() const { return m_homeCategory == 1; }
     void setHomeTabsFocused(bool focused) { m_homeTabsFocused = focused; }
     nxui::Rect activeHomeTabRect() const;
     nxui::Rect homeTabsRect() const;
@@ -40,7 +42,7 @@ private:
     nxui::Color m_textColor      {1.f, 1.f, 1.f, 1.f};
     nxui::Color m_secondaryColor {0.7f, 0.7f, 0.8f, 0.8f};
 
-    bool m_homeApplicationsActive = false;
+    int m_homeCategory = 0;
     bool m_homeTabsFocused = false;
     float m_homeTabSlide = 0.f;
     float m_homeTabPop = 0.f;

@@ -224,6 +224,7 @@ private:
     std::shared_ptr<SettingsScreen>    m_settings;
     std::shared_ptr<ThemeShopScreen>   m_themeShop;
     std::shared_ptr<switchu::menu::music::MusicScreen> m_musicScreen;
+    int m_musicReturnHomeCategory = 1;
 
     nxui::Texture m_gameCardTex;
     nxui::Texture m_musicIconTex;

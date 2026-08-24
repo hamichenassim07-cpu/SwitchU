@@ -13,6 +13,7 @@
 #include <functional>
 #include <future>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace switchu::menu::music {
@@ -25,8 +26,9 @@ public:
     void setFonts(nxui::Font* normal, nxui::Font* small, nxui::Font* icons) {
         m_font = normal; m_smallFont = small; m_iconFont = icons;
     }
+    void setProfileTexture(const nxui::Texture* texture) { m_profileTexture = texture; }
     void onClose(std::function<void()> cb) { m_closeCb = std::move(cb); }
-    void onSessionGuard(std::function<void()> cb) { m_sessionGuardCb = std::move(cb); }
+    void onSessionGuard(std::function<void(bool)> cb) { m_sessionGuardCb = std::move(cb); }
 
     void show();
     void hide();
@@ -89,6 +91,18 @@ private:
     void updateNowPlayingSelection(int delta);
     void activateNowPlayingControl();
     void seekRelative(int64_t deltaMs);
+    void appendToQueue(const std::vector<uint64_t>& ids);
+
+    void refreshAdaptivePalette();
+    void finishAdaptivePaletteIfReady();
+    CoverRef selectedCover() const;
+    CoverRef playlistCover(size_t playlistIndex) const;
+    uint64_t playlistDurationMs(size_t playlistIndex) const;
+    uint64_t albumDurationMs(size_t albumIndex) const;
+    nxui::Color extractCoverAccent(const CoverRef& cover) const;
+    void drawReflectedCover(nxui::Renderer& ren, const CoverRef& cover,
+                            const nxui::Rect& rect, bool selected, int maxSide = 512);
+    void drawHomeMiniModule(nxui::Renderer& ren);
 
     const Track* currentTrack() const;
     const Track* trackForId(uint64_t id) const;
@@ -129,8 +143,9 @@ private:
     nxui::Font* m_font = nullptr;
     nxui::Font* m_smallFont = nullptr;
     nxui::Font* m_iconFont = nullptr;
+    const nxui::Texture* m_profileTexture = nullptr;
     std::function<void()> m_closeCb;
-    std::function<void()> m_sessionGuardCb;
+    std::function<void(bool)> m_sessionGuardCb;
 
     bool m_active = false;
     View m_view = View::Home;
@@ -146,7 +161,7 @@ private:
     LibrarySnapshot m_library;
     MusicPlaylistStore m_playlistStore;
     MusicClient m_client;
-    MusicCoverCache m_coverCache{16};
+    MusicCoverCache m_coverCache{10};
 
     std::future<LibrarySnapshot> m_scanFuture;
     std::atomic<uint32_t> m_filesVisited{0};
@@ -163,6 +178,24 @@ private:
     float m_uiTime = 0.f;
     bool m_nextSoonWasVisible = false;
     float m_nextToastTimer = 0.f;
+
+    // V0.02 visual transition and deferred GPU resource release.
+    float m_transitionAlpha = 0.f;
+    bool m_closing = false;
+    float m_hiddenCoverReleaseTimer = 0.f;
+    bool m_lastSessionGuardState = false;
+
+    // Cover-adaptive light music palette.
+    nxui::Color m_paletteAccent {0.46f, 0.31f, 0.92f, 1.f};
+    nxui::Color m_paletteTargetAccent {0.46f, 0.31f, 0.92f, 1.f};
+    nxui::Color m_paletteSoft {0.90f, 0.92f, 0.98f, 1.f};
+    std::string m_paletteCoverKey;
+    std::string m_paletteRequestedKey;
+    CoverRef m_paletteRequestedCover;
+    struct PaletteJobResult { std::string key; nxui::Color color; };
+    std::future<PaletteJobResult> m_paletteFuture;
+    bool m_paletteRunning = false;
+    std::unordered_map<std::string, nxui::Color> m_paletteCache;
 
     std::vector<size_t> m_searchResults;
     std::string m_searchQuery;

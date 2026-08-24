@@ -14,13 +14,13 @@ constexpr float kTimeScale = 1.28f;
 constexpr float kTabAnimDuration = 0.32f;
 constexpr float kPi = 3.14159265358979323846f;
 
-constexpr float kNavX = 440.f;
+constexpr float kNavX = 380.f;
 constexpr float kNavY = 18.f;
-constexpr float kNavW = 400.f;
+constexpr float kNavW = 520.f;
 constexpr float kNavH = 54.f;
 constexpr float kNavInset = 7.f;
 constexpr float kTabGap = 6.f;
-constexpr float kTabW = (kNavW - kNavInset * 2.f - kTabGap) * 0.5f;
+constexpr float kTabW = (kNavW - kNavInset * 2.f - kTabGap * 2.f) / 3.f;
 constexpr float kTabH = 40.f;
 
 float clamp01(float value) {
@@ -82,21 +82,26 @@ nxui::Rect DateTimeWidget::homeTabsRect() const {
 }
 
 void DateTimeWidget::setHomeApplicationsActive(bool active) {
-    if (m_homeApplicationsActive == active)
+    setHomeCategory(active ? 1 : 0);
+}
+
+void DateTimeWidget::setHomeCategory(int category) {
+    category = std::clamp(category, 0, 2);
+    if (m_homeCategory == category)
         return;
 
-    m_homeApplicationsActive = active;
+    m_homeCategory = category;
     m_homeTabAnimFrom = m_homeTabSlide;
-    m_homeTabAnimTo = active ? 1.f : 0.f;
+    m_homeTabAnimTo = static_cast<float>(category);
     m_homeTabAnimTime = 0.f;
     m_homeTabAnimating = true;
 }
 
 nxui::Rect DateTimeWidget::activeHomeTabRect() const {
     const float gamesX = kNavX + kNavInset;
-    const float appsX = gamesX + kTabW + kTabGap;
+    const float step = kTabW + kTabGap;
     return {
-        m_homeApplicationsActive ? appsX : gamesX,
+        gamesX + step * static_cast<float>(m_homeCategory),
         kNavY + kNavInset,
         kTabW,
         kTabH
@@ -130,7 +135,7 @@ void DateTimeWidget::onContentUpdate(float dt) {
             m_homeTabAnimating = false;
         }
     } else {
-        m_homeTabSlide = m_homeApplicationsActive ? 1.f : 0.f;
+        m_homeTabSlide = static_cast<float>(m_homeCategory);
         m_homeTabPop = 0.f;
     }
 
@@ -256,10 +261,12 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     // entry. The indicator is a real animated state controlled by the menu.
     const nxui::Rect navRect = homeTabsRect();
     const float gamesX = kNavX + kNavInset;
-    const float appsX = gamesX + kTabW + kTabGap;
+    const float stepX = kTabW + kTabGap;
+    const float appsX = gamesX + stepX;
+    const float musicX = gamesX + stepX * 2.f;
     const float slide = m_homeTabSlide;
     nxui::Rect activeRect {
-        gamesX + (appsX - gamesX) * slide,
+        gamesX + stepX * slide,
         kNavY + kNavInset,
         kTabW,
         kTabH
@@ -331,16 +338,23 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         i18n.tr("home.tabs.games", "Jeux");
     const std::string apps =
         i18n.tr("home.tabs.apps", "Applications");
+    const std::string music =
+        i18n.tr("home.tabs.music", "Musique");
 
     const nxui::Vec2 gamesSz = dateFont->measure(games);
     const nxui::Vec2 appsSz = dateFont->measure(apps);
+    const nxui::Vec2 musicSz = dateFont->measure(music);
     const float gamesCenterX = gamesX + kTabW * 0.5f;
     const float appsCenterX = appsX + kTabW * 0.5f;
+    const float musicCenterX = musicX + kTabW * 0.5f;
     const float textY = kNavY + (kNavH - gamesSz.y) * 0.5f;
 
-    const float clampedSlide = clamp01(slide);
-    const float gamesActive = 1.f - clampedSlide;
-    const float appsActive = clampedSlide;
+    auto proximity = [](float value, float center) {
+        return 1.f - std::clamp(std::abs(value - center), 0.f, 1.f);
+    };
+    const float gamesActive = proximity(slide, 0.f);
+    const float appsActive = proximity(slide, 1.f);
+    const float musicActive = proximity(slide, 2.f);
 
     const nxui::Color inactive(0.985f, 0.99f, 1.00f, 0.98f * m_opacity);
     const nxui::Color active(0.045f, 0.052f, 0.065f, 0.98f * m_opacity);
@@ -363,6 +377,8 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const nxui::Color gamesShadow = mixColor(darkShadow, lightShadow, gamesActive);
     const nxui::Color appsColor = mixColor(inactive, active, appsActive);
     const nxui::Color appsShadow = mixColor(darkShadow, lightShadow, appsActive);
+    const nxui::Color musicColor = mixColor(inactive, active, musicActive);
+    const nxui::Color musicShadow = mixColor(darkShadow, lightShadow, musicActive);
 
     // V10.30: Nintendo Switch L/R glyphs sit at the true outer edges of the
     // category capsule. E0E4/E0E5 are the same controller-icon font mappings
@@ -385,10 +401,12 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     constexpr float kLROuterGap = 14.f;
     const float lCenterX = navRect.x - kLROuterGap - lW * 0.5f;
     const float rCenterX = navRect.right() + kLROuterGap + rW * 0.5f;
-    const nxui::Color lColor = gamesColor;
-    const nxui::Color rColor = appsColor;
-    const nxui::Color lShadow = gamesShadow;
-    const nxui::Color rShadow = appsShadow;
+    // V0.02 HOME correction: L/R are invariant white system glyphs. They do
+    // not inherit active/inactive text colours from the sliding lens.
+    const nxui::Color lColor(0.99f, 0.995f, 1.00f, 0.98f * m_opacity);
+    const nxui::Color rColor(0.99f, 0.995f, 1.00f, 0.98f * m_opacity);
+    const nxui::Color lShadow(0.f, 0.f, 0.f, 0.42f * m_opacity);
+    const nxui::Color rShadow(0.f, 0.f, 0.f, 0.42f * m_opacity);
     ren.drawText(lDraw,
                  {lCenterX - lW * 0.5f + 0.8f,
                   kNavY + (kNavH - lH) * 0.5f + 1.f},
@@ -434,6 +452,23 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         {appsCenterX - appsSz.x * 0.5f, appsTextY},
         dateFont,
         appsColor,
+        1.f
+    );
+
+    const float musicTextY =
+        kNavY + (kNavH - musicSz.y) * 0.5f;
+    ren.drawText(
+        music,
+        {musicCenterX - musicSz.x * 0.5f + 1.f, musicTextY + 1.3f},
+        dateFont,
+        musicShadow,
+        1.f
+    );
+    ren.drawText(
+        music,
+        {musicCenterX - musicSz.x * 0.5f, musicTextY},
+        dateFont,
+        musicColor,
         1.f
     );
 }

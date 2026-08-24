@@ -24,6 +24,7 @@ public:
 
     void setUid(AccountUid uid) { m_uid = uid; }
     AccountUid uid() const { return m_uid; }
+    const nxui::Texture* avatarTexture() const { return m_avatarTexture.valid() ? &m_avatarTexture : nullptr; }
 
     void setNickname(const std::string& nickname) {
         m_nickname = nickname;
