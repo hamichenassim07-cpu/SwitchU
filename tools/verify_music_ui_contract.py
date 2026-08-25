@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-side invariants for SwitchU Music V8.3 crash-fix safe-style contract.
+"""Host-side invariants for SwitchU Music V9 MD-Vinyl visual refactor contract.
 
 This intentionally performs source-level checks without requiring devkitPro. It
 is a regression guard, not a substitute for the real Switch build/test.
@@ -223,32 +223,49 @@ require("setWifiVisible(false)" in integration and "setWifiVisible(true)" in int
 for token in ("front", "back", "depthPx", "drawVinyl", "vinylReveal", "vinylSpinRad"):
     require(token in physical_cpp + physical_hpp, f"physical-media contract missing: {token}")
 
-# V8.3 console crash fix: the secondary artwork decode worker is gone, not just
-# gated. Real-console logs reached SCAN_LIBRARY done and LOAD_COVER successfully
-# before dying immediately after [music-style] worker begin. Style resolution
-# must therefore remain decoder-free and thread-free.
+# V9 keeps the V8.3 console crash fix: there is still no detached/async artwork
+# worker and no second artwork decode. Instead, one synchronous UI-thread decode
+# supplies both the GPU texture and the album-dominant accent.
 require("m_coverCache.requestStyle(" not in music_cpp,
-        "MusicScreen unexpectedly requests the removed artwork worker")
-require("safeSyntheticArtworkStyle" in cover_cache_cpp,
-        "V8.3 safe synthetic per-album style resolver is missing")
+        "MusicScreen unexpectedly requests an artwork worker")
 require("std::thread" not in cover_cache_cpp and "std::async" not in cover_cache_cpp,
-        "MusicCoverCache reintroduced a background job")
-require("stbi_load_from_memory" not in cover_cache_cpp,
-        "MusicCoverCache reintroduced a second full artwork decode")
-request_pos = cover_cache_cpp.find("void MusicCoverCache::requestStyle")
-require(request_pos >= 0 and "(void)ref" in cover_cache_cpp[request_pos:request_pos + 500],
-        "requestStyle is no longer the safe no-worker compatibility stub")
-get_back_pos = cover_cache_cpp.find("nxui::Texture* MusicCoverCache::getBack")
-require(get_back_pos >= 0 and "return nullptr" in cover_cache_cpp[get_back_pos:get_back_pos + 700],
-        "rear sleeve can trigger a second artwork texture load again")
-for forbidden in ("sampleArtworkStyle", "generateBackTexture", "artwork_style_cache_v7.json",
-                  "artwork_back_cache", "m_styleWorker", "m_styleRunning"):
-    require(forbidden not in cover_cache_cpp + cover_cache_hpp,
-            f"removed unstable artwork pipeline returned: {forbidden}")
+        "MusicCoverCache reintroduced a background image job")
+require(cover_cache_cpp.count("stbi_load_from_memory") == 1,
+        "V9 artwork path must contain exactly one full decode site")
+require("loadFromPixels" in cover_cache_cpp and "m_styles[ref.key()]" in cover_cache_cpp,
+        "single-decode texture/accent path is missing")
+require("styleFromPixels" in cover_cache_cpp and "rgbToHsv" in cover_cache_cpp,
+        "real cover-derived dominant accent extraction is missing")
+require("MusicArtworkStyle MusicCoverCache::styleFor" in cover_cache_cpp and "m_styles.find" in cover_cache_cpp,
+        "resolved artwork style cache is missing")
+require("std::future" not in cover_cache_hpp and "m_styleFuture" not in cover_cache_cpp,
+        "artwork analysis unexpectedly uses a future")
+require("StyleWorkerState" not in cover_cache_hpp and "m_styleWorker" not in cover_cache_cpp,
+        "removed secondary artwork worker returned")
+require("getBack" in cover_cache_cpp and "return nullptr" in cover_cache_cpp,
+        "rear sleeve can trigger a second artwork texture load")
+require("single_decode_accent=ON" in music_cpp and "artwork_worker=OFF" in music_cpp,
+        "V9 safe single-decode runtime mode is not declared")
 require("gMusicAccent = artworkAccent" in music_cpp,
-        "Music accent plumbing changed during V8.3 crash fix")
-require("secondary_decode=OFF" in music_cpp,
-        "V8.3 safe-style mode is not declared in the runtime log")
+        "Music accent plumbing is missing")
+
+# V9 composition contract from the approved mockups.
+require("coverFlowSize" in music_cpp and "coverFlowCenterOffset" in music_cpp,
+        "MD-Vinyl Cover Flow geometry helpers are missing")
+require("-delta * 39.f" in music_cpp and "-64.f, 64.f" in music_cpp,
+        "Cover Flow no longer uses the strong perspective/yaw treatment")
+require("constexpr int rows = 7" in music_cpp,
+        "album tracklist must expose seven visible rows")
+require("setHomeTabsVisible(rootView())" in music_cpp,
+        "HOME category pill is not limited to Music root")
+require("m_homeTabsVisible" in text("projects/menu/src/widgets/DateTimeWidget.hpp"),
+        "DateTimeWidget cannot suppress only the HOME category capsule")
+require("album's real dominant colour" in music_cpp or "real dominant colour" in music_cpp,
+        "dynamic selected-track accent contract is missing")
+require("tiny animated equalizer" in music_cpp,
+        "playing-track equalizer indicator is missing")
+require("artwork_worker=OFF" in music_cpp,
+        "worker-off diagnostic is missing")
 
 # V8 carries forward 3D lighting, level-of-detail, perspective reflection and micro-parallax.
 for token in ("faceLight", "detailLevel", "vinylOutline", "vinylLagPx"):
@@ -268,9 +285,9 @@ require("0.235f" in physical_cpp,
 require("m_marqueeElapsed" in music_cpp and "drawMarqueeOrFit" in music_cpp and
         "constexpr float delay=1.0f" in music_cpp,
         "contextual marquee engine is missing")
-require("titleMarquee" in music_cpp and "artistMarquee" in music_cpp and
+require("drawMarqueeOrFit(ren, title" in music_cpp and
         "View::NowPlaying && m_status.track_id" in music_cpp,
-        "Now Playing long title/artist marquee was not extended")
+        "Now Playing title marquee support is missing")
 require("drawSmokedGlassPanel" in music_cpp,
         "dark smoked/frosted glass information surfaces are missing")
 require("drawPreviousRootCarousel" in music_cpp and "m_rootCategoryPreviousView" in music_hpp,
@@ -306,8 +323,8 @@ require("std::future" not in cover_cache_hpp and "m_styleFuture" not in cover_ca
         "artwork analysis still uses a future that may block on destruction")
 require("StyleWorkerState" not in cover_cache_hpp and "std::thread" not in cover_cache_cpp,
         "removed secondary artwork worker returned")
-require("preflightArtwork" in cover_cache_cpp and "embedded artwork preflight rejected" in cover_cache_cpp,
-        "embedded artwork is not preflighted before image decode")
+require("preflightArtwork" in cover_cache_cpp and "artwork preflight rejected" in cover_cache_cpp,
+        "artwork is not preflighted before image decode")
 
 # No renderer-side fake blur fallback; rear material is either cached texture or
 # the derived smoked back colour.
@@ -320,8 +337,8 @@ require("CircleLut" in physical_cpp and "circleLut(" in physical_cpp,
         "vinyl unit-circle geometry is not precomputed")
 require("pose.detailLevel >= 1" in physical_cpp and "geo.vinylOutlineCount=pose.detailLevel" in physical_cpp,
         "far-neighbour vinyl LOD is not aggressively simplified")
-require("std::abs(delta) < 1.65f ? 320 : 220" in music_cpp,
-        "root carousel does not use the three-tier 512/320/220 physical LOD")
+require("? 512" in music_cpp and "? 320 : 220" in music_cpp,
+        "root Cover Flow does not use the three-tier 512/320/220 physical LOD")
 require("std::vector<size_t> ends" not in music_cpp,
         "fitText still allocates a codepoint vector on the frame path")
 
@@ -336,10 +353,10 @@ runner = ROOT / "romfs/icons/music_now_playing_runner.png"
 require(not runner.exists(), "Nintendo/runner image is bundled; asset choice must remain external")
 
 if failures:
-    print("SwitchU Music V8.3 CRASH-FIX contract: FAILED", file=sys.stderr)
+    print("SwitchU Music V9 MD-VINYL contract: FAILED", file=sys.stderr)
     for failure in failures:
         print(f" - {failure}", file=sys.stderr)
     sys.exit(1)
 
-print("SwitchU Music V8.3 CRASH-FIX contract: OK")
+print("SwitchU Music V9 MD-VINYL contract: OK")
 print("FIX6 audio hashes: OK")
