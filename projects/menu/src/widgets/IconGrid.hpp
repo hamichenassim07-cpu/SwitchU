@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <cstdint>
+#include "HomeCarouselMotion.hpp"
 
 class GlossyIcon;
 
@@ -76,13 +77,13 @@ public:
     void endTouchScroll(float fingerVelocityPixelsPerSecond);
 
     bool isTouchScrolling() const {
-        return m_touchScrolling;
+        return m_carouselMotion.touchScrolling;
     }
 
     bool isScrollMoving() const {
-        return m_touchScrolling ||
-               m_inertiaActive ||
-               m_snapActive;
+        return m_carouselMotion.touchScrolling ||
+               m_carouselMotion.inertiaActive ||
+               m_carouselMotion.snapActive;
     }
 
     int consumeSettledFocusIndex();
@@ -98,13 +99,11 @@ private:
     void layoutCarousel();
     void layoutAtScrollPosition();
     void updateDisplayCount();
-    void startSnapToNearest();
     void finishSnap();
     bool isGlobalIndexVisible(int globalIndex) const;
 
     int visibleSlotCount() const;
     float maxScrollPosition() const;
-    float desiredScrollPositionForFocus(int focusedDisplayPosition) const;
 
     std::vector<std::shared_ptr<GlossyIcon>> m_allIcons;
     std::vector<int> m_displayIndices;
@@ -118,20 +117,14 @@ private:
     int m_displayCount = 0;
     int m_windowStart = 0;
 
-    float m_cellW = 310.f;
-    float m_cellH = 310.f;
+    float m_cellW = switchu::homeui::kCarouselSelectedSize;
+    float m_cellH = switchu::homeui::kCarouselSelectedSize;
     float m_padX = 0.f;
     float m_originX = 0.f;
     float m_originY = 0.f;
 
-    float m_scrollPosition = 0.f;
-    float m_scrollVelocity = 0.f;
-    float m_snapTarget = 0.f;
-    float m_touchFocusOffset = 0.f;
+    switchu::homeui::HomeCarouselMotionState m_carouselMotion{};
 
-    bool m_touchScrolling = false;
-    bool m_inertiaActive = false;
-    bool m_snapActive = false;
     bool m_preserveScrollOnNextFocus = false;
     bool m_selectionBounceActive = false;
     bool m_entryBouncePending = false;

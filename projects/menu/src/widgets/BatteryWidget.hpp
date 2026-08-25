@@ -11,6 +11,8 @@ public:
     void setFont(nxui::Font* f) { m_font = f; }
     void setTextColor(const nxui::Color& c) { m_textColor = c; }
     void setBatteryStatus(uint32_t percentage, bool charging);
+    void setWifiVisible(bool visible) { m_wifiVisible = visible; }
+    bool wifiVisible() const { return m_wifiVisible; }
 
 protected:
     void onRender(nxui::Renderer& ren) override;
@@ -26,6 +28,7 @@ private:
     float m_chargeAnim = 0.f;
     float m_wifiTimer = 1.f;
     bool m_nifmReady = false;
+    bool m_wifiVisible = true;
     bool m_wifiRadioEnabled = false;
     bool m_wifiConnected = false;
     uint32_t m_wifiStrength = 0;

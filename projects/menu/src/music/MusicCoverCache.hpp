@@ -17,7 +17,7 @@ class MusicCoverCache {
 public:
     explicit MusicCoverCache(size_t maxEntries = 18) : m_maxEntries(maxEntries) {}
 
-    const nxui::Texture* get(const CoverRef& ref, nxui::Renderer& ren, int maxSide = 256);
+    nxui::Texture* get(const CoverRef& ref, nxui::Renderer& ren, int maxSide = 256);
     void clear();
     void resetFailures() { m_failed.clear(); }
     size_t size() const { return m_lru.size(); }

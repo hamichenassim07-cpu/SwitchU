@@ -107,47 +107,50 @@ void BatteryWidget::onContentRender(nxui::Renderer& ren) {
     const float op = opacity();
     const float level = std::clamp(m_level, 0.f, 1.f);
 
-    // Real NIFM Wi-Fi indicator. It is deliberately drawn immediately to the
-    // left of the battery widget without a background capsule.
-    const nxui::Color wifiOn = m_textColor.withAlpha(0.95f * op);
-    const nxui::Color wifiOff = m_textColor.withAlpha(0.18f * op);
-    const float wifiX = cr.x - 50.f;
-    const float wifiY = cr.y + cr.height * 0.5f + 12.f;
+    if (m_wifiVisible) {
+        // Real NIFM Wi-Fi indicator. It is deliberately drawn immediately to the
+        // left of the battery widget without a background capsule.
+        const nxui::Color wifiOn = m_textColor.withAlpha(0.95f * op);
+        const nxui::Color wifiOff = m_textColor.withAlpha(0.18f * op);
+        const float wifiX = cr.x - 50.f;
+        const float wifiY = cr.y + cr.height * 0.5f + 12.f;
 
-    auto drawWifiArc = [&](float radius, bool active, float thickness) {
-        constexpr int segments = 40;
-        constexpr float startA = 3.78f;
-        constexpr float endA = 5.64f;
-        nxui::Vec2 prev{
-            wifiX + std::cos(startA) * radius,
-            wifiY + std::sin(startA) * radius
-        };
-        for (int i = 1; i <= segments; ++i) {
-            const float a = startA + (endA - startA) *
-                (static_cast<float>(i) / static_cast<float>(segments));
-            nxui::Vec2 cur{
-                wifiX + std::cos(a) * radius,
-                wifiY + std::sin(a) * radius
+        auto drawWifiArc = [&](float radius, bool active, float thickness) {
+            constexpr int segments = 40;
+            constexpr float startA = 3.78f;
+            constexpr float endA = 5.64f;
+            nxui::Vec2 prev{
+                wifiX + std::cos(startA) * radius,
+                wifiY + std::sin(startA) * radius
             };
-            ren.drawLine(prev, cur, active ? wifiOn : wifiOff, thickness);
-            prev = cur;
+            for (int i = 1; i <= segments; ++i) {
+                const float a = startA + (endA - startA) *
+                    (static_cast<float>(i) / static_cast<float>(segments));
+                nxui::Vec2 cur{
+                    wifiX + std::cos(a) * radius,
+                    wifiY + std::sin(a) * radius
+                };
+                ren.drawLine(prev, cur, active ? wifiOn : wifiOff, thickness);
+                prev = cur;
+            }
+        };
+
+        // 0..3 bars returned directly by Horizon/NIFM.
+        const bool bar1 = m_wifiConnected && m_wifiStrength >= 1u;
+        const bool bar2 = m_wifiConnected && m_wifiStrength >= 2u;
+        const bool bar3 = m_wifiConnected && m_wifiStrength >= 3u;
+        ren.drawCircle({wifiX, wifiY - 1.f}, 3.5f,
+                       m_wifiConnected ? wifiOn : wifiOff, 14);
+        drawWifiArc(11.0f, bar1, 2.8f);
+        drawWifiArc(18.5f, bar2, 2.8f);
+        drawWifiArc(26.0f, bar3, 2.8f);
+
+        if (!m_wifiRadioEnabled) {
+            ren.drawLine({wifiX - 16.f, wifiY - 23.f},
+                         {wifiX + 17.f, wifiY + 3.f},
+                         m_textColor.withAlpha(0.72f * op), 2.7f);
         }
-    };
 
-    // 0..3 bars returned directly by Horizon/NIFM.
-    const bool bar1 = m_wifiConnected && m_wifiStrength >= 1u;
-    const bool bar2 = m_wifiConnected && m_wifiStrength >= 2u;
-    const bool bar3 = m_wifiConnected && m_wifiStrength >= 3u;
-    ren.drawCircle({wifiX, wifiY - 1.f}, 3.5f,
-                   m_wifiConnected ? wifiOn : wifiOff, 14);
-    drawWifiArc(11.0f, bar1, 2.8f);
-    drawWifiArc(18.5f, bar2, 2.8f);
-    drawWifiArc(26.0f, bar3, 2.8f);
-
-    if (!m_wifiRadioEnabled) {
-        ren.drawLine({wifiX - 16.f, wifiY - 23.f},
-                     {wifiX + 17.f, wifiY + 3.f},
-                     m_textColor.withAlpha(0.72f * op), 2.7f);
     }
 
     char buffer[16] = {};

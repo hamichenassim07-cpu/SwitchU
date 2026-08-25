@@ -23,6 +23,13 @@ public:
     void setMoveMode(bool active) { m_moveMode = active; }
     bool moveMode() const { return m_moveMode; }
 
+    // Native HOME Music mode: same title widget/geometry/animation, but the
+    // lower HOME action strip becomes duration + X/Lire + A/Ouvrir.
+    void setMusicMode(bool enabled) { m_musicMode = enabled; }
+    bool musicMode() const { return m_musicMode; }
+    void setMusicDurationText(const std::string& text) { m_musicDurationText = text; }
+    void setMusicPlayable(bool playable) { m_musicPlayable = playable; }
+
     // V10.6 profile mode. The implementation below reuses the exact
     // TitlePillWidget behaviour from Switch U master for profile focus.
     void setProfileOriginalMode(bool enabled);
@@ -49,6 +56,9 @@ private:
     bool m_hideOnCollapse = false;
     bool m_showGameActions = false;
     bool m_moveMode = false;
+    bool m_musicMode = false;
+    bool m_musicPlayable = false;
+    std::string m_musicDurationText;
     bool m_profileOriginalMode = false;
     std::uint64_t m_selectedTitleId = 0;
     std::uint64_t m_playTimeMinutes = 0;

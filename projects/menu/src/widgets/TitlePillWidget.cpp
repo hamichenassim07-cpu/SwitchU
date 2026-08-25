@@ -1,6 +1,7 @@
 #include "TitlePillWidget.hpp"
 #include "LaunchAnimation.hpp"
 #include "../core/PlayTimeProvider.hpp"
+#include "HomeTypographyStyle.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <nxui/core/I18n.hpp>
 #include <algorithm>
@@ -17,14 +18,14 @@ constexpr float kActionsSeparatorY = 596.f;
 constexpr float kActionsSeparatorWidth = 420.f;
 constexpr float kActionsSeparatorHeight = 2.4f;
 constexpr float kActionsRowY = 622.f;
-constexpr float kActionLabelScale = 0.83f;
-constexpr float kActionGlyphScale = 0.97f;
+constexpr float kActionLabelScale = switchu::homeui::kMinimumMainTextScale;
+constexpr float kActionGlyphScale = switchu::homeui::kMainActionGlyphScale;
 constexpr float kActionGap = 8.f;
 constexpr float kActionPairGap = 42.f;
 
 // V10.28: play time and A/Lancer share one balanced line. Y is deliberately
 // absent from the permanent HOME and appears only while move mode is active.
-constexpr float kPlayTimeTextScale = 0.83f;
+constexpr float kPlayTimeTextScale = switchu::homeui::kMinimumMainTextScale;
 constexpr float kPlayTimeClockDiameter = 25.0f; // V10.30: +56% vs V10.29
 constexpr float kPlayTimeGap = 9.f;
 constexpr float kPlayTimeCenterX = 570.f;
@@ -48,6 +49,33 @@ std::string utf8CodepointTP(unsigned cp) {
         out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     }
     return out;
+}
+
+std::string fitMusicTitleAtFixedScale(nxui::Font* font, const std::string& text,
+                                      float maxWidth, float scale) {
+    if (!font || text.empty() || maxWidth <= 1.f || scale <= 0.f)
+        return text;
+    if (font->measure(text).x * scale <= maxWidth)
+        return text;
+
+    const std::string ellipsis = "…";
+    const float ellipsisW = font->measure(ellipsis).x * scale;
+    if (ellipsisW >= maxWidth)
+        return ellipsis;
+
+    std::string fitted = text;
+    while (!fitted.empty()) {
+        // Remove exactly one UTF-8 code point from the end; never split a
+        // multibyte character merely to make a HOME title fit.
+        std::size_t cut = fitted.size() - 1;
+        while (cut > 0 &&
+               (static_cast<unsigned char>(fitted[cut]) & 0xC0u) == 0x80u)
+            --cut;
+        fitted.resize(cut);
+        if (font->measure(fitted).x * scale + ellipsisW <= maxWidth)
+            return fitted + ellipsis;
+    }
+    return ellipsis;
 }
 
 }
@@ -311,12 +339,19 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
 
     nxui::Rect cr = contentRect();
     cr.y += launchYOffset;
-    const nxui::Vec2 base = m_font->measure(m_text);
+    // Music follows the HOME title size exactly. Long album/playlist names
+    // are truncated instead of shrinking typography below the HOME rhythm.
+    // The normal Jeux/Applications path remains byte-for-byte equivalent to
+    // V10.30 and may keep its historical limited downscale.
+    float scale = kV9TitleScale;
+    const std::string displayText = m_musicMode
+        ? fitMusicTitleAtFixedScale(m_font, m_text, cr.width, scale)
+        : m_text;
+    const nxui::Vec2 base = m_font->measure(displayText);
     if (base.x <= 0.f || base.y <= 0.f)
         return;
 
-    float scale = kV9TitleScale;
-    if (base.x * scale > cr.width && cr.width > 1.f)
+    if (!m_musicMode && base.x * scale > cr.width && cr.width > 1.f)
         scale = std::max(0.92f, cr.width / base.x);
 
     const nxui::Vec2 textSz = {base.x * scale, base.y * scale};
@@ -329,22 +364,22 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
     // V10.3: keep the V9 size, but make ONLY the carousel title visually
     // heavier. Sub-pixel duplicate passes emulate a semibold face without
     // enlarging the text or changing the rest of the HOME typography.
-    ren.drawText(m_text,
+    ren.drawText(displayText,
                  {tx + 1.2f, ty + 1.6f},
                  m_font,
                  nxui::Color(0.f, 0.f, 0.f, 0.44f * m_opacity * reveal * launchAlpha),
                  scale);
-    ren.drawText(m_text,
+    ren.drawText(displayText,
                  {tx, ty},
                  m_font,
                  m_textColor.withAlpha(m_opacity * reveal * launchAlpha),
                  scale);
-    ren.drawText(m_text,
+    ren.drawText(displayText,
                  {tx + 0.48f, ty},
                  m_font,
                  m_textColor.withAlpha(0.62f * m_opacity * reveal * launchAlpha),
                  scale);
-    ren.drawText(m_text,
+    ren.drawText(displayText,
                  {tx - 0.38f, ty},
                  m_font,
                  m_textColor.withAlpha(0.42f * m_opacity * reveal * launchAlpha),
@@ -365,6 +400,55 @@ void TitlePillWidget::onContentRender(nxui::Renderer& ren) {
 
         auto& i18n = nxui::I18n::instance();
         nxui::Font* glyphFont = m_iconFont ? m_iconFont : m_font;
+
+        if (m_musicMode) {
+            const std::string xGlyph = utf8CodepointTP(0xE0E2);
+            const std::string aGlyph = utf8CodepointTP(0xE0E0);
+            const std::string readLabel = "Lire";
+            const std::string openLabel = "Ouvrir";
+            const nxui::Color durationColor(
+                0.94f, 0.96f, 0.98f, 0.88f * m_opacity * launchAlpha);
+            const nxui::Color glyphColor(
+                0.98f, 1.f, 0.99f, 0.98f * m_opacity * launchAlpha);
+            const nxui::Color disabledGlyph(
+                0.68f, 0.70f, 0.74f, 0.34f * m_opacity * launchAlpha);
+            const nxui::Color labelColor(
+                0.94f, 0.96f, 0.98f, 0.92f * m_opacity * launchAlpha);
+            const nxui::Color disabledLabel(
+                0.68f, 0.70f, 0.74f, 0.34f * m_opacity * launchAlpha);
+
+            auto pairWidth = [&](const std::string& glyph, const std::string& label) {
+                return glyphFont->measure(glyph).x * kActionGlyphScale + kActionGap +
+                       m_font->measure(label).x * kActionLabelScale;
+            };
+            const float durationW = m_font->measure(m_musicDurationText).x * kActionLabelScale;
+            const float readW = pairWidth(xGlyph, readLabel);
+            const float openW = pairWidth(aGlyph, openLabel);
+            constexpr float gap1 = 38.f;
+            constexpr float gap2 = 34.f;
+            const float total = durationW + gap1 + readW + gap2 + openW;
+            float x = kV9TitleCenterX - total * 0.5f;
+
+            ren.drawText(m_musicDurationText, {x, kActionsRowY + launchYOffset + 2.f},
+                         m_font, durationColor, kActionLabelScale);
+            x += durationW + gap1;
+
+            auto drawPair = [&](const std::string& glyph, const std::string& label,
+                                bool enabled) {
+                const float glyphW = glyphFont->measure(glyph).x * kActionGlyphScale;
+                ren.drawText(glyph, {x, kActionsRowY + launchYOffset}, glyphFont,
+                             enabled ? glyphColor : disabledGlyph, kActionGlyphScale);
+                ren.drawText(label, {x + glyphW + kActionGap,
+                                     kActionsRowY + launchYOffset + 2.f},
+                             m_font, enabled ? labelColor : disabledLabel,
+                             kActionLabelScale);
+                x += pairWidth(glyph, label);
+            };
+            drawPair(xGlyph, readLabel, m_musicPlayable);
+            x += gap2;
+            drawPair(aGlyph, openLabel, true);
+            return;
+        }
         const nxui::Color glyphColor(
             0.98f, 1.f, 0.99f, 0.98f * m_opacity * launchAlpha);
         const nxui::Color labelColor(

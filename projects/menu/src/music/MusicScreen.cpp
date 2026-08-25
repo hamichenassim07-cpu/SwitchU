@@ -1,15 +1,16 @@
 #include "MusicScreen.hpp"
 
 #include "core/DebugLog.hpp"
+#include "widgets/HomeCarouselStyle.hpp"
+#include "widgets/HomeLiquidGlassStyle.hpp"
+#include "widgets/HomeTypographyStyle.hpp"
 #include <nxui/core/Renderer.hpp>
-#include <switch.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -20,16 +21,16 @@ namespace {
 constexpr float kScreenW = 1280.f;
 constexpr float kScreenH = 720.f;
 constexpr float kBottomY = 681.f;
-constexpr float kRootCoverY = 166.f;
-constexpr float kRootSelectedSize = 310.f;
-constexpr float kRootNeighborSize = 230.f;
-constexpr float kRootSpacing = 284.f;
-constexpr float kHomeTabAnimDuration = 0.32f;
+constexpr float kFloorY = 492.f;
+constexpr float kFloorH = kScreenH - kFloorY;
+// HOME main-screen typography. 0.83 is the smallest permanent HOME scale
+// used in the title/actions region; Music never renders readable text below it.
+constexpr float kHomeMinTextScale = switchu::homeui::kMinimumMainTextScale;
 const nxui::Color kMusicAccent {0.54f, 0.72f, 1.00f, 1.f};
 
 // V0.02: Albums / Playlists are secondary Music views. The real HOME
 // hierarchy stays visually present above them: Jeux / Applications / Musique.
-constexpr int kTabCount = 2;
+constexpr int kRootCategoryCount = 2;
 
 // Render helpers use this frame alpha so HOME <-> Music can cross-fade
 // without rebuilding either side of the interface.
@@ -78,13 +79,6 @@ float smoothStep(float v) {
     v = clamp01(v);
     return v * v * (3.f - 2.f * v);
 }
-float easeOutBackHome(float t) {
-    t = clamp01(t);
-    constexpr float c1 = 1.45f;
-    constexpr float c3 = c1 + 1.f;
-    const float x = t - 1.f;
-    return 1.f + c3 * x * x * x + c1 * x * x;
-}
 
 bool statusFlag(const switchu::music::Status& st, uint32_t flag) {
     return (st.flags & flag) != 0;
@@ -110,6 +104,10 @@ MusicScreen::MusicScreen() {
     setFocusable(false);
     setFrameworkTouchEnabled(false);
     setTag("switchu_music_v002");
+    m_musicHomeCard.forceVisible();
+    m_musicHomeCard.setFocusable(false);
+    m_musicHomeCard.setLiquidGlassEnabled(true);
+    m_musicHomeCard.setLiquidGlassShaderEnabled(false);
     setupActions();
 }
 
@@ -170,27 +168,26 @@ void MusicScreen::setupActions() {
             seekRelative(10'000);
     });
 
-    addDirectionAction(nxui::FocusDirection::UP, [this]() {
-        if (m_modal != Modal::None) {
-            modalMove(0, -1);
-            return;
-        }
-        if (m_view == View::Albums || m_view == View::Playlists) {
-            setTab(m_tabIndex - 1);
-            return;
-        }
+    // D-pad Up/Down exclusively owns Albums <-> Playlists at the Music root.
+    // The left analog stick remains usable inside tracklists/controls, but can
+    // never change the root category accidentally.
+    addAction(static_cast<uint64_t>(nxui::Button::DUp), [this]() {
+        if (m_modal != Modal::None) { modalMove(0, -1); return; }
+        if (rootView()) { setRootCategory(rootCategoryIndex() - 1); return; }
         moveSelection(0, -1);
     });
-    addDirectionAction(nxui::FocusDirection::DOWN, [this]() {
-        if (m_modal != Modal::None) {
-            modalMove(0, 1);
-            return;
-        }
-        if (m_view == View::Albums || m_view == View::Playlists) {
-            setTab(m_tabIndex + 1);
-            return;
-        }
+    addAction(static_cast<uint64_t>(nxui::Button::DDown), [this]() {
+        if (m_modal != Modal::None) { modalMove(0, 1); return; }
+        if (rootView()) { setRootCategory(rootCategoryIndex() + 1); return; }
         moveSelection(0, 1);
+    });
+    addAction(static_cast<uint64_t>(nxui::Button::LStickU), [this]() {
+        if (m_modal != Modal::None) { modalMove(0, -1); return; }
+        if (!rootView()) moveSelection(0, -1);
+    });
+    addAction(static_cast<uint64_t>(nxui::Button::LStickD), [this]() {
+        if (m_modal != Modal::None) { modalMove(0, 1); return; }
+        if (!rootView()) moveSelection(0, 1);
     });
     addDirectionAction(nxui::FocusDirection::LEFT, [this]() {
         if (m_modal != Modal::None) modalMove(-1, 0); else moveSelection(-1, 0);
@@ -211,9 +208,8 @@ void MusicScreen::show() {
     m_view = View::Albums;
     m_nowPlayingReturnView = View::Albums;
     m_queueReturnView = View::NowPlaying;
-    m_tabIndex = 0;
     m_selection = 0;
-    m_carouselVisualIndex = 0.f;
+    switchu::homeui::jumpCarouselTo(m_rootCarouselMotion, 0, rootItemCount());
     m_listVisualSelection = 0.f;
     m_detailTransition = 1.f;
     m_detailClosing = false;
@@ -221,12 +217,12 @@ void MusicScreen::show() {
     m_nowPlayingClosing = false;
     m_nowPlayingReturnSelection = 0;
     m_queueReturnSelection = 0;
-    m_homeTabSlide = 1.f;
-    m_homeTabAnimFrom = 1.f;
-    m_homeTabAnimTo = 2.f;
-    m_homeTabAnimTime = 0.f;
-    m_homeTabAnimating = true;
     m_rootInfoReveal = 1.f;
+    m_rootCategoryTransition = 1.f;
+    m_rootCategoryDirection = 1;
+    m_rootCategoryHintTimer = 0.f;
+    m_rootEntryBounceActive = true;
+    m_rootEntryBounceTime = 0.f;
     m_modal = Modal::None;
     m_client.loadQueueTrackIds();
     refreshStatus(true);
@@ -321,7 +317,7 @@ void MusicScreen::finishScanIfReady() {
     }
 
     clampSelectionForView();
-    if (rootView()) m_carouselVisualIndex = static_cast<float>(m_selection);
+    if (rootView()) switchu::homeui::jumpCarouselTo(m_rootCarouselMotion, m_selection, rootItemCount());
     DebugLog::log("[music-diag] SCAN_LIBRARY done tracks=%zu albums=%zu artists=%zu",
                   m_library.tracks.size(), m_library.albums.size(), m_library.artists.size());
 }
@@ -374,17 +370,6 @@ void MusicScreen::refreshStatus(bool force) {
 }
 
 
-void MusicScreen::updateBattery(float dt) {
-    m_batteryTimer += dt;
-    if (m_batteryTimer < 1.f) return;
-    m_batteryTimer = 0.f;
-    u32 charge = 100;
-    if (R_SUCCEEDED(psmGetBatteryChargePercentage(&charge)))
-        m_batteryPercent = std::min<u32>(100, charge);
-    PsmChargerType type = PsmChargerType_Unconnected;
-    if (R_SUCCEEDED(psmGetChargerType(&type)))
-        m_batteryCharging = type != PsmChargerType_Unconnected;
-}
 
 void MusicScreen::onUpdate(float dt) {
     m_uiTime += dt;
@@ -416,22 +401,6 @@ void MusicScreen::onUpdate(float dt) {
     m_hiddenGuardTimer = 0.f;
     m_transitionAlpha = std::min(1.f, m_transitionAlpha + dt / 0.30f);
 
-    // Use the exact HOME V10.30 category-lens motion on entry: out-back
-    // position with a brief squeeze/release handled in drawTopBar().
-    if (m_homeTabAnimating) {
-        m_homeTabAnimTime += std::max(0.f, dt);
-        const float u = clamp01(m_homeTabAnimTime / kHomeTabAnimDuration);
-        const float eased = easeOutBackHome(u);
-        m_homeTabSlide = m_homeTabAnimFrom +
-            (m_homeTabAnimTo - m_homeTabAnimFrom) * eased;
-        if (u >= 1.f) {
-            m_homeTabSlide = m_homeTabAnimTo;
-            m_homeTabAnimating = false;
-        }
-    } else {
-        m_homeTabSlide = 2.f;
-    }
-
     if (m_view == View::Albums || m_view == View::Playlists)
         m_rootInfoReveal = std::min(1.f, m_rootInfoReveal + std::max(0.f, dt) / 0.18f);
     if (m_closing) {
@@ -443,10 +412,36 @@ void MusicScreen::onUpdate(float dt) {
         }
     }
 
-    // HOME-derived motion: fast enough for a console UI, but never a hard
-    // snap. Repeated direction presses retarget the current visual position.
-    const float carouselBlend = 1.f - std::exp(-std::max(0.f, dt) * 13.0f);
-    m_carouselVisualIndex += (static_cast<float>(m_selection) - m_carouselVisualIndex) * carouselBlend;
+    // The root Music carousel runs through the exact motion engine used by
+    // HOME IconGrid: same continuous coordinate, inertia, friction and snap.
+    if (rootView()) {
+        const auto motion = switchu::homeui::updateCarouselMotion(
+            m_rootCarouselMotion, std::max(0.f, dt), rootItemCount());
+        if (motion.settled) {
+            const int settled = std::clamp(
+                static_cast<int>(std::round(m_rootCarouselMotion.position)),
+                0, std::max(0, rootItemCount() - 1));
+            if (settled != m_selection) {
+                m_selection = settled;
+                m_rootInfoReveal = 0.f;
+            }
+        }
+    }
+
+    if (m_rootEntryBounceActive) {
+        m_rootEntryBounceTime += std::max(0.f, dt);
+        if (m_rootEntryBounceTime >= switchu::homeui::kCarouselSelectionBounceDuration) {
+            m_rootEntryBounceTime = switchu::homeui::kCarouselSelectionBounceDuration;
+            m_rootEntryBounceActive = false;
+        }
+    }
+
+    if (m_rootCategoryTransition < 1.f) {
+        m_rootCategoryTransition = std::min(1.f,
+            m_rootCategoryTransition + std::max(0.f, dt) / 0.18f);
+    }
+    if (m_rootCategoryHintTimer > 0.f)
+        m_rootCategoryHintTimer = std::max(0.f, m_rootCategoryHintTimer - std::max(0.f, dt));
     if (m_view == View::AlbumDetail || m_view == View::PlaylistDetail || m_view == View::Queue) {
         const float listBlend = 1.f - std::exp(-std::max(0.f, dt) * 18.0f);
         m_listVisualSelection +=
@@ -463,7 +458,7 @@ void MusicScreen::onUpdate(float dt) {
                 m_selection = m_view == View::Albums
                     ? static_cast<int>(m_detailAlbum)
                     : static_cast<int>(m_detailPlaylist);
-                m_carouselVisualIndex = static_cast<float>(m_selection);
+                switchu::homeui::jumpCarouselTo(m_rootCarouselMotion, m_selection, rootItemCount());
             }
         } else {
             m_detailTransition = std::min(1.f, m_detailTransition + speed);
@@ -489,21 +484,27 @@ void MusicScreen::onUpdate(float dt) {
 
     finishScanIfReady();
     refreshStatus(false);
-    updateBattery(dt);
 }
 
 
-void MusicScreen::setTab(int index) {
+void MusicScreen::setRootCategory(int index) {
     if (!rootView() || m_closing || contentTransitionBusy()) return;
-    index = (index % kTabCount + kTabCount) % kTabCount;
-    if (m_tabIndex == index &&
+    const int previous = rootCategoryIndex();
+    const int requested = index;
+    index = (index % kRootCategoryCount + kRootCategoryCount) % kRootCategoryCount;
+    if (previous == index &&
         ((index == 0 && m_view == View::Albums) || (index == 1 && m_view == View::Playlists)))
         return;
-    m_tabIndex = index;
+
+    // Preserve the physical D-pad direction even when the two-item category
+    // list wraps (Albums Up -> Playlists, Playlists Down -> Albums).
+    m_rootCategoryDirection = requested > previous ? 1 : -1;
+    m_rootCategoryTransition = 0.f;
+    m_rootCategoryHintTimer = 0.85f;
     m_selection = 0;
-    m_carouselVisualIndex = 0.f;
-    m_rootInfoReveal = 0.f;
     m_view = index == 0 ? View::Albums : View::Playlists;
+    switchu::homeui::jumpCarouselTo(m_rootCarouselMotion, 0, rootItemCount());
+    m_rootInfoReveal = 0.f;
 }
 
 
@@ -511,7 +512,30 @@ bool MusicScreen::rootView() const {
     return m_view == View::Albums || m_view == View::Playlists;
 }
 
+int MusicScreen::rootCategoryIndex() const {
+    return m_view == View::Playlists ? 1 : 0;
+}
+
+int MusicScreen::rootItemCount() const {
+    if (m_view == View::Albums)
+        return static_cast<int>(m_library.albums.size());
+    if (m_view == View::Playlists)
+        return static_cast<int>(m_playlistStore.playlists().size());
+    return 0;
+}
+
+void MusicScreen::retargetRootCarousel(bool immediate) {
+    if (!rootView()) return;
+    const int count = rootItemCount();
+    if (immediate)
+        switchu::homeui::jumpCarouselTo(m_rootCarouselMotion, m_selection, count);
+    else
+        switchu::homeui::retargetCarouselSnap(m_rootCarouselMotion, m_selection, count);
+}
+
 bool MusicScreen::contentTransitionBusy() const {
+    if (rootView() && m_rootCategoryTransition < 0.999f)
+        return true;
     if (m_view == View::AlbumDetail || m_view == View::PlaylistDetail)
         return m_detailClosing || m_detailTransition < 0.999f;
     if (m_view == View::NowPlaying)
@@ -545,7 +569,10 @@ void MusicScreen::moveSelection(int dx, int dy) {
             const int before = m_selection;
             m_selection += dx;
             clampSelectionForView();
-            if (m_selection != before) m_rootInfoReveal = 0.f;
+            if (m_selection != before) {
+                m_rootInfoReveal = 0.f;
+                retargetRootCarousel(false);
+            }
         }
         return;
     }
@@ -836,10 +863,9 @@ void MusicScreen::modalConfirm() {
     if (m_pendingPlaylistTrackId != 0) m_playlistStore.addTrack(created, m_pendingPlaylistTrackId);
     m_pendingPlaylistTrackId = 0;
     m_playlistStore.save();
-    m_tabIndex = 1;
     m_view = View::Playlists;
     m_selection = static_cast<int>(created);
-    m_carouselVisualIndex = static_cast<float>(m_selection);
+    switchu::homeui::jumpCarouselTo(m_rootCarouselMotion, m_selection, rootItemCount());
     m_rootInfoReveal = 0.f;
     m_modal = Modal::None;
 }
@@ -923,18 +949,6 @@ std::string MusicScreen::formatDuration(uint64_t ms) const {
     return out;
 }
 
-std::string MusicScreen::formatClock() const {
-    std::time_t now = std::time(nullptr);
-    std::tm local{};
-#if defined(_WIN32)
-    localtime_s(&local, &now);
-#else
-    localtime_r(&now, &local);
-#endif
-    char out[16]{};
-    std::strftime(out, sizeof(out), "%H:%M", &local);
-    return out;
-}
 
 std::string MusicScreen::fitText(nxui::Font* font, const std::string& text,
                                  float maxWidth, float scale) const {
@@ -1002,52 +1016,61 @@ CoverRef MusicScreen::playlistCover(size_t playlistIndex) const {
 
 void MusicScreen::drawReflectedCover(nxui::Renderer& ren, const CoverRef& cover,
                                      const nxui::Rect& r, bool selected, int maxSide) {
-    const nxui::Texture* tex = m_coverCache.get(cover, ren, maxSide);
-    if (!tex) {
-        drawCover(ren, cover, r, selected, maxSide);
+    (void)selected; // HOME V10 selection is communicated by scale, not an extra cursor.
+    nxui::Texture* tex = m_coverCache.get(cover, ren, maxSide);
+
+    // This is not a Music recreation of a HOME tile: render the actual HOME
+    // GlossyIcon component, at the actual HOME carousel geometry. Only the
+    // texture source changes from a game icon to album/playlist artwork.
+    m_musicHomeCard.setRect(r);
+    m_musicHomeCard.setTexture(tex);
+    m_musicHomeCard.setOpacity(gMusicUiAlpha);
+    m_musicHomeCard.setScale(1.f);
+    // Missing artwork deliberately stays inside the same HOME GlossyIcon
+    // shell instead of falling back to a Music-specific glass/card renderer.
+    m_musicHomeCard.render(ren);
+    m_musicHomeCard.setOpacity(1.f);
+
+    const nxui::Rect art = r.shrunk(8.f);
+    // Reflection is a property of the floor, never of the free background.
+    // The scissor is deliberately applied for every moving cover so no strip
+    // can leak above/beyond the reflective plane during carousel animation.
+    if (!tex)
         return;
-    }
 
-    ren.drawTextureRounded(tex, r, 14.f, {1.f, 1.f, 1.f, gMusicUiAlpha});
-    if (selected) {
-        ren.drawRoundedRectOutline(r.expanded(4.f), accent(0.42f), 18.f, 5.5f);
-        ren.drawRoundedRectOutline(r.expanded(1.5f), {1.f, 1.f, 1.f, 0.92f * gMusicUiAlpha}, 16.f, 2.f);
-    }
-
-    // iPod-style floor reflection: vertically flipped texture rendered as
-    // thin strips with a rapid alpha falloff. No extra texture allocation.
     constexpr int strips = 14;
-    const float reflH = std::min(92.f, r.height * 0.27f);
-    const float yBase = r.y + r.height + 11.f;
+    const float reflH = std::min(92.f, art.height * 0.27f);
+    const float yBase = art.y + art.height + 11.f;
     const int slot = tex->descriptorSlot();
-    if (slot >= 0) {
-        for (int i = 0; i < strips; ++i) {
-            const float t0 = static_cast<float>(i) / strips;
-            const float t1 = static_cast<float>(i + 1) / strips;
-            const float y0 = yBase + reflH * t0;
-            const float y1 = yBase + reflH * t1;
-            const float vTop = 1.f - t0;
-            const float vBottom = 1.f - t1;
-            const float alpha = (0.145f * std::pow(1.f - t0, 2.25f)) * gMusicUiAlpha;
+    if (slot < 0)
+        return;
 
-            // Cheap three-tap blur approximation. The reflection stays soft
-            // without allocating another texture or invoking a heavy blur
-            // pass on Switch hardware. The taps sum to the original alpha.
-            constexpr float offsets[3] = {-2.2f, 0.f, 2.2f};
-            constexpr float weights[3] = {0.22f, 0.56f, 0.22f};
-            for (int tap = 0; tap < 3; ++tap) {
-                const nxui::Color tint{1.f, 1.f, 1.f, alpha * weights[tap]};
-                const float ox = offsets[tap];
-                const nxui::Vec2 p0{r.x + ox, y0}, p1{r.x + r.width + ox, y0};
-                const nxui::Vec2 p2{r.x + r.width + ox, y1}, p3{r.x + ox, y1};
-                ren.drawTexturedTriangle(slot, p0, {0.f, vTop}, p1, {1.f, vTop}, p2, {1.f, vBottom}, tint);
-                ren.drawTexturedTriangle(slot, p0, {0.f, vTop}, p2, {1.f, vBottom}, p3, {0.f, vBottom}, tint);
-            }
+    const nxui::Rect floorClip{0.f, kFloorY, kScreenW, kFloorH};
+    ren.pushClipRect(floorClip);
+    for (int i = 0; i < strips; ++i) {
+        const float t0 = static_cast<float>(i) / strips;
+        const float t1 = static_cast<float>(i + 1) / strips;
+        const float y0 = yBase + reflH * t0;
+        const float y1 = yBase + reflH * t1;
+        const float vTop = 1.f - t0;
+        const float vBottom = 1.f - t1;
+        const float alpha = (0.135f * std::pow(1.f - t0, 2.35f)) * gMusicUiAlpha;
+
+        constexpr float offsets[3] = {-2.2f, 0.f, 2.2f};
+        constexpr float weights[3] = {0.22f, 0.56f, 0.22f};
+        for (int tap = 0; tap < 3; ++tap) {
+            const nxui::Color tint{1.f, 1.f, 1.f, alpha * weights[tap]};
+            const float ox = offsets[tap];
+            const nxui::Vec2 p0{art.x + ox, y0}, p1{art.x + art.width + ox, y0};
+            const nxui::Vec2 p2{art.x + art.width + ox, y1}, p3{art.x + ox, y1};
+            ren.drawTexturedTriangle(slot, p0, {0.f, vTop}, p1, {1.f, vTop}, p2, {1.f, vBottom}, tint);
+            ren.drawTexturedTriangle(slot, p0, {0.f, vTop}, p2, {1.f, vBottom}, p3, {0.f, vBottom}, tint);
         }
     }
+    ren.popClipRect();
 }
 
-void MusicScreen::drawCrtBackground(nxui::Renderer& ren) {
+void MusicScreen::drawMusicBackground(nxui::Renderer& ren) {
     const float a = gMusicUiAlpha;
 
     // Stable dark Music environment. No cover-driven colour fields and no
@@ -1086,210 +1109,42 @@ void MusicScreen::drawCrtBackground(nxui::Renderer& ren) {
 
 
 void MusicScreen::drawTopBar(nxui::Renderer& ren) {
-    if (!m_font || !m_smallFont) return;
+    // Do not redraw a Music approximation of HOME's HUD. Render the actual
+    // HOME widgets on top of Music's dark backdrop so dimensions, fonts,
+    // Liquid Glass, category animation and shared HOME polish stays identical.
+    // MusicIntegration sets the real DateTimeWidget to category 2 and hides
+    // Wi-Fi on the real BatteryWidget while this screen is active.
+    if (m_homeClockWidget)
+        m_homeClockWidget->render(ren);
+    if (m_homeProfileWidget)
+        m_homeProfileWidget->render(ren);
+    if (m_homeBatteryWidget)
+        m_homeBatteryWidget->render(ren);
 
-    // HOME V10.30 clock rhythm, including the fixed 800 ms separator blink.
-    const std::string clockText = formatClock();
-    const std::size_t colon = clockText.find(':');
-    const float clockX = 19.f, clockY = 25.f, clockScale = 1.28f;
-    const nxui::Color clockShadow{0.f, 0.f, 0.f, 0.34f * gMusicUiAlpha};
-    const auto drawClockPiece = [&](const std::string& text, float x) {
-        ren.drawText(text, {x + 1.1f, clockY + 1.2f}, m_font, clockShadow, clockScale);
-        ren.drawText(text, {x, clockY}, m_font, textPrimary(), clockScale);
-        ren.drawText(text, {x + 0.55f, clockY}, m_font, textPrimary(0.52f), clockScale);
-    };
-    if (colon != std::string::npos) {
-        const std::string hh = clockText.substr(0, colon);
-        const std::string mm = clockText.substr(colon + 1);
-        const float hhW = m_font->measure(hh).x * clockScale;
-        const float colonW = m_font->measure(":").x * clockScale;
-        const auto blinkMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        drawClockPiece(hh, clockX);
-        if (((blinkMs / 800) % 2) == 0)
-            drawClockPiece(":", clockX + hhW);
-        drawClockPiece(mm, clockX + hhW + colonW);
-    } else {
-        drawClockPiece(clockText, clockX);
-    }
-
-    const float px = 202.f, py = 45.f;
-    if (m_profileTexture && m_profileTexture->valid()) {
-        ren.drawTextureRounded(m_profileTexture, {px - 27.f, py - 27.f, 54.f, 54.f}, 27.f,
-                               {1.f, 1.f, 1.f, gMusicUiAlpha});
-        ren.drawRoundedRectOutline({px - 28.f, py - 28.f, 56.f, 56.f},
-                                   {1.f,1.f,1.f,0.64f * gMusicUiAlpha}, 28.f, 1.2f);
-    } else {
-        ren.drawCircle({px, py}, 26.f, {0.18f, 0.20f, 0.25f, 0.98f * gMusicUiAlpha}, 48);
-        ren.drawCircle({px, py - 6.f}, 6.f, textPrimary(0.86f), 24);
-        ren.drawRoundedRect({px - 10.f, py + 4.f, 20.f, 10.f}, textPrimary(0.72f), 5.f);
-    }
-
-    constexpr float navX = 380.f, navY = 18.f, navW = 520.f, navH = 54.f;
-    constexpr float inset = 7.f, gap = 6.f;
-    constexpr float tabW = (navW - inset * 2.f - gap * 2.f) / 3.f;
-    constexpr float tabH = 40.f;
-    const nxui::Rect nav{navX, navY, navW, navH};
-    const float gamesX = navX + inset;
-    const float step = tabW + gap;
-
-    // Exact HOME V10.30 category trajectory. Music is the third native tab,
-    // so the lens continues from Applications (1) to Music (2) with the same
-    // elastic out-back motion and squeeze/release used by DateTimeWidget.
-    const float slide = m_homeTabSlide;
-    nxui::Rect active{gamesX + step * slide, navY + inset, tabW, tabH};
-    if (m_homeTabAnimating) {
-        const float u = clamp01(m_homeTabAnimTime / kHomeTabAnimDuration);
-        if (u < 0.34f) {
-            const float phase = u / 0.34f;
-            const float shrinkX = 22.f * phase;
-            const float pinchY = 4.f * phase;
-            active.x += shrinkX * 0.5f;
-            active.width -= shrinkX;
-            active.y += pinchY * 0.5f;
-            active.height -= pinchY;
-        } else {
-            const float phase = (u - 0.34f) / 0.66f;
-            const float release = 1.f - std::pow(1.f - std::min(1.f, phase), 2.f);
-            const float shrinkX = 22.f * (1.f - release);
-            const float pinchY = 4.f * (1.f - release);
-            active.x += shrinkX * 0.5f;
-            active.width -= shrinkX;
-            active.y += pinchY * 0.5f;
-            active.height -= pinchY;
-        }
-    }
-
-    ren.captureToOffscreen(true);
-    ren.drawLiquidGlass(0, nav, 24.f,
-                        {0.70f, 0.82f, 0.98f, 0.34f},
-                        0.98f * gMusicUiAlpha, 0.f);
-    ren.drawRoundedRectOutline(nav, {0.98f, 1.00f, 1.00f, 0.32f * gMusicUiAlpha}, 24.f, 1.f);
-    ren.drawLiquidGlass(0, active, 18.f,
-                        {1.f, 1.f, 1.f, 0.94f},
-                        0.98f * gMusicUiAlpha, 0.f);
-    ren.drawRoundedRect(active.shrunk(1.4f), {1.f,1.f,1.f,0.60f * gMusicUiAlpha}, 16.8f);
-    ren.drawRoundedRectOutline(active, {1.f,1.f,1.f,0.88f * gMusicUiAlpha}, 18.f, 1.2f);
-
-    const std::array<std::string,3> labels = {"Jeux", "Applications", "Musique"};
-    for (int i = 0; i < 3; ++i) {
-        const float proximity = 1.f - std::clamp(std::abs(slide - static_cast<float>(i)), 0.f, 1.f);
-        const nxui::Color inactive{0.985f,0.99f,1.f,0.96f * gMusicUiAlpha};
-        const nxui::Color selected{0.045f,0.052f,0.065f,0.98f * gMusicUiAlpha};
-        const nxui::Color c{
-            inactive.r + (selected.r - inactive.r) * proximity,
-            inactive.g + (selected.g - inactive.g) * proximity,
-            inactive.b + (selected.b - inactive.b) * proximity,
-            inactive.a
-        };
-        const auto sz = m_smallFont->measure(labels[static_cast<size_t>(i)]);
-        const float cx = gamesX + step * i + tabW * 0.5f;
-        ren.drawText(labels[static_cast<size_t>(i)], {cx - sz.x * 0.5f, navY + 17.f}, m_smallFont, c, 1.f);
-    }
-
-    if (m_iconFont) {
-        const std::string lg = buttonGlyph(nxui::Button::L);
-        const std::string rg = buttonGlyph(nxui::Button::R);
-        ren.drawText(lg, {344.f, 33.f}, m_iconFont, textPrimary(0.94f), 0.88f);
-        ren.drawText(rg, {916.f, 33.f}, m_iconFont, textPrimary(0.46f), 0.88f);
-    }
-
-    // Music intentionally omits Wi-Fi. Battery + percentage retain HOME scale.
-    const float level = std::clamp(m_batteryPercent / 100.f, 0.f, 1.f);
-    nxui::Rect body{1097.f, 32.f, 50.f, 24.f};
-    ren.drawRoundedRectOutline(body, textPrimary(0.92f), 5.8f, 1.65f);
-    ren.drawRoundedRect({1149.f, 38.5f, 4.5f, 11.f}, textPrimary(0.76f), 1.8f);
-    nxui::Color bc = level <= 0.20f ? nxui::Color{1.00f,0.24f,0.22f,0.96f * gMusicUiAlpha}
-                    : level <= 0.50f ? nxui::Color{1.00f,0.78f,0.18f,0.96f * gMusicUiAlpha}
-                    : nxui::Color{0.28f,0.92f,0.42f,0.96f * gMusicUiAlpha};
-    nxui::Rect fill = body.shrunk(3.4f);
-    fill.width *= level;
-    if (fill.width > 0.5f) {
-        if (!m_batteryCharging) {
-            ren.drawRoundedRect(fill, bc, std::min(4.f, fill.width * 0.5f));
-        } else {
-            // Same moving pink/violet/blue/cyan family as HOME V10.30, but
-            // without the Wi-Fi element that Music intentionally removes.
-            const std::array<nxui::Color,7> stops = {{
-                {1.00f,0.18f,0.70f,0.96f * gMusicUiAlpha},
-                {0.68f,0.27f,1.00f,0.96f * gMusicUiAlpha},
-                {0.22f,0.43f,1.00f,0.96f * gMusicUiAlpha},
-                {0.10f,0.82f,1.00f,0.96f * gMusicUiAlpha},
-                {0.22f,0.43f,1.00f,0.96f * gMusicUiAlpha},
-                {0.68f,0.27f,1.00f,0.96f * gMusicUiAlpha},
-                {1.00f,0.18f,0.70f,0.96f * gMusicUiAlpha}
-            }};
-            auto mix = [](const nxui::Color& a, const nxui::Color& b, float t) {
-                t = clamp01(t);
-                return nxui::Color{a.r + (b.r-a.r)*t, a.g + (b.g-a.g)*t,
-                                   a.b + (b.b-a.b)*t, a.a + (b.a-a.a)*t};
-            };
-            constexpr int samples = 64;
-            const float sampleW = fill.width / samples;
-            const float phase = std::fmod(m_uiTime * 0.055f, 1.f);
-            ren.pushClipRect(fill);
-            for (int i = 0; i < samples; ++i) {
-                float u = (static_cast<float>(i) + 0.5f) / samples;
-                float wrapped = std::fmod(u * 1.18f - phase + 4.f, 1.f);
-                float scaled = wrapped * 6.f;
-                int idx = std::min(5, static_cast<int>(std::floor(scaled)));
-                float local = scaled - static_cast<float>(idx);
-                local = local * local * (3.f - 2.f * local);
-                nxui::Color c = mix(stops[static_cast<size_t>(idx)], stops[static_cast<size_t>(idx) + 1], local);
-                ren.drawRect({fill.x + sampleW * i - 0.3f, fill.y, sampleW + 0.6f, fill.height}, c);
-            }
-            ren.popClipRect();
-        }
-    }
-    ren.drawText(std::to_string(m_batteryPercent) + "%", {1163.f, 30.f}, m_font,
-                 textPrimary(), 0.98f);
-
-    drawSecondaryMusicTabs(ren);
+    drawRootCategoryHint(ren);
 }
+void MusicScreen::drawRootCategoryHint(nxui::Renderer& ren) {
+    if (!m_font || !rootView() || m_rootCategoryHintTimer <= 0.f)
+        return;
 
-
-void MusicScreen::drawSecondaryMusicTabs(nxui::Renderer& ren) {
-    if (!m_smallFont || (m_view != View::Albums && m_view != View::Playlists)) return;
-    const std::array<std::string,2> labels = {"Albums", "Playlists"};
-    constexpr float centers[2] = {588.f, 692.f};
-    for (int i = 0; i < 2; ++i) {
-        const auto sz = m_smallFont->measure(labels[static_cast<size_t>(i)]);
-        const bool active = i == m_tabIndex;
-        ren.drawText(labels[static_cast<size_t>(i)], {centers[i] - sz.x * 0.42f, 82.f}, m_smallFont,
-                     active ? textPrimary(0.94f) : textSecondary(0.62f), 0.84f);
-        if (active)
-            ren.drawRoundedRect({centers[i] - 18.f, 99.f, 36.f, 2.f}, accent(0.86f), 1.f);
-    }
+    // Albums/Playlists is intentionally not a permanent category bar. A short
+    // HOME-sized label confirms a D-pad Up/Down switch, then disappears.
+    const float life = std::clamp(m_rootCategoryHintTimer / 0.85f, 0.f, 1.f);
+    const float alpha = smoothStep(std::min(1.f, life * 1.8f));
+    const std::string label = m_view == View::Albums ? "Albums" : "Playlists";
+    const auto measured = m_font->measure(label);
+    ren.drawText(label,
+                 {640.f - measured.x * kHomeMinTextScale * 0.5f, 108.f},
+                 m_font, textSecondary(0.72f * alpha), kHomeMinTextScale);
 }
-
-void MusicScreen::drawCover(nxui::Renderer& ren, const CoverRef& cover,
-                            const nxui::Rect& r, bool selected, int maxSide) {
-    const nxui::Texture* tex = m_coverCache.get(cover, ren, maxSide);
-    if (tex) {
-        ren.drawTextureRounded(tex, r, 14.f, {1.f,1.f,1.f,gMusicUiAlpha});
-    } else {
-        ren.drawRoundedRect(r, {0.095f, 0.105f, 0.125f, 0.96f * gMusicUiAlpha}, 14.f);
-        if (m_font) {
-            const auto m = m_font->measure("♪");
-            ren.drawText("♪", {r.x + (r.width - m.x * 1.6f) * 0.5f,
-                               r.y + (r.height - m.y * 1.6f) * 0.5f - 4.f},
-                         m_font, textSecondary(0.62f), 1.6f);
-        }
-    }
-    if (selected) {
-        ren.drawRoundedRectOutline(r.expanded(4.f), accent(0.34f), 19.f, 6.f);
-        ren.drawRoundedRectOutline(r.expanded(1.f), {1.f,1.f,1.f,0.96f * gMusicUiAlpha}, 16.f, 2.f);
-    }
-}
-
 
 void MusicScreen::drawEmpty(nxui::Renderer& ren, const std::string& title,
                             const std::string& detail) {
-    if (!m_font || !m_smallFont) return;
+    if (!m_font) return;
     ren.drawText(fitText(m_font, title, 1120.f, 1.50f),
                  {78.f, 285.f}, m_font, textPrimary(), 1.50f);
-    ren.drawText(fitText(m_smallFont, detail, 1120.f, 0.94f),
-                 {80.f, 340.f}, m_smallFont, textSecondary(), 0.94f);
+    ren.drawText(fitText(m_font, detail, 1120.f, 0.94f),
+                 {80.f, 340.f}, m_font, textSecondary(), 0.94f);
 }
 
 void MusicScreen::drawAlbums(nxui::Renderer& ren) {
@@ -1299,52 +1154,43 @@ void MusicScreen::drawAlbums(nxui::Renderer& ren) {
     }
     m_selection = std::clamp(m_selection, 0, static_cast<int>(m_library.albums.size()) - 1);
 
-    for (int idx = std::max(0, m_selection - 3);
-         idx <= std::min(static_cast<int>(m_library.albums.size()) - 1, m_selection + 3); ++idx) {
-        const float delta = static_cast<float>(idx) - m_carouselVisualIndex;
-        if (std::abs(delta) > 2.65f) continue;
-        const float focus = std::clamp(1.f - std::abs(delta), 0.f, 1.f);
-        const float size = kRootNeighborSize + (kRootSelectedSize - kRootNeighborSize) * focus;
-        const float cx = 640.f + delta * kRootSpacing;
-        const float y = kRootCoverY + (1.f - focus) * 52.f;
-        const float alpha = std::clamp(1.f - std::max(0.f, std::abs(delta) - 1.f) * 0.34f, 0.40f, 1.f);
-        const float saved = gMusicUiAlpha;
-        gMusicUiAlpha *= alpha;
+    const float cat = smoothStep(m_rootCategoryTransition);
+    const float yOffset = static_cast<float>(m_rootCategoryDirection) * (1.f - cat) * 42.f;
+    const float savedAlpha = gMusicUiAlpha;
+    gMusicUiAlpha *= 0.28f + 0.72f * cat;
+
+    const int visualCenter = static_cast<int>(std::floor(m_rootCarouselMotion.position));
+    for (int idx = std::max(0, visualCenter - 3);
+         idx <= std::min(static_cast<int>(m_library.albums.size()) - 1, visualCenter + 4); ++idx) {
+        const float delta = static_cast<float>(idx) - m_rootCarouselMotion.position;
+        float size = switchu::homeui::carouselIconSizeForDistance(delta);
+        if (m_rootEntryBounceActive && std::abs(delta) < 0.035f)
+            size *= switchu::homeui::carouselSelectionBounceScale(m_rootEntryBounceTime);
+
+        const float cx = 640.f + switchu::homeui::carouselCenterOffset(delta);
+        const float y = switchu::homeui::kCarouselBaselineY - size + yOffset;
+        const nxui::Rect cardRect{cx - size * 0.5f, y, size, size};
+        if (cardRect.x + cardRect.width <= 0.f || cardRect.x >= kScreenW)
+            continue;
         drawReflectedCover(ren, m_library.albums[static_cast<size_t>(idx)].cover,
-                           {cx - size * 0.5f, y, size, size}, idx == m_selection,
-                           focus > 0.55f ? 512 : 320);
-        gMusicUiAlpha = saved;
+                           cardRect, idx == m_selection,
+                           std::abs(delta) < 0.70f ? 512 : 320);
     }
 
-    const float saved = gMusicUiAlpha;
-    gMusicUiAlpha *= smoothStep(m_rootInfoReveal);
+    const float infoAlpha = smoothStep(m_rootInfoReveal) * cat;
     const auto& album = m_library.albums[static_cast<size_t>(m_selection)];
-    const std::string title = fitText(m_font, album.title.empty() ? "Album sans titre" : album.title, 860.f, 1.38f);
-    const std::string artist = fitText(m_smallFont, album.artist.empty() ? "Artiste inconnu" : album.artist, 760.f, 0.94f);
-    const auto titleSize = m_font->measure(title);
-    const auto artistSize = m_smallFont->measure(artist);
-    ren.drawText(title, {640.f - titleSize.x * 1.38f * 0.5f, 526.f}, m_font, textPrimary(), 1.38f);
-    ren.drawText(artist, {640.f - artistSize.x * 0.94f * 0.5f, 570.f}, m_smallFont, textSecondary(), 0.94f);
-
-    ren.drawRect({405.f, 607.f, 470.f, 1.f}, {0.78f,0.82f,0.90f,0.14f * gMusicUiAlpha});
-    ren.drawText("◷  " + formatDuration(albumDurationMs(static_cast<size_t>(m_selection))),
-                 {431.f, 626.f}, m_smallFont, textSecondary(), 0.80f);
-    const bool playable = !album.tracks.empty();
-    if (m_iconFont) {
-        ren.drawText(buttonGlyph(nxui::Button::X), {593.f, 622.f}, m_iconFont,
-                     playable ? textPrimary() : textSecondary(0.34f), 0.78f);
-        ren.drawText(buttonGlyph(nxui::Button::A), {742.f, 622.f}, m_iconFont, textPrimary(), 0.78f);
+    if (m_homeTitlePill) {
+        m_homeTitlePill->setText(album.title.empty() ? "Album sans titre" : album.title, kScreenW);
+        m_homeTitlePill->setMusicDurationText("◷  " +
+            formatDuration(albumDurationMs(static_cast<size_t>(m_selection))));
+        m_homeTitlePill->setMusicPlayable(!album.tracks.empty());
+        m_homeTitlePill->setOpacity(savedAlpha * infoAlpha);
+        m_homeTitlePill->setVisible(true);
+        m_homeTitlePill->render(ren);
+        m_homeTitlePill->setOpacity(1.f);
     }
-    ren.drawText("Lire", {622.f, 626.f}, m_smallFont,
-                 playable ? textSecondary() : textSecondary(0.34f), 0.78f);
-    ren.drawText("Ouvrir", {771.f, 626.f}, m_smallFont, textSecondary(), 0.78f);
-    gMusicUiAlpha = saved;
-}
 
-int MusicScreen::visibleListStart(size_t count, int rows) const {
-    if (count <= static_cast<size_t>(rows)) return 0;
-    int start = m_selection - rows / 2;
-    return std::clamp(start, 0, static_cast<int>(count) - rows);
+    gMusicUiAlpha = savedAlpha;
 }
 
 float MusicScreen::visibleListStartVisual(size_t count, int rows) const {
@@ -1353,14 +1199,102 @@ float MusicScreen::visibleListStartVisual(size_t count, int rows) const {
     return std::clamp(m_listVisualSelection - static_cast<float>(rows / 2), 0.f, maxStart);
 }
 
+void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
+    const Track* track = currentTrack();
+    if (!track) {
+        drawEmpty(ren, "Aucune lecture en cours", "Choisis un morceau dans ta bibliothèque.");
+        return;
+    }
+
+    const float e = std::clamp(m_nowPlayingEnter, 0.f, 1.f);
+    const float saved = gMusicUiAlpha;
+    gMusicUiAlpha *= e;
+    const float shift = (1.f - e) * 28.f;
+
+    drawReflectedCover(ren, track->cover, {76.f, 146.f + shift, 398.f, 398.f}, false, 512);
+
+    // HOME-derived Liquid Glass information surface. Music-only controls live
+    // inside it, but spacing, corner treatment and hierarchy remain systemic.
+    const nxui::Rect panel{520.f, 112.f + shift, 690.f, 482.f};
+    const nxui::LiquidGlassSettings oldGlass = ren.liquidGlassSettings();
+    switchu::homeui::applyLiquidGlassV105(ren);
+    ren.captureToOffscreen(true);
+    ren.drawLiquidGlass(0, panel, 26.f, {0.50f,0.58f,0.72f,0.12f},
+                        0.84f * gMusicUiAlpha, 0.f);
+    ren.drawRoundedRectOutline(panel, {1.f,1.f,1.f,0.13f * gMusicUiAlpha}, 26.f, 1.f);
+    ren.liquidGlassSettings() = oldGlass;
+
+    ren.drawText("Lecture en cours", {548.f, 136.f + shift}, m_font,
+                 textSecondary(), kHomeMinTextScale);
+    ren.drawText(fitText(m_font,
+                         track->title.empty() ? "Morceau sans titre" : track->title,
+                         620.f, 1.54f),
+                 {546.f, 181.f + shift}, m_font, textPrimary(), 1.54f);
+    ren.drawText(fitText(m_font,
+                         track->artist.empty() ? "Artiste inconnu" : track->artist,
+                         610.f, 0.98f),
+                 {548.f, 239.f + shift}, m_font, accent(), 0.98f);
+    ren.drawText(fitText(m_font,
+                         track->album.empty() ? "Album inconnu" : track->album,
+                         610.f, 0.88f),
+                 {548.f, 278.f + shift}, m_font, textSecondary(), 0.88f);
+
+    const float progress = m_status.duration_ms > 0
+        ? std::clamp(float(double(m_status.position_ms) / double(m_status.duration_ms)), 0.f, 1.f)
+        : 0.f;
+    const nxui::Rect timeline{548.f, 344.f + shift, 610.f, 14.f};
+    if (m_nowControl == 5)
+        ren.drawRoundedRectOutline(timeline.expanded(9.f), accent(0.44f), 11.f, 1.5f);
+    ren.drawRoundedRect(timeline, {0.20f,0.22f,0.27f,0.90f * gMusicUiAlpha}, 7.f);
+    ren.drawRoundedRect({timeline.x, timeline.y, timeline.width * progress, timeline.height}, accent(), 7.f);
+    const float knobX = timeline.x + timeline.width * progress;
+    ren.drawCircle({knobX, timeline.y + timeline.height * 0.5f}, 8.f, textPrimary(), 24);
+
+    const std::string elapsed = formatDuration(m_status.position_ms);
+    const std::string duration = formatDuration(m_status.duration_ms);
+    const auto durSz = m_font->measure(duration);
+    ren.drawText(elapsed, {548.f, 373.f + shift}, m_font, textSecondary(), kHomeMinTextScale);
+    ren.drawText(duration,
+                 {1158.f - durSz.x * kHomeMinTextScale, 373.f + shift},
+                 m_font, textSecondary(), kHomeMinTextScale);
+
+    const std::array<std::string,5> labels = {
+        statusFlag(m_status, switchu::music::MusicStatus_Shuffle) ? "⇄" : "↝",
+        "◀◀",
+        statusFlag(m_status, switchu::music::MusicStatus_Playing) ? "Ⅱ" : "▶",
+        "▶▶",
+        repeatLabel(m_status.repeat_mode)
+    };
+    for (int i = 0; i < 5; ++i) {
+        const float x = 574.f + i * 116.f;
+        nxui::Rect button{x, 428.f + shift, 76.f, 66.f};
+        if (i == m_nowControl) {
+            const nxui::LiquidGlassSettings oldButtonGlass = ren.liquidGlassSettings();
+            switchu::homeui::applyLiquidGlassV105(ren);
+            ren.captureToOffscreen(true);
+            ren.drawLiquidGlass(0, button, 23.f, {0.58f,0.68f,0.86f,0.18f},
+                                0.92f * gMusicUiAlpha, 0.f);
+            ren.drawRoundedRectOutline(button, accent(0.42f), 23.f, 1.4f);
+            ren.liquidGlassSettings() = oldButtonGlass;
+        }
+        ren.drawText(labels[static_cast<size_t>(i)], {button.x + 19.f, button.y + 16.f},
+                     m_font, i == m_nowControl ? textPrimary() : textSecondary(), 0.96f);
+    }
+
+    // Keep the full shortcut explanation readable; it is allowed to occupy a
+    // wider line instead of being shrunk below HOME's smallest main-screen text.
+    ren.drawText("↑ progression   ←/→ déplacer   ZL -10 s   ZR +10 s",
+                 {548.f, 531.f + shift}, m_font, textSecondary(0.74f), kHomeMinTextScale);
+    gMusicUiAlpha = saved;
+}
 void MusicScreen::drawNowPlayingIndicator(nxui::Renderer& ren, const nxui::Rect& row) {
     const int frame = static_cast<int>(m_uiTime * 10.f) & 3;
-    const float x = row.x + 42.f;
-    const float y = row.y + 12.f;
+    const float x = row.x + 34.f;
+    const float y = row.y + 15.f;
 
-    // Asset hook for the requested runner. The repository intentionally ships
-    // no Nintendo/Mario art. A user-approved 4-frame horizontal sprite sheet
-    // can later be placed at this path without touching playback or layout.
+    // Asset hook for the intended four-frame runner. No Nintendo/Mario art is
+    // bundled here; if that direction is approved, the asset can be inserted
+    // without changing tracklist layout or playback logic.
     if (!m_runnerLoadAttempted) {
         m_runnerLoadAttempted = true;
         m_nowPlayingRunnerTexture.loadFromFile(
@@ -1382,32 +1316,31 @@ void MusicScreen::drawNowPlayingIndicator(nxui::Renderer& ren, const nxui::Rect&
         }
     }
 
-    // Legal-safe fallback until the final asset decision is made.
+    // Neutral temporary state, not a replacement mascot. The final intended
+    // direction remains the running Mario concept until that asset decision.
+    const float pulse = 0.76f + 0.18f * std::sin(m_uiTime * 7.5f);
     const nxui::Color c = accent(0.96f);
-    ren.drawRect({x + 5.f, y, 5.f, 5.f}, c);
-    ren.drawRect({x + 4.f, y + 5.f, 7.f, 7.f}, c);
-    ren.drawRect({x + 2.f, y + 7.f, 3.f, 3.f}, c);
-    ren.drawRect({x + 11.f, y + 7.f, 3.f, 3.f}, c);
-    if (frame < 2) {
-        ren.drawRect({x + 3.f, y + 12.f, 3.f, 5.f}, c);
-        ren.drawRect({x + 10.f, y + 12.f, 3.f, 3.f}, c);
-    } else {
-        ren.drawRect({x + 2.f, y + 12.f, 5.f, 3.f}, c);
-        ren.drawRect({x + 10.f, y + 12.f, 3.f, 5.f}, c);
-    }
+    ren.drawCircle({x + 10.f, y + 10.f}, 7.f * pulse, c, 20);
+    ren.drawTriangle({x + 8.f, y + 5.f}, {x + 8.f, y + 15.f},
+                     {x + 15.f, y + 10.f}, textPrimary(0.96f));
 }
 
 void MusicScreen::drawTrackRow(nxui::Renderer& ren, const Track& t, const nxui::Rect& row,
                                bool selected, int ordinal) {
     if (selected) {
-        ren.drawRoundedRect(row, {0.115f,0.126f,0.150f,0.97f * gMusicUiAlpha}, 13.f);
-        ren.drawRoundedRectOutline(row, accent(0.36f), 13.f, 1.2f);
+        const nxui::LiquidGlassSettings oldGlass = ren.liquidGlassSettings();
+        switchu::homeui::applyLiquidGlassV105(ren);
+        ren.captureToOffscreen(true);
+        ren.drawLiquidGlass(0, row, 13.f, {0.54f,0.66f,0.84f,0.14f},
+                            0.88f * gMusicUiAlpha, 0.f);
+        ren.drawRoundedRectOutline(row, accent(0.34f), 13.f, 1.2f);
+        ren.liquidGlassSettings() = oldGlass;
     }
     if (ordinal > 0) {
         char num[12]{};
         std::snprintf(num, sizeof(num), "%d", ordinal);
-        ren.drawText(num, {row.x + 17.f, row.y + 15.f}, m_smallFont,
-                     selected ? accent() : textSecondary(), 0.80f);
+        ren.drawText(num, {row.x + 17.f, row.y + 15.f}, m_font,
+                     selected ? accent() : textSecondary(), kHomeMinTextScale);
     }
 
     const bool playing = hasMusicSession() && m_status.track_id == t.id;
@@ -1415,16 +1348,16 @@ void MusicScreen::drawTrackRow(nxui::Renderer& ren, const Track& t, const nxui::
 
     const float titleX = row.x + (playing ? 72.f : 56.f);
     const std::string duration = formatDuration(t.durationMs);
-    const float durationW = m_smallFont ? m_smallFont->measure(duration).x * 0.76f : 52.f;
+    const float durationW = m_font ? m_font->measure(duration).x * kHomeMinTextScale : 56.f;
     const float durationX = row.x + row.width - durationW - 16.f;
     const float maxTitleW = std::max(40.f, durationX - titleX - 18.f);
-    const std::string title = fitText(m_smallFont,
+    const std::string title = fitText(m_font,
                                       t.title.empty() ? "Morceau sans titre" : t.title,
                                       maxTitleW, 0.90f);
-    ren.drawText(title, {titleX, row.y + 12.f}, m_smallFont,
+    ren.drawText(title, {titleX, row.y + 12.f}, m_font,
                  selected ? textPrimary() : textPrimary(0.94f), 0.90f);
-    ren.drawText(duration, {durationX, row.y + 14.f}, m_smallFont,
-                 textSecondary(), 0.76f);
+    ren.drawText(duration, {durationX, row.y + 14.f}, m_font,
+                 textSecondary(), kHomeMinTextScale);
 }
 
 void MusicScreen::drawPlaylists(nxui::Renderer& ren) {
@@ -1435,48 +1368,43 @@ void MusicScreen::drawPlaylists(nxui::Renderer& ren) {
     }
     m_selection = std::clamp(m_selection, 0, static_cast<int>(playlists.size()) - 1);
 
-    for (int idx = std::max(0, m_selection - 3);
-         idx <= std::min(static_cast<int>(playlists.size()) - 1, m_selection + 3); ++idx) {
-        const float delta = static_cast<float>(idx) - m_carouselVisualIndex;
-        if (std::abs(delta) > 2.65f) continue;
-        const float focus = std::clamp(1.f - std::abs(delta), 0.f, 1.f);
-        const float size = kRootNeighborSize + (kRootSelectedSize - kRootNeighborSize) * focus;
-        const float cx = 640.f + delta * kRootSpacing;
-        const float y = kRootCoverY + (1.f - focus) * 52.f;
-        const float alpha = std::clamp(1.f - std::max(0.f, std::abs(delta) - 1.f) * 0.34f, 0.40f, 1.f);
-        const float saved = gMusicUiAlpha;
-        gMusicUiAlpha *= alpha;
+    const float cat = smoothStep(m_rootCategoryTransition);
+    const float yOffset = static_cast<float>(m_rootCategoryDirection) * (1.f - cat) * 42.f;
+    const float savedAlpha = gMusicUiAlpha;
+    gMusicUiAlpha *= 0.28f + 0.72f * cat;
+
+    const int visualCenter = static_cast<int>(std::floor(m_rootCarouselMotion.position));
+    for (int idx = std::max(0, visualCenter - 3);
+         idx <= std::min(static_cast<int>(playlists.size()) - 1, visualCenter + 4); ++idx) {
+        const float delta = static_cast<float>(idx) - m_rootCarouselMotion.position;
+        float size = switchu::homeui::carouselIconSizeForDistance(delta);
+        if (m_rootEntryBounceActive && std::abs(delta) < 0.035f)
+            size *= switchu::homeui::carouselSelectionBounceScale(m_rootEntryBounceTime);
+
+        const float cx = 640.f + switchu::homeui::carouselCenterOffset(delta);
+        const float y = switchu::homeui::kCarouselBaselineY - size + yOffset;
+        const nxui::Rect cardRect{cx - size * 0.5f, y, size, size};
+        if (cardRect.x + cardRect.width <= 0.f || cardRect.x >= kScreenW)
+            continue;
         drawReflectedCover(ren, playlistCover(static_cast<size_t>(idx)),
-                           {cx - size * 0.5f, y, size, size}, idx == m_selection,
-                           focus > 0.55f ? 512 : 320);
-        gMusicUiAlpha = saved;
+                           cardRect, idx == m_selection,
+                           std::abs(delta) < 0.70f ? 512 : 320);
     }
 
-    const float saved = gMusicUiAlpha;
-    gMusicUiAlpha *= smoothStep(m_rootInfoReveal);
+    const float infoAlpha = smoothStep(m_rootInfoReveal) * cat;
     const auto& playlist = playlists[static_cast<size_t>(m_selection)];
-    const std::string title = fitText(m_font,
-                                      playlist.name.empty() ? "Playlist" : playlist.name,
-                                      860.f, 1.38f);
-    const auto titleSize = m_font->measure(title);
-    ren.drawText(title, {640.f - titleSize.x * 1.38f * 0.5f, 526.f}, m_font, textPrimary(), 1.38f);
-    const std::string sub = std::to_string(playlist.trackIds.size()) + " morceaux";
-    const auto subSize = m_smallFont->measure(sub);
-    ren.drawText(sub, {640.f - subSize.x * 0.92f * 0.5f, 570.f}, m_smallFont, textSecondary(), 0.92f);
-
-    ren.drawRect({405.f, 607.f, 470.f, 1.f}, {0.78f,0.82f,0.90f,0.14f * gMusicUiAlpha});
-    ren.drawText("◷  " + formatDuration(playlistDurationMs(static_cast<size_t>(m_selection))),
-                 {431.f, 626.f}, m_smallFont, textSecondary(), 0.80f);
-    const bool playable = !playlist.trackIds.empty();
-    if (m_iconFont) {
-        ren.drawText(buttonGlyph(nxui::Button::X), {593.f, 622.f}, m_iconFont,
-                     playable ? textPrimary() : textSecondary(0.34f), 0.78f);
-        ren.drawText(buttonGlyph(nxui::Button::A), {742.f, 622.f}, m_iconFont, textPrimary(), 0.78f);
+    if (m_homeTitlePill) {
+        m_homeTitlePill->setText(playlist.name.empty() ? "Playlist" : playlist.name, kScreenW);
+        m_homeTitlePill->setMusicDurationText("◷  " +
+            formatDuration(playlistDurationMs(static_cast<size_t>(m_selection))));
+        m_homeTitlePill->setMusicPlayable(!playlist.trackIds.empty());
+        m_homeTitlePill->setOpacity(savedAlpha * infoAlpha);
+        m_homeTitlePill->setVisible(true);
+        m_homeTitlePill->render(ren);
+        m_homeTitlePill->setOpacity(1.f);
     }
-    ren.drawText("Lire", {622.f, 626.f}, m_smallFont,
-                 playable ? textSecondary() : textSecondary(0.34f), 0.78f);
-    ren.drawText("Ouvrir", {771.f, 626.f}, m_smallFont, textSecondary(), 0.78f);
-    gMusicUiAlpha = saved;
+
+    gMusicUiAlpha = savedAlpha;
 }
 
 void MusicScreen::drawAlbumDetail(nxui::Renderer& ren) {
@@ -1488,55 +1416,43 @@ void MusicScreen::drawAlbumDetail(nxui::Renderer& ren) {
     const float e = smoothStep(clamp01(m_detailTransition));
     const float rootFade = (1.f - e) * (1.f - e);
 
+    // The detail view starts from the exact HOME carousel geometry. Neighbours
+    // keep their HOME size/spacing and simply drift/fade away while the focused
+    // cover becomes the detail cover.
     if (rootFade > 0.002f) {
-        const float contextSaved = gMusicUiAlpha;
+        const float saved = gMusicUiAlpha;
         for (int idx = std::max(0, static_cast<int>(m_detailAlbum) - 2);
              idx <= std::min(static_cast<int>(m_library.albums.size()) - 1,
                              static_cast<int>(m_detailAlbum) + 2); ++idx) {
             if (idx == static_cast<int>(m_detailAlbum)) continue;
             const float delta = static_cast<float>(idx) - static_cast<float>(m_detailAlbum);
-            const float focus = clamp01(1.f - std::abs(delta));
-            const float size = kRootNeighborSize + (kRootSelectedSize - kRootNeighborSize) * focus;
-            float cx = 640.f + delta * kRootSpacing;
-            cx += (delta < 0.f ? -1.f : 1.f) * 46.f * e;
-            const float y = kRootCoverY + (1.f - focus) * 52.f + 14.f * e;
-            gMusicUiAlpha = contextSaved * rootFade * (std::abs(delta) > 1.f ? 0.64f : 0.90f);
+            const float size = switchu::homeui::carouselIconSizeForDistance(delta);
+            float cx = 640.f + switchu::homeui::carouselCenterOffset(delta);
+            cx += (delta < 0.f ? -1.f : 1.f) * 64.f * e;
+            const float y = switchu::homeui::kCarouselBaselineY - size + 10.f * e;
+            gMusicUiAlpha = saved * rootFade * (std::abs(delta) > 1.f ? 0.64f : 0.90f);
             drawReflectedCover(ren, m_library.albums[static_cast<size_t>(idx)].cover,
                                {cx - size * 0.5f, y, size, size}, false, 320);
         }
 
-        gMusicUiAlpha = contextSaved * rootFade;
-        const std::string rootTitle = fitText(m_font, album.title, 860.f, 1.38f);
-        const std::string rootArtist = fitText(m_smallFont, album.artist, 760.f, 0.94f);
-        const auto rootTitleSize = m_font->measure(rootTitle);
-        const auto rootArtistSize = m_smallFont->measure(rootArtist);
-        ren.drawText(rootTitle, {640.f - rootTitleSize.x * 1.38f * 0.5f, 526.f}, m_font, textPrimary(), 1.38f);
-        ren.drawText(rootArtist, {640.f - rootArtistSize.x * 0.94f * 0.5f, 570.f}, m_smallFont, textSecondary(), 0.94f);
-        ren.drawRect({405.f, 607.f, 470.f, 1.f}, {0.78f,0.82f,0.90f,0.14f * gMusicUiAlpha});
-        ren.drawText("◷  " + formatDuration(albumDurationMs(m_detailAlbum)),
-                     {431.f, 626.f}, m_smallFont, textSecondary(), 0.80f);
-        if (m_iconFont) {
-            ren.drawText(buttonGlyph(nxui::Button::X), {593.f, 622.f}, m_iconFont, textPrimary(), 0.78f);
-            ren.drawText(buttonGlyph(nxui::Button::A), {742.f, 622.f}, m_iconFont, textPrimary(), 0.78f);
+        if (m_homeTitlePill) {
+            m_homeTitlePill->setText(
+                album.title.empty() ? "Album sans titre" : album.title, kScreenW);
+            m_homeTitlePill->setMusicDurationText("◷  " + formatDuration(albumDurationMs(m_detailAlbum)));
+            m_homeTitlePill->setMusicPlayable(!album.tracks.empty());
+            m_homeTitlePill->setOpacity(saved * rootFade);
+            m_homeTitlePill->setVisible(true);
+            m_homeTitlePill->render(ren);
+            m_homeTitlePill->setOpacity(1.f);
         }
-        ren.drawText("Lire", {622.f, 626.f}, m_smallFont, textSecondary(), 0.78f);
-        ren.drawText("Ouvrir", {771.f, 626.f}, m_smallFont, textSecondary(), 0.78f);
-        const std::array<std::string,2> ghostTabs = {"Albums", "Playlists"};
-        constexpr float ghostCenters[2] = {588.f, 692.f};
-        for (int ti = 0; ti < 2; ++ti) {
-            const auto ts = m_smallFont->measure(ghostTabs[static_cast<size_t>(ti)]);
-            const bool activeTab = ti == 0;
-            ren.drawText(ghostTabs[static_cast<size_t>(ti)], {ghostCenters[ti] - ts.x * 0.42f, 82.f},
-                         m_smallFont, activeTab ? textPrimary(0.94f) : textSecondary(0.62f), 0.84f);
-            if (activeTab)
-                ren.drawRoundedRect({ghostCenters[ti] - 18.f, 99.f, 36.f, 2.f}, accent(0.86f), 1.f);
-        }
-        gMusicUiAlpha = contextSaved;
+        gMusicUiAlpha = saved;
     }
 
-    const nxui::Rect start{640.f - kRootSelectedSize * 0.5f, kRootCoverY,
-                           kRootSelectedSize, kRootSelectedSize};
-    const nxui::Rect end{86.f, 154.f, 330.f, 330.f};
+    constexpr float homeSelected = switchu::homeui::kCarouselSelectedSize;
+    const nxui::Rect start{640.f - homeSelected * 0.5f,
+                           switchu::homeui::kCarouselBaselineY - homeSelected,
+                           homeSelected, homeSelected};
+    const nxui::Rect end{82.f, 158.f, 334.f, 334.f};
     const nxui::Rect cover{
         start.x + (end.x - start.x) * e,
         start.y + (end.y - start.y) * e,
@@ -1546,52 +1462,69 @@ void MusicScreen::drawAlbumDetail(nxui::Renderer& ren) {
     drawReflectedCover(ren, album.cover, cover, false, 512);
 
     const float saved = gMusicUiAlpha;
-    const float contentReveal = smoothStep((e - 0.16f) / 0.84f);
-    gMusicUiAlpha *= contentReveal;
-    uint64_t totalMs = albumDurationMs(m_detailAlbum);
-    std::string info = formatDuration(totalMs) + "  •  " + std::to_string(album.tracks.size()) + " morceaux";
-    if (album.year > 0) info += "  •  " + std::to_string(album.year);
-    ren.drawText(fitText(m_font, album.title.empty() ? "Album sans titre" : album.title, 330.f, 1.28f),
-                 {86.f, 505.f}, m_font, textPrimary(), 1.28f);
-    ren.drawText(fitText(m_smallFont, album.artist.empty() ? "Artiste inconnu" : album.artist, 330.f, 0.88f),
-                 {88.f, 548.f}, m_smallFont, textSecondary(), 0.88f);
-    ren.drawText(fitText(m_smallFont, info, 330.f, 0.70f),
-                 {88.f, 580.f}, m_smallFont, textSecondary(0.76f), 0.70f);
+    const float reveal = smoothStep((e - 0.14f) / 0.86f);
+    gMusicUiAlpha *= reveal;
 
-    const float listShift = (1.f - contentReveal) * 54.f;
-    const float listX = 500.f + listShift;
-    ren.drawText("Morceaux", {listX, 126.f}, m_font, textPrimary(), 1.08f);
-    ren.drawText("Durée", {1132.f + listShift, 132.f}, m_smallFont, textSecondary(0.58f), 0.64f);
-    constexpr int rows = 7;
+    uint64_t totalMs = albumDurationMs(m_detailAlbum);
+    std::string info = formatDuration(totalMs) + "  •  " +
+                       std::to_string(album.tracks.size()) + " morceaux";
+    if (album.year > 0) info += "  •  " + std::to_string(album.year);
+    ren.drawText(fitText(m_font, album.title.empty() ? "Album sans titre" : album.title,
+                         334.f, 1.28f),
+                 {82.f, 512.f}, m_font, textPrimary(), 1.28f);
+    ren.drawText(fitText(m_font, album.artist.empty() ? "Artiste inconnu" : album.artist,
+                         334.f, 0.94f),
+                 {84.f, 552.f}, m_font, textSecondary(), 0.94f);
+    ren.drawText(fitText(m_font, info, 334.f, kHomeMinTextScale),
+                 {84.f, 584.f}, m_font, textSecondary(0.82f), kHomeMinTextScale);
+
+    const float listShift = (1.f - reveal) * 64.f;
+    const nxui::Rect panel{474.f + listShift, 112.f, 754.f, 500.f};
+    const nxui::LiquidGlassSettings oldGlass = ren.liquidGlassSettings();
+    switchu::homeui::applyLiquidGlassV105(ren);
+    ren.captureToOffscreen(true);
+    ren.drawLiquidGlass(0, panel, 24.f, {0.50f,0.58f,0.72f,0.12f},
+                        0.82f * gMusicUiAlpha, 0.f);
+    ren.drawRoundedRectOutline(panel, {1.f,1.f,1.f,0.12f * gMusicUiAlpha}, 24.f, 1.f);
+    ren.liquidGlassSettings() = oldGlass;
+
+    const float listX = panel.x + 24.f;
+    ren.drawText("Morceaux", {listX, 132.f}, m_font, textPrimary(), 1.08f);
+    ren.drawText("Durée", {1130.f + listShift, 136.f}, m_font,
+                 textSecondary(0.76f), kHomeMinTextScale);
+    constexpr int rows = 6;
+    constexpr float rowPitch = 64.f;
+    constexpr float rowHeight = 58.f;
+    constexpr float listY = 178.f;
     if (album.tracks.empty()) {
-        ren.drawText("Aucun morceau", {listX, 214.f}, m_font, textSecondary(0.86f), 0.94f);
+        ren.drawText("Aucun morceau", {listX, 218.f}, m_font, textSecondary(), 0.94f);
     } else {
         const float startRow = visibleListStartVisual(album.tracks.size(), rows);
         const int first = std::max(0, static_cast<int>(std::floor(startRow)));
         const int last = std::min(static_cast<int>(album.tracks.size()) - 1,
                                   static_cast<int>(std::ceil(startRow + rows)));
-        ren.pushClipRect({listX, 169.f, 704.f, rows * 58.f - 6.f});
+        ren.pushClipRect({listX, listY, 694.f, rows * rowPitch - 6.f});
         for (int idx = first; idx <= last; ++idx) {
             const size_t ti = album.tracks[static_cast<size_t>(idx)];
             if (ti >= m_library.tracks.size()) continue;
             const Track& track = m_library.tracks[ti];
             const int ordinal = track.trackNumber > 0 ? track.trackNumber : idx + 1;
-            const float rowY = 169.f + (static_cast<float>(idx) - startRow) * 58.f;
-            drawTrackRow(ren, track, {listX, rowY, 700.f, 52.f}, idx == m_selection, ordinal);
+            const float rowY = listY + (static_cast<float>(idx) - startRow) * rowPitch;
+            drawTrackRow(ren, track, {listX, rowY, 686.f, rowHeight},
+                         idx == m_selection, ordinal);
         }
         ren.popClipRect();
         if (album.tracks.size() > static_cast<size_t>(rows)) {
-            constexpr float railY = 170.f, railH = 400.f;
-            const float thumbH = std::max(46.f, railH * rows / static_cast<float>(album.tracks.size()));
+            constexpr float railY = listY + 2.f, railH = 374.f;
+            const float thumbH = std::max(48.f, railH * rows / static_cast<float>(album.tracks.size()));
             const float ratio = startRow / static_cast<float>(album.tracks.size() - rows);
-            ren.drawRoundedRect({1214.f + listShift, railY, 3.f, railH}, textSecondary(0.12f), 1.5f);
-            ren.drawRoundedRect({1214.f + listShift, railY + (railH - thumbH) * ratio, 3.f, thumbH},
+            ren.drawRoundedRect({1210.f + listShift, railY, 3.f, railH}, textSecondary(0.12f), 1.5f);
+            ren.drawRoundedRect({1210.f + listShift, railY + (railH - thumbH) * ratio, 3.f, thumbH},
                                 textSecondary(0.55f), 1.5f);
         }
     }
     gMusicUiAlpha = saved;
 }
-
 void MusicScreen::drawPlaylistDetail(nxui::Renderer& ren) {
     if (m_detailPlaylist >= m_playlistStore.playlists().size()) {
         drawEmpty(ren, "Playlist indisponible", "La bibliothèque a changé. Reviens au carrousel.");
@@ -1603,55 +1536,39 @@ void MusicScreen::drawPlaylistDetail(nxui::Renderer& ren) {
 
     if (rootFade > 0.002f) {
         const auto& playlists = m_playlistStore.playlists();
-        const float contextSaved = gMusicUiAlpha;
+        const float saved = gMusicUiAlpha;
         for (int idx = std::max(0, static_cast<int>(m_detailPlaylist) - 2);
              idx <= std::min(static_cast<int>(playlists.size()) - 1,
                              static_cast<int>(m_detailPlaylist) + 2); ++idx) {
             if (idx == static_cast<int>(m_detailPlaylist)) continue;
             const float delta = static_cast<float>(idx) - static_cast<float>(m_detailPlaylist);
-            const float focus = clamp01(1.f - std::abs(delta));
-            const float size = kRootNeighborSize + (kRootSelectedSize - kRootNeighborSize) * focus;
-            float cx = 640.f + delta * kRootSpacing;
-            cx += (delta < 0.f ? -1.f : 1.f) * 46.f * e;
-            const float y = kRootCoverY + (1.f - focus) * 52.f + 14.f * e;
-            gMusicUiAlpha = contextSaved * rootFade * (std::abs(delta) > 1.f ? 0.64f : 0.90f);
+            const float size = switchu::homeui::carouselIconSizeForDistance(delta);
+            float cx = 640.f + switchu::homeui::carouselCenterOffset(delta);
+            cx += (delta < 0.f ? -1.f : 1.f) * 64.f * e;
+            const float y = switchu::homeui::kCarouselBaselineY - size + 10.f * e;
+            gMusicUiAlpha = saved * rootFade * (std::abs(delta) > 1.f ? 0.64f : 0.90f);
             drawReflectedCover(ren, playlistCover(static_cast<size_t>(idx)),
                                {cx - size * 0.5f, y, size, size}, false, 320);
         }
-        gMusicUiAlpha = contextSaved * rootFade;
-        const std::string rootTitle = fitText(m_font, playlist.name, 860.f, 1.38f);
-        const auto rootTitleSize = m_font->measure(rootTitle);
-        ren.drawText(rootTitle, {640.f - rootTitleSize.x * 1.38f * 0.5f, 526.f},
-                     m_font, textPrimary(), 1.38f);
-        const std::string rootSub = std::to_string(playlist.trackIds.size()) + " morceaux";
-        const auto rootSubSize = m_smallFont->measure(rootSub);
-        ren.drawText(rootSub, {640.f - rootSubSize.x * 0.92f * 0.5f, 570.f},
-                     m_smallFont, textSecondary(), 0.92f);
-        ren.drawRect({405.f, 607.f, 470.f, 1.f}, {0.78f,0.82f,0.90f,0.14f * gMusicUiAlpha});
-        ren.drawText("◷  " + formatDuration(playlistDurationMs(m_detailPlaylist)),
-                     {431.f, 626.f}, m_smallFont, textSecondary(), 0.80f);
-        if (m_iconFont) {
-            ren.drawText(buttonGlyph(nxui::Button::X), {593.f, 622.f}, m_iconFont, textPrimary(), 0.78f);
-            ren.drawText(buttonGlyph(nxui::Button::A), {742.f, 622.f}, m_iconFont, textPrimary(), 0.78f);
+
+        if (m_homeTitlePill) {
+            m_homeTitlePill->setText(
+                playlist.name.empty() ? "Playlist" : playlist.name, kScreenW);
+            m_homeTitlePill->setMusicDurationText("◷  " + formatDuration(playlistDurationMs(m_detailPlaylist)));
+            m_homeTitlePill->setMusicPlayable(!playlist.trackIds.empty());
+            m_homeTitlePill->setOpacity(saved * rootFade);
+            m_homeTitlePill->setVisible(true);
+            m_homeTitlePill->render(ren);
+            m_homeTitlePill->setOpacity(1.f);
         }
-        ren.drawText("Lire", {622.f, 626.f}, m_smallFont, textSecondary(), 0.78f);
-        ren.drawText("Ouvrir", {771.f, 626.f}, m_smallFont, textSecondary(), 0.78f);
-        const std::array<std::string,2> ghostTabs = {"Albums", "Playlists"};
-        constexpr float ghostCenters[2] = {588.f, 692.f};
-        for (int ti = 0; ti < 2; ++ti) {
-            const auto ts = m_smallFont->measure(ghostTabs[static_cast<size_t>(ti)]);
-            const bool activeTab = ti == 1;
-            ren.drawText(ghostTabs[static_cast<size_t>(ti)], {ghostCenters[ti] - ts.x * 0.42f, 82.f},
-                         m_smallFont, activeTab ? textPrimary(0.94f) : textSecondary(0.62f), 0.84f);
-            if (activeTab)
-                ren.drawRoundedRect({ghostCenters[ti] - 18.f, 99.f, 36.f, 2.f}, accent(0.86f), 1.f);
-        }
-        gMusicUiAlpha = contextSaved;
+        gMusicUiAlpha = saved;
     }
 
-    const nxui::Rect start{640.f - kRootSelectedSize * 0.5f, kRootCoverY,
-                           kRootSelectedSize, kRootSelectedSize};
-    const nxui::Rect end{86.f, 154.f, 330.f, 330.f};
+    constexpr float homeSelected = switchu::homeui::kCarouselSelectedSize;
+    const nxui::Rect start{640.f - homeSelected * 0.5f,
+                           switchu::homeui::kCarouselBaselineY - homeSelected,
+                           homeSelected, homeSelected};
+    const nxui::Rect end{82.f, 158.f, 334.f, 334.f};
     const nxui::Rect cover{
         start.x + (end.x - start.x) * e,
         start.y + (end.y - start.y) * e,
@@ -1661,107 +1578,62 @@ void MusicScreen::drawPlaylistDetail(nxui::Renderer& ren) {
     drawReflectedCover(ren, playlistCover(m_detailPlaylist), cover, false, 512);
 
     const float saved = gMusicUiAlpha;
-    const float contentReveal = smoothStep((e - 0.16f) / 0.84f);
-    gMusicUiAlpha *= contentReveal;
+    const float reveal = smoothStep((e - 0.14f) / 0.86f);
+    gMusicUiAlpha *= reveal;
     const std::string info = formatDuration(playlistDurationMs(m_detailPlaylist)) + "  •  " +
                              std::to_string(playlist.trackIds.size()) + " morceaux";
-    ren.drawText(fitText(m_font, playlist.name.empty() ? "Playlist" : playlist.name, 330.f, 1.28f),
-                 {86.f, 505.f}, m_font, textPrimary(), 1.28f);
-    ren.drawText("Playlist locale", {88.f, 548.f}, m_smallFont, textSecondary(), 0.88f);
-    ren.drawText(fitText(m_smallFont, info, 330.f, 0.70f),
-                 {88.f, 580.f}, m_smallFont, textSecondary(0.76f), 0.70f);
+    ren.drawText(fitText(m_font, playlist.name.empty() ? "Playlist" : playlist.name,
+                         334.f, 1.28f),
+                 {82.f, 512.f}, m_font, textPrimary(), 1.28f);
+    ren.drawText("Playlist locale", {84.f, 552.f}, m_font, textSecondary(), 0.94f);
+    ren.drawText(fitText(m_font, info, 334.f, kHomeMinTextScale),
+                 {84.f, 584.f}, m_font, textSecondary(0.82f), kHomeMinTextScale);
 
-    const float listShift = (1.f - contentReveal) * 54.f;
-    const float listX = 500.f + listShift;
-    ren.drawText("Morceaux", {listX, 126.f}, m_font, textPrimary(), 1.08f);
-    ren.drawText("Durée", {1132.f + listShift, 132.f}, m_smallFont, textSecondary(0.58f), 0.64f);
-    constexpr int rows = 7;
+    const float listShift = (1.f - reveal) * 64.f;
+    const nxui::Rect panel{474.f + listShift, 112.f, 754.f, 500.f};
+    const nxui::LiquidGlassSettings oldGlass = ren.liquidGlassSettings();
+    switchu::homeui::applyLiquidGlassV105(ren);
+    ren.captureToOffscreen(true);
+    ren.drawLiquidGlass(0, panel, 24.f, {0.50f,0.58f,0.72f,0.12f},
+                        0.82f * gMusicUiAlpha, 0.f);
+    ren.drawRoundedRectOutline(panel, {1.f,1.f,1.f,0.12f * gMusicUiAlpha}, 24.f, 1.f);
+    ren.liquidGlassSettings() = oldGlass;
+
+    const float listX = panel.x + 24.f;
+    ren.drawText("Morceaux", {listX, 132.f}, m_font, textPrimary(), 1.08f);
+    ren.drawText("Durée", {1130.f + listShift, 136.f}, m_font,
+                 textSecondary(0.76f), kHomeMinTextScale);
+    constexpr int rows = 6;
+    constexpr float rowPitch = 64.f;
+    constexpr float rowHeight = 58.f;
+    constexpr float listY = 178.f;
     if (playlist.trackIds.empty()) {
-        ren.drawText("Playlist vide", {listX, 214.f}, m_font, textSecondary(0.86f), 0.94f);
+        ren.drawText("Playlist vide", {listX, 218.f}, m_font, textSecondary(), 0.94f);
     } else {
         const float startRow = visibleListStartVisual(playlist.trackIds.size(), rows);
         const int first = std::max(0, static_cast<int>(std::floor(startRow)));
         const int last = std::min(static_cast<int>(playlist.trackIds.size()) - 1,
                                   static_cast<int>(std::ceil(startRow + rows)));
-        ren.pushClipRect({listX, 169.f, 704.f, rows * 58.f - 6.f});
+        ren.pushClipRect({listX, listY, 694.f, rows * rowPitch - 6.f});
         for (int idx = first; idx <= last; ++idx) {
             const Track* track = trackForId(playlist.trackIds[static_cast<size_t>(idx)]);
             if (!track) continue;
-            const float rowY = 169.f + (static_cast<float>(idx) - startRow) * 58.f;
-            drawTrackRow(ren, *track, {listX, rowY, 700.f, 52.f},
+            const float rowY = listY + (static_cast<float>(idx) - startRow) * rowPitch;
+            drawTrackRow(ren, *track, {listX, rowY, 686.f, rowHeight},
                          idx == m_selection, idx + 1);
         }
         ren.popClipRect();
         if (playlist.trackIds.size() > static_cast<size_t>(rows)) {
-            constexpr float railY = 170.f, railH = 400.f;
-            const float thumbH = std::max(46.f, railH * rows / static_cast<float>(playlist.trackIds.size()));
+            constexpr float railY = listY + 2.f, railH = 374.f;
+            const float thumbH = std::max(48.f, railH * rows / static_cast<float>(playlist.trackIds.size()));
             const float ratio = startRow / static_cast<float>(playlist.trackIds.size() - rows);
-            ren.drawRoundedRect({1214.f + listShift, railY, 3.f, railH}, textSecondary(0.12f), 1.5f);
-            ren.drawRoundedRect({1214.f + listShift, railY + (railH - thumbH) * ratio, 3.f, thumbH},
+            ren.drawRoundedRect({1210.f + listShift, railY, 3.f, railH}, textSecondary(0.12f), 1.5f);
+            ren.drawRoundedRect({1210.f + listShift, railY + (railH - thumbH) * ratio, 3.f, thumbH},
                                 textSecondary(0.55f), 1.5f);
         }
     }
     gMusicUiAlpha = saved;
 }
-
-void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
-    const Track* track = currentTrack();
-    if (!track) {
-        drawEmpty(ren, "Aucune lecture en cours", "Choisis un morceau dans ta bibliothèque.");
-        return;
-    }
-
-    const float e = std::clamp(m_nowPlayingEnter, 0.f, 1.f);
-    const float saved = gMusicUiAlpha;
-    gMusicUiAlpha *= e;
-    const float shift = (1.f - e) * 24.f;
-
-    drawReflectedCover(ren, track->cover, {82.f, 145.f + shift, 392.f, 392.f}, false, 512);
-    ren.drawText("Lecture en cours", {548.f, 132.f + shift}, m_smallFont, textSecondary(), 0.82f);
-    ren.drawText(fitText(m_font, track->title.empty() ? "Morceau sans titre" : track->title, 630.f, 1.54f),
-                 {546.f, 178.f + shift}, m_font, textPrimary(), 1.54f);
-    ren.drawText(fitText(m_font, track->artist.empty() ? "Artiste inconnu" : track->artist, 620.f, 0.96f),
-                 {548.f, 234.f + shift}, m_font, accent(), 0.96f);
-    ren.drawText(fitText(m_smallFont, track->album.empty() ? "Album inconnu" : track->album, 620.f, 0.84f),
-                 {548.f, 274.f + shift}, m_smallFont, textSecondary(), 0.84f);
-
-    const float progress = m_status.duration_ms > 0
-        ? std::clamp(float(double(m_status.position_ms) / double(m_status.duration_ms)), 0.f, 1.f) : 0.f;
-    const nxui::Rect timeline{548.f, 342.f + shift, 610.f, 12.f};
-    if (m_nowControl == 5)
-        ren.drawRoundedRectOutline(timeline.expanded(8.f), accent(0.42f), 10.f, 1.5f);
-    ren.drawRoundedRect(timeline, {0.20f,0.22f,0.27f,0.90f * gMusicUiAlpha}, 6.f);
-    ren.drawRoundedRect({timeline.x, timeline.y, timeline.width * progress, timeline.height}, accent(), 6.f);
-    const float knobX = timeline.x + timeline.width * progress;
-    ren.drawCircle({knobX, timeline.y + timeline.height * 0.5f}, 7.f, textPrimary(), 24);
-    ren.drawText(formatDuration(m_status.position_ms), {548.f, 368.f + shift}, m_smallFont, textSecondary(), 0.74f);
-    const std::string duration = formatDuration(m_status.duration_ms);
-    const auto durSz = m_smallFont->measure(duration);
-    ren.drawText(duration, {1158.f - durSz.x * 0.74f, 368.f + shift}, m_smallFont, textSecondary(), 0.74f);
-
-    const std::array<std::string,5> labels = {
-        statusFlag(m_status, switchu::music::MusicStatus_Shuffle) ? "⇄" : "↝",
-        "◀◀",
-        statusFlag(m_status, switchu::music::MusicStatus_Playing) ? "Ⅱ" : "▶",
-        "▶▶",
-        repeatLabel(m_status.repeat_mode)
-    };
-    for (int i = 0; i < 5; ++i) {
-        const float x = 574.f + i * 116.f;
-        nxui::Rect button{x, 424.f + shift, 76.f, 64.f};
-        if (i == m_nowControl) {
-            ren.drawRoundedRect(button, panel2(0.96f), 23.f);
-            ren.drawRoundedRectOutline(button, accent(0.44f), 23.f, 1.4f);
-        }
-        ren.drawText(labels[static_cast<size_t>(i)], {button.x + 19.f, button.y + 15.f}, m_font,
-                     i == m_nowControl ? textPrimary() : textSecondary(), 0.94f);
-    }
-
-    ren.drawText("↑ progression   ←/→ déplacer   ZL -10 s   ZR +10 s",
-                 {548.f, 524.f + shift}, m_smallFont, textSecondary(0.64f), 0.66f);
-    gMusicUiAlpha = saved;
-}
-
 void MusicScreen::drawQueue(nxui::Renderer& ren) {
     ren.drawText("À suivre", {65.f, 105.f}, m_font, textPrimary(), 1.15f);
     const auto& ids = m_client.queueTrackIds();
@@ -1770,17 +1642,19 @@ void MusicScreen::drawQueue(nxui::Renderer& ren) {
         return;
     }
 
-    constexpr int rows = 8;
+    constexpr int rows = 7;
+    constexpr float rowPitch = 60.f;
+    constexpr float rowHeight = 54.f;
     const float start = visibleListStartVisual(ids.size(), rows);
     const int first = std::max(0, static_cast<int>(std::floor(start)));
     const int last = std::min(static_cast<int>(ids.size()) - 1,
                               static_cast<int>(std::ceil(start + rows)));
-    ren.pushClipRect({70.f, 142.f, 1132.f, rows * 54.f - 5.f});
+    ren.pushClipRect({70.f, 142.f, 1132.f, rows * rowPitch - 5.f});
     for (int idx = first; idx <= last; ++idx) {
         const Track* track = trackForId(ids[static_cast<size_t>(idx)]);
         if (!track) continue;
-        const float rowY = 142.f + (static_cast<float>(idx) - start) * 54.f;
-        nxui::Rect row{70.f, rowY, 1128.f, 49.f};
+        const float rowY = 142.f + (static_cast<float>(idx) - start) * rowPitch;
+        nxui::Rect row{70.f, rowY, 1128.f, rowHeight};
         drawTrackRow(ren, *track, row, idx == m_selection, idx + 1);
         if (ids[static_cast<size_t>(idx)] == m_status.track_id)
             ren.drawRoundedRect({row.x + 3.f, row.y + 6.f, 4.f, row.height - 12.f}, accent(), 2.f);
@@ -1788,7 +1662,7 @@ void MusicScreen::drawQueue(nxui::Renderer& ren) {
     ren.popClipRect();
 
     if (ids.size() > static_cast<size_t>(rows)) {
-        constexpr float railY = 143.f, railH = 424.f;
+        constexpr float railY = 143.f, railH = 414.f;
         const float thumbH = std::max(46.f, railH * rows / static_cast<float>(ids.size()));
         const float ratio = start / static_cast<float>(ids.size() - rows);
         ren.drawRoundedRect({1214.f, railY, 3.f, railH}, textSecondary(0.12f), 1.5f);
@@ -1798,7 +1672,7 @@ void MusicScreen::drawQueue(nxui::Renderer& ren) {
 }
 
 void MusicScreen::drawBottomHints(nxui::Renderer& ren) {
-    if (!m_smallFont || m_view == View::Albums || m_view == View::Playlists) return;
+    if (!m_font || m_view == View::Albums || m_view == View::Playlists) return;
     std::vector<std::pair<nxui::Button,std::string>> hints;
     if (m_modal == Modal::PlaylistNameKeyboard) {
         hints = {{nxui::Button::A,"Saisir"},{nxui::Button::X,"Effacer"},{nxui::Button::Plus,"Valider"},{nxui::Button::B,"Annuler"}};
@@ -1813,25 +1687,30 @@ void MusicScreen::drawBottomHints(nxui::Renderer& ren) {
     }
     float totalW = 0.f;
     for (const auto& h : hints)
-        totalW += 34.f + std::max(76.f, m_smallFont->measure(h.second).x * 0.68f + 22.f);
+        totalW += 34.f + std::max(76.f, m_font->measure(h.second).x * kHomeMinTextScale + 22.f);
     float x = std::max(42.f, (kScreenW - totalW) * 0.5f);
     for (const auto& h : hints) {
         if (m_iconFont) {
-            ren.drawText(buttonGlyph(h.first), {x, kBottomY}, m_iconFont, textPrimary(), 0.72f);
+            ren.drawText(buttonGlyph(h.first), {x, kBottomY}, m_iconFont, textPrimary(), 0.97f);
             x += 29.f;
         }
-        ren.drawText(h.second, {x, kBottomY + 1.f}, m_smallFont, textSecondary(), 0.68f);
-        x += std::max(76.f, m_smallFont->measure(h.second).x * 0.68f + 22.f);
+        ren.drawText(h.second, {x, kBottomY + 1.f}, m_font, textSecondary(), kHomeMinTextScale);
+        x += std::max(76.f, m_font->measure(h.second).x * kHomeMinTextScale + 22.f);
     }
 }
 
 
 void MusicScreen::drawModal(nxui::Renderer& ren) {
-    if (m_modal == Modal::None || !m_font || !m_smallFont) return;
+    if (m_modal == Modal::None || !m_font) return;
     ren.drawRect({0,0,kScreenW,kScreenH}, {0.f,0.f,0.f,0.62f * gMusicUiAlpha});
     nxui::Rect p{180.f, 115.f, 920.f, 480.f};
-    ren.drawRoundedRect(p, {0.055f,0.060f,0.075f,0.985f * gMusicUiAlpha}, 26.f);
-    ren.drawRoundedRectOutline(p, {0.78f,0.82f,0.90f,0.18f * gMusicUiAlpha}, 26.f, 1.4f);
+    const nxui::LiquidGlassSettings modalGlass = ren.liquidGlassSettings();
+    switchu::homeui::applyLiquidGlassV105(ren);
+    ren.captureToOffscreen(true);
+    ren.drawLiquidGlass(0, p, 26.f, {0.50f,0.58f,0.72f,0.14f},
+                        0.94f * gMusicUiAlpha, 0.f);
+    ren.drawRoundedRectOutline(p, {1.f,1.f,1.f,0.16f * gMusicUiAlpha}, 26.f, 1.2f);
+    ren.liquidGlassSettings() = modalGlass;
 
     if (m_modal == Modal::PlaylistChooser) {
         ren.drawText("Ajouter à une playlist", {220.f, 148.f}, m_font, textPrimary(), 1.08f);
@@ -1842,8 +1721,8 @@ void MusicScreen::drawModal(nxui::Renderer& ren) {
             if (idx >= static_cast<int>(ps.size())) break;
             nxui::Rect r{225.f, 205.f + i * 50.f, 830.f, 43.f};
             if (idx == m_modalSelection) ren.drawRoundedRect(r, panel2(), 11.f);
-            ren.drawText(fitText(m_smallFont, ps[static_cast<size_t>(idx)].name, 790.f, 0.76f),
-                         {r.x + 14.f,r.y + 11.f}, m_smallFont, textPrimary(), 0.76f);
+            ren.drawText(fitText(m_font, ps[static_cast<size_t>(idx)].name, 790.f, kHomeMinTextScale),
+                         {r.x + 14.f,r.y + 9.f}, m_font, textPrimary(), kHomeMinTextScale);
         }
         return;
     }
@@ -1866,18 +1745,22 @@ void MusicScreen::drawModal(nxui::Renderer& ren) {
         nxui::Rect r{225.f + col * 82.f, 270.f + row * 58.f, 72.f, 48.f};
         if (i == m_keyboardIndex) ren.drawRoundedRect(r, accent(0.14f), 10.f);
         else ren.drawRoundedRect(r, {0.095f,0.105f,0.125f,0.88f * gMusicUiAlpha}, 10.f);
-        const float sc = keys[static_cast<size_t>(i)].size() > 2 ? 0.48f : 0.72f;
-        ren.drawText(keys[static_cast<size_t>(i)], {r.x + 13.f,r.y + 13.f}, m_smallFont,
-                     i == m_keyboardIndex ? accent() : textPrimary(), sc);
+        const std::string keyText = fitText(m_font, keys[static_cast<size_t>(i)],
+                                            r.width - 12.f, kHomeMinTextScale);
+        const auto keySize = m_font->measure(keyText);
+        ren.drawText(keyText,
+                     {r.x + (r.width - keySize.x * kHomeMinTextScale) * 0.5f, r.y + 11.f},
+                     m_font, i == m_keyboardIndex ? accent() : textPrimary(),
+                     kHomeMinTextScale);
     }
 }
 
 void MusicScreen::onRender(nxui::Renderer& ren) {
-    if (!m_font || !m_smallFont || !m_active) return;
+    if (!m_font || !m_active) return;
 
     gMusicUiAlpha = std::clamp(m_transitionAlpha, 0.f, 1.f);
     gMusicAccent = kMusicAccent;
-    drawCrtBackground(ren);
+    drawMusicBackground(ren);
     drawTopBar(ren);
 
     if (m_scanRunning) {
@@ -1900,14 +1783,14 @@ void MusicScreen::onRender(nxui::Renderer& ren) {
         if (nextIndex >= 0 && nextIndex < static_cast<int>(m_client.queueTrackIds().size())) {
             const Track* next = trackForId(m_client.queueTrackIds()[static_cast<size_t>(nextIndex)]);
             if (next) {
-                nxui::Rect toast{812.f, 92.f, 406.f, 82.f};
+                nxui::Rect toast{796.f, 92.f, 422.f, 102.f};
                 ren.drawRoundedRect(toast, {0.055f,0.060f,0.075f,0.94f * gMusicUiAlpha}, 19.f);
                 ren.drawRoundedRectOutline(toast, accent(0.22f), 19.f, 1.2f);
-                ren.drawText("À suivre", {toast.x + 18.f,toast.y + 12.f}, m_smallFont, accent(), 0.73f);
-                ren.drawText(fitText(m_smallFont, next->title, 364.f, 0.80f),
-                             {toast.x + 18.f,toast.y + 36.f}, m_smallFont, textPrimary(), 0.80f);
-                ren.drawText(fitText(m_smallFont, next->artist, 364.f, 0.65f),
-                             {toast.x + 18.f,toast.y + 59.f}, m_smallFont, textSecondary(), 0.65f);
+                ren.drawText("À suivre", {toast.x + 18.f,toast.y + 11.f}, m_font, accent(), kHomeMinTextScale);
+                ren.drawText(fitText(m_font, next->title, 382.f, 0.92f),
+                             {toast.x + 18.f,toast.y + 39.f}, m_font, textPrimary(), 0.92f);
+                ren.drawText(fitText(m_font, next->artist, 382.f, kHomeMinTextScale),
+                             {toast.x + 18.f,toast.y + 72.f}, m_font, textSecondary(), kHomeMinTextScale);
             }
         }
     }
@@ -1920,34 +1803,120 @@ void MusicScreen::onRender(nxui::Renderer& ren) {
 void MusicScreen::handleTouch(nxui::Input& input) {
     if (!m_active) return;
 
+    // Mirror the HOME V10.30 touch contract at the Music root.
+    constexpr float kScrollStartThreshold = 16.f;
+    constexpr float kHorizontalIntentRatio = 1.05f;
+    constexpr float kTapMoveThreshold = 18.f;
+    constexpr float kCarouselTouchTop = 170.f;
+    constexpr float kCarouselTouchBottom = 540.f;
+
+    auto resetRootTouch = [this]() {
+        m_touchStartedInCarousel = false;
+        m_touchScrollActive = false;
+        m_touchLastX = 0.f;
+        m_touchLastDuration = 0.f;
+        m_touchScrollVelocity = 0.f;
+    };
+
+    auto rootHitIndex = [this](float x, float y) -> int {
+        if (!rootView()) return -1;
+        const int count = rootItemCount();
+        if (count <= 0) return -1;
+        const int first = std::max(0, static_cast<int>(std::floor(m_rootCarouselMotion.position)) - 3);
+        const int last = std::min(count - 1, static_cast<int>(std::ceil(m_rootCarouselMotion.position)) + 3);
+        for (int idx = first; idx <= last; ++idx) {
+            const float delta = static_cast<float>(idx) - m_rootCarouselMotion.position;
+            const float size = switchu::homeui::carouselIconSizeForDistance(delta);
+            const float cx = 640.f + switchu::homeui::carouselCenterOffset(delta);
+            const nxui::Rect r{cx - size * 0.5f,
+                               switchu::homeui::kCarouselBaselineY - size,
+                               size, size};
+            if (x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height)
+                return idx;
+        }
+        return -1;
+    };
+
     if (input.touchDown()) {
         m_touchTracking = true;
         m_touchStartX = input.touchX();
         m_touchStartY = input.touchY();
+        m_touchLastX = m_touchStartX;
+        m_touchLastDuration = 0.f;
+        m_touchScrollVelocity = 0.f;
+
         m_touchTimelineScrub = m_modal == Modal::None &&
             m_view == View::NowPlaying && !contentTransitionBusy() &&
             m_touchStartX >= 520.f && m_touchStartX <= 1190.f &&
             m_touchStartY >= 320.f && m_touchStartY <= 390.f;
+
+        m_touchStartedInCarousel = m_modal == Modal::None && rootView() &&
+            !contentTransitionBusy() &&
+            m_touchStartY >= kCarouselTouchTop &&
+            m_touchStartY <= kCarouselTouchBottom;
+        m_touchScrollActive = false;
         return;
     }
+
+    if (m_touchTracking && input.isTouching() && rootView() && m_touchStartedInCarousel) {
+        const float totalDx = input.touchDeltaX();
+        const float totalDy = input.touchDeltaY();
+        const bool horizontalGesture =
+            std::abs(totalDx) >= kScrollStartThreshold &&
+            std::abs(totalDx) > std::abs(totalDy) * kHorizontalIntentRatio;
+
+        if (!m_touchScrollActive && horizontalGesture &&
+            switchu::homeui::canTouchCarousel(rootItemCount())) {
+            m_touchScrollActive = true;
+            switchu::homeui::beginCarouselTouch(m_rootCarouselMotion, rootItemCount());
+        }
+
+        if (m_touchScrollActive) {
+            const float currentX = input.touchX();
+            const float currentDuration = input.touchDuration();
+            const float frameDx = currentX - m_touchLastX;
+            const float frameDt = currentDuration - m_touchLastDuration;
+            m_touchLastX = currentX;
+            m_touchLastDuration = currentDuration;
+
+            if (frameDt > 0.001f && frameDt < 0.10f) {
+                const float instantVelocity = frameDx / frameDt;
+                m_touchScrollVelocity =
+                    m_touchScrollVelocity * 0.62f + instantVelocity * 0.38f;
+            }
+            switchu::homeui::dragCarouselTouch(
+                m_rootCarouselMotion, frameDx, rootItemCount());
+            return;
+        }
+    }
+
     if (!input.touchUp() || !m_touchTracking) return;
 
     m_touchTracking = false;
     const float x = input.touchX();
     const float y = input.touchY();
-    const float dx = x - m_touchStartX;
-    const float dy = y - m_touchStartY;
+    const float dx = input.touchDeltaX();
+    const float dy = input.touchDeltaY();
 
     if (m_modal != Modal::None) {
         m_touchTimelineScrub = false;
+        resetRootTouch();
         return;
     }
 
-    // A timeline gesture is a scrub even when the finger travelled farther
-    // than the normal tap threshold. V2 only sought on taps, which made the
-    // visibly draggable progress bar ignore actual drag gestures.
+    if (m_touchScrollActive) {
+        switchu::homeui::endCarouselTouch(
+            m_rootCarouselMotion, m_touchScrollVelocity, rootItemCount());
+        m_touchTimelineScrub = false;
+        resetRootTouch();
+        return;
+    }
+
+    // A Now Playing timeline gesture remains a true scrub even when it moves
+    // farther than the ordinary tap threshold.
     if (m_touchTimelineScrub) {
         m_touchTimelineScrub = false;
+        resetRootTouch();
         if (m_status.duration_ms > 0) {
             const float ratio = clamp01((x - 548.f) / 610.f);
             const uint64_t target = static_cast<uint64_t>(
@@ -1959,30 +1928,41 @@ void MusicScreen::handleTouch(nxui::Input& input) {
         return;
     }
 
-    if (m_closing || contentTransitionBusy()) return;
-
-    // Root carousel swipes select only; a separate tap opens the focused item.
-    if (rootView() && std::abs(dx) > 55.f && std::abs(dx) > std::abs(dy)) {
-        moveSelection(dx < 0.f ? 1 : -1, 0);
+    if (m_closing || contentTransitionBusy()) {
+        resetRootTouch();
         return;
     }
 
-    // Tracklists and queue can be scrolled directly with a vertical swipe.
-    const bool listView = m_view == View::AlbumDetail || m_view == View::PlaylistDetail || m_view == View::Queue;
+    // HOME behaviour: a short tap may change the selected cover, but never
+    // performs A/Ouvrir. Opening remains a physical-controller action.
+    if (rootView() && m_touchStartedInCarousel &&
+        std::abs(dx) < kTapMoveThreshold && std::abs(dy) < kTapMoveThreshold) {
+        const int hit = rootHitIndex(x, y);
+        if (hit >= 0 && hit != m_selection) {
+            m_selection = hit;
+            m_rootInfoReveal = 0.f;
+            retargetRootCarousel(false);
+        }
+        resetRootTouch();
+        return;
+    }
+
+    resetRootTouch();
+
+    // Tracklists and queue retain direct vertical swipe navigation.
+    const bool listView = m_view == View::AlbumDetail ||
+                          m_view == View::PlaylistDetail ||
+                          m_view == View::Queue;
     if (listView && std::abs(dy) > 48.f && std::abs(dy) > std::abs(dx)) {
-        const int steps = std::clamp(static_cast<int>(std::abs(dy) / 58.f), 1, 4);
+        const int steps = std::clamp(static_cast<int>(std::abs(dy) / 62.f), 1, 4);
         m_selection += dy < 0.f ? steps : -steps;
         clampSelectionForView();
         return;
     }
 
-    // Remaining interactions are taps; never reinterpret a swipe as a button.
+    // Remaining non-root interactions are taps; never reinterpret a swipe as
+    // a transport control or track activation.
     if (std::abs(dx) > 22.f || std::abs(dy) > 22.f) return;
-
-    if (rootView() && y >= 76.f && y <= 108.f && x >= 520.f && x <= 760.f) {
-        setTab(x < 640.f ? 0 : 1);
-        return;
-    }
 
     if (m_view == View::NowPlaying) {
         if (y >= 410.f && y <= 504.f) {
@@ -1998,45 +1978,43 @@ void MusicScreen::handleTouch(nxui::Input& input) {
         return;
     }
 
-    if (rootView() && y >= 150.f && y <= 520.f) {
-        // Touching a visible neighbour simply selects it; touching the centre
-        // performs the same A/Ouvrir action as the controller.
-        if (x < 470.f) moveSelection(-1, 0);
-        else if (x > 810.f) moveSelection(1, 0);
-        else activateSelection();
-        return;
-    }
-
     if (m_view == View::AlbumDetail || m_view == View::PlaylistDetail) {
         const size_t count = m_view == View::AlbumDetail && m_detailAlbum < m_library.albums.size()
             ? m_library.albums[m_detailAlbum].tracks.size()
             : (m_detailPlaylist < m_playlistStore.playlists().size()
                 ? m_playlistStore.playlists()[m_detailPlaylist].trackIds.size() : 0);
-        if (x >= 500.f && x <= 1210.f && y >= 169.f) {
-            const float start = visibleListStartVisual(count, 7);
-            const int idx = static_cast<int>(std::floor((y - 169.f) / 58.f + start));
+        if (x >= 490.f && x <= 1210.f && y >= 178.f) {
+            const float start = visibleListStartVisual(count, 6);
+            const int idx = static_cast<int>(std::floor((y - 178.f) / 64.f + start));
             if (idx >= 0 && idx < static_cast<int>(count)) {
-                const float rowY = 169.f + (static_cast<float>(idx) - start) * 58.f;
-                if (y >= rowY && y <= rowY + 52.f) {
+                const float rowY = 178.f + (static_cast<float>(idx) - start) * 64.f;
+                if (y >= rowY && y <= rowY + 58.f) {
                     m_selection = idx;
                     m_listVisualSelection = static_cast<float>(idx);
                     activateSelection();
-                    return;
                 }
             }
         }
+        return;
     }
 
-    if (m_view == View::Queue && x >= 70.f && x <= 1198.f && y >= 142.f) {
-        const auto& queueIds = m_client.queueTrackIds();
-        const float start = visibleListStartVisual(queueIds.size(), 8);
-        const int idx = static_cast<int>(std::floor((y - 142.f) / 54.f + start));
-        if (idx >= 0 && idx < static_cast<int>(queueIds.size())) {
-            const float rowY = 142.f + (static_cast<float>(idx) - start) * 54.f;
-            if (y >= rowY && y <= rowY + 49.f) {
-                m_selection = idx;
-                m_listVisualSelection = static_cast<float>(idx);
-                activateSelection();
+    if (m_view == View::Queue) {
+        const auto ids = m_client.queueTrackIds();
+        constexpr float queueListY = 142.f;
+        constexpr float queueRowPitch = 60.f;
+        constexpr float queueRowHeight = 54.f;
+        if (x >= 70.f && x <= 1198.f && y >= queueListY) {
+            const float start = visibleListStartVisual(ids.size(), 7);
+            const int idx = static_cast<int>(std::floor(
+                (y - queueListY) / queueRowPitch + start));
+            if (idx >= 0 && idx < static_cast<int>(ids.size())) {
+                const float rowY = queueListY +
+                    (static_cast<float>(idx) - start) * queueRowPitch;
+                if (y >= rowY && y <= rowY + queueRowHeight) {
+                    m_selection = idx;
+                    m_listVisualSelection = static_cast<float>(idx);
+                    activateSelection();
+                }
             }
         }
     }

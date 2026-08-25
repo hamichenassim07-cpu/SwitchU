@@ -1,6 +1,7 @@
 #include "GameActionsHudWidget.hpp"
 #include <nxui/core/Renderer.hpp>
 #include <nxui/core/I18n.hpp>
+#include "HomeTypographyStyle.hpp"
 #include <algorithm>
 #include <string>
 
@@ -10,8 +11,8 @@ constexpr float kSeparatorY = 596.f;
 constexpr float kSeparatorWidth = 364.f;
 constexpr float kSeparatorHeight = 2.4f;
 constexpr float kActionsY = 622.f;
-constexpr float kActionLabelScale = 0.83f;
-constexpr float kActionGlyphScale = 0.97f;
+constexpr float kActionLabelScale = switchu::homeui::kMinimumMainTextScale;
+constexpr float kActionGlyphScale = switchu::homeui::kMainActionGlyphScale;
 constexpr float kActionGap = 8.f;
 constexpr float kPairGap = 42.f;
 

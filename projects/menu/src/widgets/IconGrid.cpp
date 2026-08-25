@@ -2,6 +2,8 @@
 #include "GlossyIcon.hpp"
 #include "LaunchAnimation.hpp"
 #include "StylisedGameCartridge.hpp"
+#include "HomeCarouselStyle.hpp"
+#include "HomeCarouselMotion.hpp"
 #include "../core/HomeOrderStore.hpp"
 #include "../core/CartridgeStyleStore.hpp"
 #include <nxui/core/Renderer.hpp>
@@ -9,58 +11,9 @@
 #include <cmath>
 
 namespace {
-// V10: one hero cover + one single neighbour size. There is deliberately
-// no third "outer" size anymore: every non-selected visible cover is 230 px.
-constexpr int kVisibleIcons = 5;
-constexpr float kSelectedIconSize = 310.f;
-constexpr float kNeighborIconSize = 230.f;
-constexpr float kCarouselGap = 12.f;
-constexpr float kCarouselBaselineY = 512.f;
-
-float iconSizeForDistance(float distance) {
-    distance = std::abs(distance);
-    if (distance <= 1.f) {
-        return kSelectedIconSize +
-               (kNeighborIconSize - kSelectedIconSize) * distance;
-    }
-    return kNeighborIconSize;
-}
-
-// Keep a real 12 px visual gap even while the selection animates between two
-// covers. A fixed centre-to-centre step cannot do that with 310/230 px cards.
-float carouselCenterOffset(float distance) {
-    const float sign = distance < 0.f ? -1.f : 1.f;
-    const float a = std::abs(distance);
-    const float firstStep =
-        kSelectedIconSize * 0.5f +
-        kNeighborIconSize * 0.5f +
-        kCarouselGap;
-    const float neighborStep =
-        kNeighborIconSize + kCarouselGap;
-
-    const float magnitude =
-        (a <= 1.f)
-            ? a * firstStep
-            : firstStep + (a - 1.f) * neighborStep;
-    return sign * magnitude;
-}
-
-// Plus le geste est rapide, plus la vitesse initiale est forte.
-// La friction reste douce pour permettre aux gestes puissants
-// d'aller sensiblement plus loin.
-constexpr float kInertiaFriction = 4.4f;
-constexpr float kMinimumInertiaSpeed = 0.14f;
-constexpr float kMaximumInertiaSpeed = 14.f;
-constexpr float kSnapSpeed = 14.f;
-constexpr float kSelectionBounceDuration = 0.42f;
-
-float selectionBounceScale(float t) {
-    // A short under-damped response: first positive overshoot, then a tiny
-    // corrective undershoot before settling exactly at 310 px.
-    if (t <= 0.f || t >= kSelectionBounceDuration)
-        return 1.f;
-    return 1.f + 0.080f * std::exp(-7.0f * t) * std::sin(22.0f * t);
-}
+// Touch-specific constants remain local. Canonical carousel geometry and snap
+// motion live in HomeCarouselStyle.hpp and are shared with SwitchU Music.
+constexpr float kSelectionBounceDuration = switchu::homeui::kCarouselSelectionBounceDuration;
 }
 
 IconGrid::IconGrid() {
@@ -145,11 +98,7 @@ void IconGrid::setShowApplications(bool showApplications) {
         return;
 
     m_showApplications = showApplications;
-    m_scrollPosition = 0.f;
-    m_scrollVelocity = 0.f;
-    m_touchScrolling = false;
-    m_inertiaActive = false;
-    m_snapActive = false;
+    switchu::homeui::jumpCarouselTo(m_carouselMotion, 0, m_displayCount);
     m_pendingSettledFocusIndex = -1;
 
     updateDisplayCount();
@@ -187,25 +136,9 @@ int IconGrid::visibleSlotCount() const {
 }
 
 float IconGrid::maxScrollPosition() const {
-    // V10: m_scrollPosition represents the item located under the exact
-    // horizontal centre of the HOME, not the first item of a visible window.
-    // The first and last games are therefore allowed to sit at screen centre.
-    return static_cast<float>(
-        std::max(0, m_displayCount - 1)
-    );
-}
-
-float IconGrid::desiredScrollPositionForFocus(
-    int focusedIndex
-) const {
-    if (m_displayCount <= 0)
-        return 0.f;
-
-    return std::clamp(
-        static_cast<float>(focusedIndex),
-        0.f,
-        maxScrollPosition()
-    );
+    // The shared HOME/Music coordinate represents the item located under the
+    // exact screen centre. First and last entries can therefore sit at centre.
+    return switchu::homeui::carouselMaxPosition(m_displayCount);
 }
 
 void IconGrid::updateDisplayCount() {
@@ -230,15 +163,7 @@ void IconGrid::updateDisplayCount() {
     // changes its position. Manual Y placement is persisted by layout slots.
     m_displayCount = static_cast<int>(m_displayIndices.size());
 
-    if (m_displayCount <= 0) {
-        m_scrollPosition = 0.f;
-    } else {
-        m_scrollPosition = std::clamp(
-            m_scrollPosition,
-            0.f,
-            maxScrollPosition()
-        );
-    }
+    switchu::homeui::clampCarouselMotion(m_carouselMotion, m_displayCount);
 }
 
 void IconGrid::reconfigureLayout(int cols, int rows,
@@ -252,11 +177,11 @@ void IconGrid::reconfigureLayout(int cols, int rows,
     (void)padX;
     (void)padY;
 
-    m_visibleCols = kVisibleIcons;
+    m_visibleCols = switchu::homeui::kCarouselVisibleIcons;
     // Logical cell values are kept for compatibility with the existing API.
     // Actual cover geometry is distance-based in layoutAtScrollPosition().
-    m_cellW = kSelectedIconSize;
-    m_cellH = kSelectedIconSize;
+    m_cellW = switchu::homeui::kCarouselSelectedSize;
+    m_cellH = switchu::homeui::kCarouselSelectedSize;
     m_padX = 0.f;
 
     updateDisplayCount();
@@ -265,11 +190,11 @@ void IconGrid::reconfigureLayout(int cols, int rows,
     m_originX =
         m_rect.x +
         m_rect.width * 0.5f -
-        kSelectedIconSize * 0.5f;
+        switchu::homeui::kCarouselSelectedSize * 0.5f;
 
     // Covers share a baseline: smaller neighbours sit lower while the centre
     // cover rises upward and dominates the composition.
-    m_originY = kCarouselBaselineY - kSelectedIconSize;
+    m_originY = switchu::homeui::kCarouselBaselineY - switchu::homeui::kCarouselSelectedSize;
 
     rebuildFocusRow();
 }
@@ -349,13 +274,6 @@ void IconGrid::layoutCarousel() {
         return;
     }
 
-    // Une navigation manette interrompt proprement
-    // l'inertie tactile et recentre la rangée.
-    m_touchScrolling = false;
-    m_inertiaActive = false;
-    m_snapActive = false;
-    m_scrollVelocity = 0.f;
-
     const int focusedGlobal = focusedGlobalIndex();
     int focusedDisplay = displayPositionForGlobalIndex(focusedGlobal);
 
@@ -363,28 +281,19 @@ void IconGrid::layoutCarousel() {
         focusedDisplay >= m_displayCount)
         focusedDisplay = 0;
 
-    // V10: controller navigation uses the same continuous scroll coordinate as
-    // touch. Moving focus therefore animates both covers at once: the old hero
-    // shrinks 310 -> 230 while the new one grows 230 -> 310. Repeated/held
-    // left-right presses simply retarget this snap without blocking input.
-    m_snapTarget = desiredScrollPositionForFocus(focusedDisplay);
-
-    if (std::abs(m_snapTarget - m_scrollPosition) < 0.0025f) {
-        m_scrollPosition = m_snapTarget;
-        m_snapActive = false;
-        layoutAtScrollPosition();
-    } else {
-        m_snapActive = true;
-        layoutAtScrollPosition();
-    }
+    // Jeux / Applications and Music now retarget the exact same shared motion
+    // engine. Repeated navigation simply changes the snap target.
+    switchu::homeui::retargetCarouselSnap(
+        m_carouselMotion, focusedDisplay, m_displayCount);
+    layoutAtScrollPosition();
 }
 
 void IconGrid::layoutAtScrollPosition() {
     if (m_displayCount <= 0)
         return;
 
-    m_scrollPosition = std::clamp(
-        m_scrollPosition,
+    m_carouselMotion.position = std::clamp(
+        m_carouselMotion.position,
         0.f,
         maxScrollPosition()
     );
@@ -395,12 +304,12 @@ void IconGrid::layoutAtScrollPosition() {
     const float screenCenterX =
         m_rect.x + m_rect.width * 0.5f;
 
-    m_originX = screenCenterX - kSelectedIconSize * 0.5f;
-    m_originY = kCarouselBaselineY - kSelectedIconSize;
+    m_originX = screenCenterX - switchu::homeui::kCarouselSelectedSize * 0.5f;
+    m_originY = switchu::homeui::kCarouselBaselineY - switchu::homeui::kCarouselSelectedSize;
 
     m_windowStart = std::max(
         0,
-        static_cast<int>(std::floor(m_scrollPosition)) -
+        static_cast<int>(std::floor(m_carouselMotion.position)) -
             visibleSlots / 2
     );
 
@@ -417,24 +326,24 @@ void IconGrid::layoutAtScrollPosition() {
             continue;
 
         const float logicalDistance =
-            static_cast<float>(displayIndex) - m_scrollPosition;
+            static_cast<float>(displayIndex) - m_carouselMotion.position;
         float size = m_carouselFocusActive
-            ? iconSizeForDistance(logicalDistance)
-            : kNeighborIconSize;
+            ? switchu::homeui::carouselIconSizeForDistance(logicalDistance)
+            : switchu::homeui::kCarouselNeighborSize;
 
         if (m_carouselFocusActive &&
             m_selectionBounceActive &&
             std::abs(logicalDistance) < 0.035f) {
-            size *= selectionBounceScale(m_selectionBounceTime);
+            size *= switchu::homeui::carouselSelectionBounceScale(m_selectionBounceTime);
         }
 
         const float centerX = m_carouselFocusActive
-            ? screenCenterX + carouselCenterOffset(logicalDistance)
-            : screenCenterX + logicalDistance * (kNeighborIconSize + kCarouselGap);
+            ? screenCenterX + switchu::homeui::carouselCenterOffset(logicalDistance)
+            : screenCenterX + logicalDistance * (switchu::homeui::kCarouselNeighborSize + switchu::homeui::kCarouselGap);
 
         icon->setRect({
             centerX - size * 0.5f,
-            kCarouselBaselineY - size,
+            switchu::homeui::kCarouselBaselineY - size,
             size,
             size
         });
@@ -447,120 +356,34 @@ void IconGrid::layoutAtScrollPosition() {
 }
 
 bool IconGrid::canTouchScroll() const {
-    // Even a short list can be dragged: the centre slot, not the number of
-    // simultaneously visible covers, is what defines selection in V10.
-    return m_displayCount > 1;
+    return switchu::homeui::canTouchCarousel(m_displayCount);
 }
 
 void IconGrid::beginTouchScroll() {
     if (!canTouchScroll())
         return;
 
-    m_touchScrolling = true;
-    m_inertiaActive = false;
-    m_snapActive = false;
-    m_scrollVelocity = 0.f;
+    switchu::homeui::beginCarouselTouch(m_carouselMotion, m_displayCount);
     m_pendingSettledFocusIndex = -1;
-
-    // The focused item is already centred when a drag begins. Keeping the
-    // offset at zero makes the item landing under screen centre become focus.
-    m_touchFocusOffset = 0.f;
 }
 
-void IconGrid::dragTouchScroll(
-    float deltaPixelsX
-) {
-    if (!m_touchScrolling ||
-        !canTouchScroll())
-        return;
-
-    const float step = kNeighborIconSize + kCarouselGap;
-
-    if (step <= 0.f)
-        return;
-
-    // Le contenu suit le doigt.
-    // Doigt vers la gauche = applications suivantes.
-    m_scrollPosition -=
-        deltaPixelsX / step;
-
-    m_scrollPosition = std::clamp(
-        m_scrollPosition,
-        0.f,
-        maxScrollPosition()
-    );
-
-    layoutAtScrollPosition();
+void IconGrid::dragTouchScroll(float deltaPixelsX) {
+    if (switchu::homeui::dragCarouselTouch(
+            m_carouselMotion, deltaPixelsX, m_displayCount))
+        layoutAtScrollPosition();
 }
 
-void IconGrid::endTouchScroll(
-    float fingerVelocityPixelsPerSecond
-) {
-    if (!m_touchScrolling)
-        return;
-
-    m_touchScrolling = false;
-
-    const float step = kNeighborIconSize + kCarouselGap;
-
-    if (step <= 0.f) {
-        startSnapToNearest();
-        return;
-    }
-
-    const float rawVelocity =
-        -fingerVelocityPixelsPerSecond /
-        step;
-
-    const float rawSpeed =
-        std::abs(rawVelocity);
-
-    // Accélération progressive :
-    // un petit geste garde peu d'inertie,
-    // un geste puissant parcourt plusieurs icônes.
-    const float powerBoost =
-        1.f +
-        std::clamp(
-            (rawSpeed - 1.f) * 0.18f,
-            0.f,
-            1.15f
-        );
-
-    m_scrollVelocity = std::clamp(
-        rawVelocity * powerBoost,
-        -kMaximumInertiaSpeed,
-        kMaximumInertiaSpeed
-    );
-
-    if (std::abs(m_scrollVelocity) <
-        kMinimumInertiaSpeed) {
-        m_scrollVelocity = 0.f;
-        startSnapToNearest();
-    } else {
-        m_inertiaActive = true;
-        m_snapActive = false;
-    }
-}
-
-void IconGrid::startSnapToNearest() {
-    m_inertiaActive = false;
-    m_scrollVelocity = 0.f;
-
-    m_snapTarget = std::clamp(
-        std::round(m_scrollPosition),
-        0.f,
-        maxScrollPosition()
-    );
-
-    m_snapActive = true;
+void IconGrid::endTouchScroll(float fingerVelocityPixelsPerSecond) {
+    switchu::homeui::endCarouselTouch(
+        m_carouselMotion, fingerVelocityPixelsPerSecond, m_displayCount);
 }
 
 void IconGrid::finishSnap() {
-    m_scrollPosition = m_snapTarget;
+    m_carouselMotion.position = m_carouselMotion.snapTarget;
 
-    m_snapActive = false;
-    m_inertiaActive = false;
-    m_scrollVelocity = 0.f;
+    m_carouselMotion.snapActive = false;
+    m_carouselMotion.inertiaActive = false;
+    m_carouselMotion.velocity = 0.f;
     m_selectionBounceTime = 0.f;
     m_selectionBounceActive = m_carouselFocusActive && m_entryBouncePending;
     m_entryBouncePending = false;
@@ -569,7 +392,7 @@ void IconGrid::finishSnap() {
 
     const int targetDisplay =
         std::clamp(
-            static_cast<int>(std::round(m_scrollPosition)),
+            static_cast<int>(std::round(m_carouselMotion.position)),
             0,
             std::max(0, m_displayCount - 1)
         );
@@ -705,7 +528,7 @@ void IconGrid::startAppearAnimation() {
         std::max(
             0,
             static_cast<int>(
-                std::floor(m_scrollPosition)
+                std::floor(m_carouselMotion.position)
             ) - visibleSlotCount() / 2 - 1
         );
 
@@ -774,7 +597,7 @@ void IconGrid::onUpdate(float dt) {
         m_suspendedTumbleTime = 0.f;
         m_suspendedTumbleActive = false;
     }
-    if (m_touchScrolling ||
+    if (m_carouselMotion.touchScrolling ||
         m_displayCount <= 0)
         return;
 
@@ -787,63 +610,13 @@ void IconGrid::onUpdate(float dt) {
         layoutAtScrollPosition();
     }
 
-    if (m_inertiaActive) {
-        m_scrollPosition +=
-            m_scrollVelocity * dt;
-
-        const float maximum =
-            maxScrollPosition();
-
-        if (m_scrollPosition <= 0.f) {
-            m_scrollPosition = 0.f;
-
-            if (m_scrollVelocity < 0.f)
-                m_scrollVelocity = 0.f;
-        } else if (
-            m_scrollPosition >= maximum
-        ) {
-            m_scrollPosition = maximum;
-
-            if (m_scrollVelocity > 0.f)
-                m_scrollVelocity = 0.f;
-        }
-
-        m_scrollVelocity *=
-            std::exp(
-                -kInertiaFriction * dt
-            );
-
+    const auto motionUpdate = switchu::homeui::updateCarouselMotion(
+        m_carouselMotion, safeDt, m_displayCount);
+    if (motionUpdate.changed)
         layoutAtScrollPosition();
+    if (motionUpdate.settled)
+        finishSnap();
 
-        if (std::abs(m_scrollVelocity) <
-            kMinimumInertiaSpeed) {
-            startSnapToNearest();
-        }
-
-        return;
-    }
-
-    if (m_snapActive) {
-        const float difference =
-            m_snapTarget -
-            m_scrollPosition;
-
-        const float amount =
-            std::min(
-                1.f,
-                kSnapSpeed * dt
-            );
-
-        m_scrollPosition +=
-            difference * amount;
-
-        layoutAtScrollPosition();
-
-        if (std::abs(difference) <
-            0.0025f) {
-            finishSnap();
-        }
-    }
 }
 
 void IconGrid::render(

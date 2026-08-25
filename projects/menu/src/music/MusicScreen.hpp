@@ -4,6 +4,9 @@
 #include "MusicCoverCache.hpp"
 #include "MusicLibrary.hpp"
 #include "MusicPlaylistStore.hpp"
+#include "widgets/TitlePillWidget.hpp"
+#include "widgets/GlossyIcon.hpp"
+#include "widgets/HomeCarouselMotion.hpp"
 
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Input.hpp>
@@ -25,7 +28,13 @@ public:
     void setFonts(nxui::Font* normal, nxui::Font* small, nxui::Font* icons) {
         m_font = normal; m_smallFont = small; m_iconFont = icons;
     }
-    void setProfileTexture(const nxui::Texture* texture) { m_profileTexture = texture; }
+    void setHomeHudWidgets(nxui::Widget* clock, nxui::Widget* profile,
+                           nxui::Widget* battery, TitlePillWidget* titlePill) {
+        m_homeClockWidget = clock;
+        m_homeProfileWidget = profile;
+        m_homeBatteryWidget = battery;
+        m_homeTitlePill = titlePill;
+    }
     void onClose(std::function<void()> cb) { m_closeCb = std::move(cb); }
     void onSessionGuard(std::function<void(bool)> cb) { m_sessionGuardCb = std::move(cb); }
 
@@ -63,7 +72,8 @@ private:
     void startScan(bool force = false);
     void finishScanIfReady();
     void refreshStatus(bool force = false);
-    void setTab(int index);
+    void setRootCategory(int index);
+    int rootCategoryIndex() const;
     void moveSelection(int dx, int dy);
     void activateSelection();
     void goBack();
@@ -98,7 +108,7 @@ private:
     std::vector<uint64_t> playlistTrackIds(size_t playlistIndex) const;
     size_t selectedTrackIndex() const;
 
-    void drawCrtBackground(nxui::Renderer& ren);
+    void drawMusicBackground(nxui::Renderer& ren);
     void drawTopBar(nxui::Renderer& ren);
     void drawAlbums(nxui::Renderer& ren);
     void drawPlaylists(nxui::Renderer& ren);
@@ -108,30 +118,31 @@ private:
     void drawQueue(nxui::Renderer& ren);
     void drawBottomHints(nxui::Renderer& ren);
     void drawModal(nxui::Renderer& ren);
-    void drawCover(nxui::Renderer& ren, const CoverRef& cover,
-                   const nxui::Rect& rect, bool selected, int maxSide = 256);
     void drawTrackRow(nxui::Renderer& ren, const Track& track, const nxui::Rect& row,
                       bool selected, int ordinal = 0);
     void drawNowPlayingIndicator(nxui::Renderer& ren, const nxui::Rect& row);
-    void drawSecondaryMusicTabs(nxui::Renderer& ren);
+    void drawRootCategoryHint(nxui::Renderer& ren);
     void drawEmpty(nxui::Renderer& ren, const std::string& title,
                    const std::string& detail);
 
     std::string formatDuration(uint64_t ms) const;
-    std::string formatClock() const;
     std::string fitText(nxui::Font* font, const std::string& text,
                         float maxWidth, float scale) const;
-    void updateBattery(float dt);
-    int visibleListStart(size_t count, int rows) const;
     float visibleListStartVisual(size_t count, int rows) const;
     void clampSelectionForView();
     bool contentTransitionBusy() const;
     bool rootView() const;
+    int rootItemCount() const;
+    void retargetRootCarousel(bool immediate = false);
 
     nxui::Font* m_font = nullptr;
     nxui::Font* m_smallFont = nullptr;
     nxui::Font* m_iconFont = nullptr;
-    const nxui::Texture* m_profileTexture = nullptr;
+    nxui::Widget* m_homeClockWidget = nullptr;
+    nxui::Widget* m_homeProfileWidget = nullptr;
+    nxui::Widget* m_homeBatteryWidget = nullptr;
+    TitlePillWidget* m_homeTitlePill = nullptr;
+    GlossyIcon m_musicHomeCard;
     std::function<void()> m_closeCb;
     std::function<void(bool)> m_sessionGuardCb;
 
@@ -139,15 +150,13 @@ private:
     View m_view = View::Albums;
     View m_nowPlayingReturnView = View::Albums;
     View m_queueReturnView = View::NowPlaying;
-    int m_tabIndex = 0;
     int m_selection = 0;
     size_t m_detailAlbum = 0;
     size_t m_detailPlaylist = 0;
     int m_nowControl = 2;
 
-    // HOME-derived motion state. Root carousel selection uses a continuous
-    // visual position so covers glide instead of snapping between slots.
-    float m_carouselVisualIndex = 0.f;
+    // The exact HOME carousel motion engine is shared with IconGrid.
+    switchu::homeui::HomeCarouselMotionState m_rootCarouselMotion{};
     float m_listVisualSelection = 0.f;
     float m_detailTransition = 1.f;
     bool m_detailClosing = false;
@@ -157,21 +166,26 @@ private:
     int m_nowPlayingReturnSelection = 0;
     int m_queueReturnSelection = 0;
 
-    // HOME V10.30 category animation copied into Music so entering the third
-    // category uses the same elastic lens motion instead of a bespoke slide.
-    float m_homeTabSlide = 2.f;
-    float m_homeTabAnimFrom = 2.f;
-    float m_homeTabAnimTo = 2.f;
-    float m_homeTabAnimTime = 0.f;
-    bool m_homeTabAnimating = false;
 
     // Selected album/playlist metadata fades in independently from the cover
     // carousel, matching the HOME title reveal rhythm after rapid navigation.
     float m_rootInfoReveal = 1.f;
 
-    // Optional four-frame horizontal sprite sheet for the now-playing runner.
-    // No Nintendo asset is bundled; a later approved asset can replace the
-    // fallback without changing tracklist layout or playback code.
+    // Albums <-> Playlists is a hidden secondary category. D-pad Up/Down
+    // triggers a short vertical content transition and a temporary label; no
+    // permanent category bar is rendered.
+    float m_rootCategoryTransition = 1.f;
+    int m_rootCategoryDirection = 1;
+    float m_rootCategoryHintTimer = 0.f;
+
+    // Exact HOME entry bounce shared with IconGrid. It runs once when Music
+    // receives the carousel, never on every left/right selection change.
+    bool m_rootEntryBounceActive = false;
+    float m_rootEntryBounceTime = 0.f;
+
+    // Optional four-frame horizontal sprite sheet for the intended now-playing
+    // runner. No Nintendo asset is bundled. Until an asset decision is made,
+    // the UI shows only a neutral technical play-state indicator.
     nxui::Texture m_nowPlayingRunnerTexture;
     bool m_runnerLoadAttempted = false;
 
@@ -189,9 +203,6 @@ private:
     switchu::music::Status m_status{};
     float m_statusTimer = 0.f;
     float m_hiddenGuardTimer = 0.f;
-    float m_batteryTimer = 0.f;
-    uint32_t m_batteryPercent = 100;
-    bool m_batteryCharging = false;
     float m_uiTime = 0.f;
     bool m_nextSoonWasVisible = false;
     float m_nextToastTimer = 0.f;
@@ -209,8 +220,13 @@ private:
 
     bool m_touchTracking = false;
     bool m_touchTimelineScrub = false;
+    bool m_touchStartedInCarousel = false;
+    bool m_touchScrollActive = false;
     float m_touchStartX = 0.f;
     float m_touchStartY = 0.f;
+    float m_touchLastX = 0.f;
+    float m_touchLastDuration = 0.f;
+    float m_touchScrollVelocity = 0.f;
 };
 
 } // namespace switchu::menu::music

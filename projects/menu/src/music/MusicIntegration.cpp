@@ -1,5 +1,6 @@
 #include "core/WiiUMenuApp.hpp"
 #include "core/DebugLog.hpp"
+#include "widgets/GlossyIcon.hpp"
 
 void WiiUMenuApp::createMusic() {
     // wireGlobalActions() is called before the HOME overlay layer is built.
@@ -50,14 +51,25 @@ void WiiUMenuApp::createMusic() {
 void WiiUMenuApp::showMusic() {
     createMusic();
     if (!m_musicScreen) return;
-    if (!m_userAvatarButtons.empty() && m_userAvatarButtons.front())
-        m_musicScreen->setProfileTexture(m_userAvatarButtons.front()->avatarTexture());
+    m_musicScreen->setHomeHudWidgets(
+        m_clock.get(),
+        (!m_userAvatarButtons.empty() && m_userAvatarButtons.front())
+            ? static_cast<nxui::Widget*>(m_userAvatarButtons.front().get()) : nullptr,
+        m_battery.get(),
+        m_titlePill.get());
 
     // V0.02: merely entering Music does not silence HOME BGM. The session
     // guard fades it only after a user track actually becomes active.
     m_musicReturnHomeCategory = m_clock ? m_clock->homeCategory() : 1;
     if (m_clock)
         m_clock->setHomeCategory(2);
+    if (m_battery)
+        m_battery->setWifiVisible(false);
+    if (m_titlePill) {
+        m_titlePill->setMusicMode(true);
+        m_titlePill->setGameActionsVisible(true);
+        m_titlePill->setSelectedTitleId(0);
+    }
 
     if (m_userSelect && m_userSelect->isActive()) m_userSelect->hide();
     if (m_dialog && m_dialog->isActive()) m_dialog->hide();
@@ -68,7 +80,8 @@ void WiiUMenuApp::showMusic() {
     if (m_cursor) m_cursor->setVisible(false);
     if (m_systemSelectionHalo) m_systemSelectionHalo->setVisible(false);
     focusManager().setFocus(m_musicScreen.get());
-    DebugLog::log("[music] opened full-screen Music application");
+    m_audio.playSfx(Sfx::PageChange);
+    DebugLog::log("[music] entered native HOME Music category");
 }
 
 void WiiUMenuApp::closeMusic() {
@@ -95,13 +108,39 @@ void WiiUMenuApp::closeMusic() {
     // audio itself stays in the daemon and therefore survives this transition.
     const bool applications = m_musicReturnHomeCategory != 0;
     DebugLog::log("[music-diag] CLOSE_SAFE category_begin applications=%d", applications ? 1 : 0);
+    if (m_titlePill) {
+        m_titlePill->setMusicMode(false);
+        m_titlePill->setMusicDurationText({});
+        m_titlePill->setMusicPlayable(false);
+    }
     setHomeApplicationsCategory(applications);
     if (m_clock)
         m_clock->setHomeCategory(applications ? 1 : 0);
+    if (m_battery)
+        m_battery->setWifiVisible(true);
+
+    // Applications is normally still the active HOME filter while Music owns
+    // the overlay. setHomeApplicationsCategory(true) can therefore take its
+    // no-op fast path. Restore the real HOME TitlePill explicitly so Music's
+    // album title can never survive one frame after returning to HOME.
+    if (m_titlePill && m_grid) {
+        nxui::Widget* focused = m_grid->focusManager().current();
+        if (focused && focused->tag() == "glossy_icon") {
+            auto* icon = static_cast<GlossyIcon*>(focused);
+            m_titlePill->setGameActionsVisible(true);
+            m_titlePill->setSelectedTitleId(icon->titleId());
+            m_titlePill->setText(icon->title());
+            m_titlePill->setVisible(true);
+        } else {
+            m_titlePill->setGameActionsVisible(false);
+            m_titlePill->hideAnimated();
+        }
+    }
     DebugLog::log("[music-diag] CLOSE_SAFE category_done");
 
     // Cursor/halo are updated only after HOME is back in its final category.
     updateCursor();
+    m_audio.playSfx(Sfx::PageChange);
     DebugLog::log("[music-diag] CLOSE_SAFE cursor_done");
 
     // If no local session exists, ensure HOME theme audio comes back softly.

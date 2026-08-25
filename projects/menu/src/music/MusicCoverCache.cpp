@@ -36,7 +36,7 @@ bool MusicCoverCache::loadTexture(const CoverRef& ref, nxui::Renderer& ren,
     return out.loadFromMemory(ren.gpu(), ren, bytes.data(), bytes.size(), maxSide);
 }
 
-const nxui::Texture* MusicCoverCache::get(const CoverRef& ref, nxui::Renderer& ren,
+nxui::Texture* MusicCoverCache::get(const CoverRef& ref, nxui::Renderer& ren,
                                           int maxSide) {
     if (!ref.valid()) return nullptr;
     // V0.02 uses two quality buckets instead of generating a distinct GPU
