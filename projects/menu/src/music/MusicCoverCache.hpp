@@ -5,13 +5,8 @@
 #include <nxui/core/Types.hpp>
 
 #include <cstddef>
-#include <atomic>
 #include <list>
-#include <memory>
-#include <mutex>
-#include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -37,16 +32,14 @@ public:
     nxui::Texture* get(const CoverRef& ref, nxui::Renderer& ren, int maxSide = 256);
     nxui::Texture* getBack(const CoverRef& ref, nxui::Renderer& ren, int maxSide = 160);
 
-    // Album colour/back-material analysis is intentionally independent from
-    // normal texture loading. Only one relevant artwork is processed at once
-    // on a worker thread. Results are persisted on SD and validated against a
-    // lightweight file signature before reuse on a later boot.
+    // V8.3 safe-style compatibility API. Per-album colours are resolved without
+    // re-decoding artwork or launching a background image worker.
     void requestStyle(const CoverRef& ref);
     void pollStyleRequest();
     MusicArtworkStyle styleFor(const CoverRef& ref) const;
 
     void clear();
-    void resetFailures() { m_failed.clear(); m_styleFailed.clear(); }
+    void resetFailures() { m_failed.clear(); }
     size_t size() const { return m_lru.size(); }
 
 private:
@@ -54,44 +47,15 @@ private:
         std::string key;
         nxui::Texture texture;
     };
-    struct StyleResult {
-        std::string key;
-        uint64_t signature = 0;
-        MusicArtworkStyle style{};
-    };
-    struct StyleWorkerState {
-        std::atomic<bool> cancelRequested{false};
-        std::atomic<bool> ready{false};
-        std::mutex resultMutex;
-        std::optional<StyleResult> result;
-    };
     using List = std::list<Entry>;
     using Map = std::unordered_map<std::string, List::iterator>;
 
     bool loadTexture(const CoverRef& ref, nxui::Renderer& ren, nxui::Texture& out, int maxSide);
-    static MusicArtworkStyle sampleArtworkStyle(const CoverRef& ref, uint64_t signature,
-                                                const std::atomic<bool>* cancelRequested);
-    static uint64_t coverSignature(const CoverRef& ref);
-
-    void ensurePersistentStyleCacheLoaded();
-    void persistStyleCache();
-    void prunePersistentStyleCache();
-    void touchStyle(const std::string& key, MusicArtworkStyle& style);
 
     size_t m_maxEntries = 18;
     List m_lru;
     Map m_map;
     std::unordered_set<std::string> m_failed;
-
-    std::unordered_map<std::string, MusicArtworkStyle> m_styles;
-    std::unordered_map<std::string, MusicArtworkStyle> m_persistedStyles;
-    std::unordered_set<std::string> m_styleFailed;
-    std::shared_ptr<StyleWorkerState> m_styleWorker;
-    bool m_styleRunning = false;
-    bool m_persistentStylesLoaded = false;
-    bool m_persistentCacheDirty = false;
-    uint64_t m_lastPersistEpochSec = 0;
-    std::string m_stylePendingKey;
 };
 
 } // namespace switchu::menu::music

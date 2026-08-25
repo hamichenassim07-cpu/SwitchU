@@ -244,6 +244,7 @@ void MusicScreen::show() {
     refreshStatus(true);
     if (!m_hasScanned) startScan(false);
     DebugLog::log("[music-diag] OPEN_MUSIC ready scan=%d", m_scanRunning ? 1 : 0);
+    DebugLog::log("[music-diag] V8.3 safe-style artwork_worker=OFF secondary_decode=OFF physical_media=ON");
 }
 
 
@@ -575,36 +576,11 @@ void MusicScreen::onUpdate(float dt) {
     finishScanIfReady();
     refreshStatus(false);
 
-    // Colour extraction is a one-at-a-time background job. Only artwork that
-    // is actually selected/open/playing is sampled, keeping carousel scrolling
-    // free from duplicate image decodes on the UI thread.
-    m_coverCache.pollStyleRequest();
-    CoverRef styleCover{};
-    if (m_view == View::Albums && !m_library.albums.empty()) {
-        const int idx = std::clamp(m_selection, 0, static_cast<int>(m_library.albums.size()) - 1);
-        styleCover = m_library.albums[static_cast<size_t>(idx)].cover;
-    } else if (m_view == View::Playlists && !m_playlistStore.playlists().empty()) {
-        const int idx = std::clamp(m_selection, 0, static_cast<int>(m_playlistStore.playlists().size()) - 1);
-        styleCover = playlistCover(static_cast<size_t>(idx));
-    } else if (m_view == View::AlbumDetail && m_detailAlbum < m_library.albums.size()) {
-        styleCover = m_library.albums[m_detailAlbum].cover;
-    } else if (m_view == View::PlaylistDetail && m_detailPlaylist < m_playlistStore.playlists().size()) {
-        styleCover = playlistCover(m_detailPlaylist);
-    } else if (m_view == View::NowPlaying) {
-        if (const Track* t = currentTrack()) styleCover = t->cover;
-    }
-    m_coverCache.requestStyle(styleCover);
-    // A playing album can remain visible as a neighbour while the user browses
-    // another selection. Queue its artwork style as a secondary one-at-a-time
-    // request so its vinyl label/accent never remains on the generic fallback.
-    // requestStyle() is non-blocking and naturally defers this while the
-    // selected artwork worker is busy.
-    if (hasMusicSession()) {
-        if (const Track* playingTrack = currentTrack()) {
-            if (playingTrack->cover.valid() && playingTrack->cover.key() != styleCover.key())
-                m_coverCache.requestStyle(playingTrack->cover);
-        }
-    }
+    // V8.3 crash fix: the console logs proved the library scan completes and
+    // the crash occurs immediately after the old [music-style] worker begins.
+    // Keep style resolution decoder-free. Normal cover textures are loaded
+    // lazily on the render thread, while accent/spine/back colours come from
+    // MusicCoverCache::styleFor() without any secondary image decode.
 }
 
 
@@ -696,6 +672,8 @@ void MusicScreen::moveSelection(int dx, int dy) {
             m_selection += dx;
             clampSelectionForView();
             if (m_selection != before) {
+                DebugLog::log("[music-diag] MOVE_ROOT view=%d from=%d to=%d",
+                              static_cast<int>(m_view), before, m_selection);
                 m_rootInfoReveal = 0.f;
                 retargetRootCarousel(false);
             }
@@ -715,8 +693,12 @@ void MusicScreen::moveSelection(int dx, int dy) {
         return;
     }
 
+    const int before = m_selection;
     m_selection += dy != 0 ? dy : dx;
     clampSelectionForView();
+    if (m_selection != before)
+        DebugLog::log("[music-diag] MOVE_LIST view=%d from=%d to=%d",
+                      static_cast<int>(m_view), before, m_selection);
 }
 
 void MusicScreen::openAlbum(size_t index) {
@@ -1209,9 +1191,9 @@ PhysicalMediaGeometry MusicScreen::drawPhysicalMedia(nxui::Renderer& ren,
                                                        bool playing,
                                                        int maxSide) {
     nxui::Texture* tex = m_coverCache.get(cover, ren, maxSide);
-    // Only the selected/detail object needs the generated rear material.
-    // Neighbours keep the cheap fallback and never trigger an extra GPU load.
-    nxui::Texture* backTex = maxSide >= 500 ? m_coverCache.getBack(cover, ren, 160) : nullptr;
+    // V8.3: no second artwork texture is decoded/generated for the rear sleeve.
+    // The renderer receives nullptr and uses the safe smoked back colour.
+    nxui::Texture* backTex = nullptr;
     const MusicArtworkStyle style = m_coverCache.styleFor(cover);
     PhysicalMediaPose pose{};
     pose.rect = rect;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-side invariants for SwitchU Music V8 autonomous-finalization / physical-media contract.
+"""Host-side invariants for SwitchU Music V8.3 crash-fix safe-style contract.
 
 This intentionally performs source-level checks without requiring devkitPro. It
 is a regression guard, not a substitute for the real Switch build/test.
@@ -222,25 +222,33 @@ require("setWifiVisible(false)" in integration and "setWifiVisible(true)" in int
 # Physical sleeves / vinyl / local artwork colour are mandatory in the new DA.
 for token in ("front", "back", "depthPx", "drawVinyl", "vinylReveal", "vinylSpinRad"):
     require(token in physical_cpp + physical_hpp, f"physical-media contract missing: {token}")
-require("sampleArtworkStyle" in cover_cache_cpp and "stbi_load_from_memory" in cover_cache_cpp,
-        "album accent is no longer sampled from artwork")
-require("gMusicAccent = artworkAccent" in music_cpp,
-        "album accent is not applied to Music surfaces")
 
-# V8: artwork analysis persists, self-prunes, and creates a real blurred/dark rear material.
-for token in ("artwork_style_cache_v7.json", "artwork_back_cache", "boxBlurRgb",
-              "writeTga24", "generateBackTexture", "persistStyleCache",
-              "kMaxPersistentBackBytes", "kPersistentStyleMaxAgeSec",
-              "lastUsedEpochSec", "prunePersistentStyleCache"):
-    require(token in cover_cache_cpp, f"persistent/back-material pipeline missing: {token}")
-require("getBack(" in cover_cache_hpp and "getBack(" in music_cpp,
-        "generated rear material is not consumed by Music rendering")
-require("backTexturePath" in cover_cache_hpp,
-        "artwork style no longer tracks generated back material")
-require("rearMaterialUsable" in cover_cache_cpp and "m_persistedStyles.erase(cached)" in cover_cache_cpp,
-        "persistent rear-material cache no longer self-heals missing generated files")
-require("playingTrack->cover" in music_cpp and "playingTrack->cover.key() != styleCover.key()" in music_cpp,
-        "currently playing artwork is no longer queued as a secondary style request")
+# V8.3 console crash fix: the secondary artwork decode worker is gone, not just
+# gated. Real-console logs reached SCAN_LIBRARY done and LOAD_COVER successfully
+# before dying immediately after [music-style] worker begin. Style resolution
+# must therefore remain decoder-free and thread-free.
+require("m_coverCache.requestStyle(" not in music_cpp,
+        "MusicScreen unexpectedly requests the removed artwork worker")
+require("safeSyntheticArtworkStyle" in cover_cache_cpp,
+        "V8.3 safe synthetic per-album style resolver is missing")
+require("std::thread" not in cover_cache_cpp and "std::async" not in cover_cache_cpp,
+        "MusicCoverCache reintroduced a background job")
+require("stbi_load_from_memory" not in cover_cache_cpp,
+        "MusicCoverCache reintroduced a second full artwork decode")
+request_pos = cover_cache_cpp.find("void MusicCoverCache::requestStyle")
+require(request_pos >= 0 and "(void)ref" in cover_cache_cpp[request_pos:request_pos + 500],
+        "requestStyle is no longer the safe no-worker compatibility stub")
+get_back_pos = cover_cache_cpp.find("nxui::Texture* MusicCoverCache::getBack")
+require(get_back_pos >= 0 and "return nullptr" in cover_cache_cpp[get_back_pos:get_back_pos + 700],
+        "rear sleeve can trigger a second artwork texture load again")
+for forbidden in ("sampleArtworkStyle", "generateBackTexture", "artwork_style_cache_v7.json",
+                  "artwork_back_cache", "m_styleWorker", "m_styleRunning"):
+    require(forbidden not in cover_cache_cpp + cover_cache_hpp,
+            f"removed unstable artwork pipeline returned: {forbidden}")
+require("gMusicAccent = artworkAccent" in music_cpp,
+        "Music accent plumbing changed during V8.3 crash fix")
+require("secondary_decode=OFF" in music_cpp,
+        "V8.3 safe-style mode is not declared in the runtime log")
 
 # V8 carries forward 3D lighting, level-of-detail, perspective reflection and micro-parallax.
 for token in ("faceLight", "detailLevel", "vinylOutline", "vinylLagPx"):
@@ -283,9 +291,9 @@ for forbidden_wait in ("sleep_for", "svcSleepThread", "usleep("):
 require("m_musicScreen->hide();" in integration and "setHomeApplicationsCategory(applications);" in integration,
         "Music close no longer hides UI before restoring HOME")
 
-# V8.1 SAFE ENTRY: restore the V5/V7 joinable scan ownership after a real-Switch
-# Data Abort was observed on a detached Music worker. Artwork analysis remains
-# cancellable, but the library scanner must not outlive its MusicScreen owner.
+# V8.1 SAFE ENTRY retained the joinable library scan ownership. V8.3 leaves
+# that path intact; the real-console evidence points instead to the secondary
+# artwork decoder, which has now been removed completely.
 require("std::future<LibrarySnapshot>" in music_hpp and "m_scanFuture" in music_cpp,
         "SAFE-ENTRY joinable library scan ownership is missing")
 require("ScanTaskState" not in music_hpp and "mode=safe-async" in music_cpp,
@@ -296,8 +304,8 @@ require("validId3FrameId" in library_cpp and "id3FramePayloadSupported" in libra
         "defensive ID3 frame validation is missing")
 require("std::future" not in cover_cache_hpp and "m_styleFuture" not in cover_cache_cpp,
         "artwork analysis still uses a future that may block on destruction")
-require("StyleWorkerState" in cover_cache_hpp and "MusicCoverCache::~MusicCoverCache" in cover_cache_cpp,
-        "artwork worker lifecycle is not cancellation-safe")
+require("StyleWorkerState" not in cover_cache_hpp and "std::thread" not in cover_cache_cpp,
+        "removed secondary artwork worker returned")
 require("preflightArtwork" in cover_cache_cpp and "embedded artwork preflight rejected" in cover_cache_cpp,
         "embedded artwork is not preflighted before image decode")
 
@@ -328,10 +336,10 @@ runner = ROOT / "romfs/icons/music_now_playing_runner.png"
 require(not runner.exists(), "Nintendo/runner image is bundled; asset choice must remain external")
 
 if failures:
-    print("SwitchU Music V8 physical/glass contract: FAILED", file=sys.stderr)
+    print("SwitchU Music V8.3 CRASH-FIX contract: FAILED", file=sys.stderr)
     for failure in failures:
         print(f" - {failure}", file=sys.stderr)
     sys.exit(1)
 
-print("SwitchU Music V8 physical/glass contract: OK")
+print("SwitchU Music V8.3 CRASH-FIX contract: OK")
 print("FIX6 audio hashes: OK")
