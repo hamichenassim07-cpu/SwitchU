@@ -707,20 +707,5 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
     return result;
 }
 
-std::vector<size_t> MusicLibrary::searchTracks(const LibrarySnapshot& library,
-                                               const std::string& query) {
-    const std::string q = normalizedKey(query);
-    std::vector<size_t> out;
-    if (q.empty()) return out;
-    for (size_t i = 0; i < library.tracks.size(); ++i) {
-        const auto& track = library.tracks[i];
-        const std::string hay = normalizedKey(track.title) + "\n" +
-                                normalizedKey(track.artist) + "\n" +
-                                normalizedKey(track.album);
-        if (hay.find(q) != std::string::npos)
-            out.push_back(i);
-    }
-    return out;
-}
 
 } // namespace switchu::menu::music

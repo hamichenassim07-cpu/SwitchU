@@ -8,6 +8,7 @@
 #include <nxui/core/Renderer.hpp>
 #include <nxui/widgets/True3DCard.hpp>
 #include "StylisedGameCartridge.hpp"
+#include <switchu/music_protocol.hpp>
 
 #include <switch.h>
 
@@ -880,10 +881,20 @@ void LockScreenView::setTransition(float opacity,
         m_unlockAudioStarted = true;
         DebugLog::log("[lockscreen] unlock begin suspended=%d", m_hasGame ? 1 : 0);
         if (audio) {
-            if (m_hasGame && m_returnToGameOnUnlock)
+            if (m_hasGame && m_returnToGameOnUnlock) {
                 audio->fadeOutForGame(420);
-            else
-                audio->playHome(420);
+            } else {
+                // SwitchU Music owns the audio foreground while its daemon
+                // session flag exists. Waking the lockscreen must never
+                // restart the HOME BGM underneath an active Music track.
+                std::error_code musicEc;
+                const bool musicSession = std::filesystem::exists(
+                    switchu::music::kSessionFlagPath, musicEc);
+                if (!musicSession)
+                    audio->playHome(420);
+                else
+                    DebugLog::log("[music-diag] BGM_GUARD lockscreen wake suppressed HOME BGM");
+            }
         }
     }
 

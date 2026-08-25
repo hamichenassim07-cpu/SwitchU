@@ -13,7 +13,6 @@
 #include <functional>
 #include <future>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace switchu::menu::music {
@@ -44,22 +43,18 @@ protected:
     void onRender(nxui::Renderer& ren) override;
 
 private:
+    // V0.02 intentionally keeps only the approved primary Music surfaces.
+    // Queue is a supporting sub-view of Now Playing, not a fifth root category.
     enum class View {
-        Home,
         Albums,
-        Artists,
-        Tracks,
         Playlists,
         AlbumDetail,
-        ArtistDetail,
         PlaylistDetail,
         NowPlaying,
         Queue,
-        SearchResults,
     };
     enum class Modal {
         None,
-        SearchKeyboard,
         PlaylistNameKeyboard,
         PlaylistChooser,
     };
@@ -74,7 +69,6 @@ private:
     void goBack();
     void contextualX();
     void contextualY();
-    void openSearch();
     void openCreatePlaylist();
     void openPlaylistChooser(uint64_t trackId);
     void modalMove(int dx, int dy);
@@ -84,61 +78,55 @@ private:
     void modalCancel();
 
     void openAlbum(size_t index);
-    void openArtist(size_t index);
     void openPlaylist(size_t index);
     void playTrackIds(const std::vector<uint64_t>& ids, int index);
-    void playTrackIndices(const std::vector<size_t>& indices, int index);
     void updateNowPlayingSelection(int delta);
     void activateNowPlayingControl();
     void seekRelative(int64_t deltaMs);
     void appendToQueue(const std::vector<uint64_t>& ids);
+    void openNowPlaying();
 
-    void refreshAdaptivePalette();
-    void finishAdaptivePaletteIfReady();
-    CoverRef selectedCover() const;
     CoverRef playlistCover(size_t playlistIndex) const;
     uint64_t playlistDurationMs(size_t playlistIndex) const;
     uint64_t albumDurationMs(size_t albumIndex) const;
-    nxui::Color extractCoverAccent(const CoverRef& cover) const;
     void drawReflectedCover(nxui::Renderer& ren, const CoverRef& cover,
                             const nxui::Rect& rect, bool selected, int maxSide = 512);
-    void drawHomeMiniModule(nxui::Renderer& ren);
 
     const Track* currentTrack() const;
     const Track* trackForId(uint64_t id) const;
     std::vector<uint64_t> albumTrackIds(size_t albumIndex) const;
-    std::vector<uint64_t> artistTrackIds(size_t artistIndex) const;
     std::vector<uint64_t> playlistTrackIds(size_t playlistIndex) const;
     size_t selectedTrackIndex() const;
 
     void drawCrtBackground(nxui::Renderer& ren);
     void drawTopBar(nxui::Renderer& ren);
-    void drawHome(nxui::Renderer& ren);
     void drawAlbums(nxui::Renderer& ren);
-    void drawArtists(nxui::Renderer& ren);
-    void drawTracks(nxui::Renderer& ren, const std::vector<size_t>* overrideTracks = nullptr,
-                    const std::string& heading = {});
     void drawPlaylists(nxui::Renderer& ren);
     void drawAlbumDetail(nxui::Renderer& ren);
-    void drawArtistDetail(nxui::Renderer& ren);
     void drawPlaylistDetail(nxui::Renderer& ren);
     void drawNowPlaying(nxui::Renderer& ren);
     void drawQueue(nxui::Renderer& ren);
-    void drawMiniPlayer(nxui::Renderer& ren);
     void drawBottomHints(nxui::Renderer& ren);
     void drawModal(nxui::Renderer& ren);
     void drawCover(nxui::Renderer& ren, const CoverRef& cover,
                    const nxui::Rect& rect, bool selected, int maxSide = 256);
     void drawTrackRow(nxui::Renderer& ren, const Track& track, const nxui::Rect& row,
                       bool selected, int ordinal = 0);
+    void drawNowPlayingIndicator(nxui::Renderer& ren, const nxui::Rect& row);
+    void drawSecondaryMusicTabs(nxui::Renderer& ren);
     void drawEmpty(nxui::Renderer& ren, const std::string& title,
                    const std::string& detail);
 
     std::string formatDuration(uint64_t ms) const;
     std::string formatClock() const;
+    std::string fitText(nxui::Font* font, const std::string& text,
+                        float maxWidth, float scale) const;
     void updateBattery(float dt);
     int visibleListStart(size_t count, int rows) const;
+    float visibleListStartVisual(size_t count, int rows) const;
     void clampSelectionForView();
+    bool contentTransitionBusy() const;
+    bool rootView() const;
 
     nxui::Font* m_font = nullptr;
     nxui::Font* m_smallFont = nullptr;
@@ -148,20 +136,49 @@ private:
     std::function<void(bool)> m_sessionGuardCb;
 
     bool m_active = false;
-    View m_view = View::Home;
-    View m_returnView = View::Home;
+    View m_view = View::Albums;
+    View m_nowPlayingReturnView = View::Albums;
+    View m_queueReturnView = View::NowPlaying;
     int m_tabIndex = 0;
     int m_selection = 0;
-    int m_homeSection = 0;
     size_t m_detailAlbum = 0;
-    size_t m_detailArtist = 0;
     size_t m_detailPlaylist = 0;
     int m_nowControl = 2;
+
+    // HOME-derived motion state. Root carousel selection uses a continuous
+    // visual position so covers glide instead of snapping between slots.
+    float m_carouselVisualIndex = 0.f;
+    float m_listVisualSelection = 0.f;
+    float m_detailTransition = 1.f;
+    bool m_detailClosing = false;
+    View m_detailReturnView = View::Albums;
+    float m_nowPlayingEnter = 1.f;
+    bool m_nowPlayingClosing = false;
+    int m_nowPlayingReturnSelection = 0;
+    int m_queueReturnSelection = 0;
+
+    // HOME V10.30 category animation copied into Music so entering the third
+    // category uses the same elastic lens motion instead of a bespoke slide.
+    float m_homeTabSlide = 2.f;
+    float m_homeTabAnimFrom = 2.f;
+    float m_homeTabAnimTo = 2.f;
+    float m_homeTabAnimTime = 0.f;
+    bool m_homeTabAnimating = false;
+
+    // Selected album/playlist metadata fades in independently from the cover
+    // carousel, matching the HOME title reveal rhythm after rapid navigation.
+    float m_rootInfoReveal = 1.f;
+
+    // Optional four-frame horizontal sprite sheet for the now-playing runner.
+    // No Nintendo asset is bundled; a later approved asset can replace the
+    // fallback without changing tracklist layout or playback code.
+    nxui::Texture m_nowPlayingRunnerTexture;
+    bool m_runnerLoadAttempted = false;
 
     LibrarySnapshot m_library;
     MusicPlaylistStore m_playlistStore;
     MusicClient m_client;
-    MusicCoverCache m_coverCache{10};
+    MusicCoverCache m_coverCache{18};
 
     std::future<LibrarySnapshot> m_scanFuture;
     std::atomic<uint32_t> m_filesVisited{0};
@@ -179,26 +196,10 @@ private:
     bool m_nextSoonWasVisible = false;
     float m_nextToastTimer = 0.f;
 
-    // V0.02 visual transition and deferred GPU resource release.
+    // HOME <-> Music transition and BGM ownership state.
     float m_transitionAlpha = 0.f;
     bool m_closing = false;
-    float m_hiddenCoverReleaseTimer = 0.f;
     bool m_lastSessionGuardState = false;
-
-    // Cover-adaptive light music palette.
-    nxui::Color m_paletteAccent {0.46f, 0.31f, 0.92f, 1.f};
-    nxui::Color m_paletteTargetAccent {0.46f, 0.31f, 0.92f, 1.f};
-    nxui::Color m_paletteSoft {0.90f, 0.92f, 0.98f, 1.f};
-    std::string m_paletteCoverKey;
-    std::string m_paletteRequestedKey;
-    CoverRef m_paletteRequestedCover;
-    struct PaletteJobResult { std::string key; nxui::Color color; };
-    std::future<PaletteJobResult> m_paletteFuture;
-    bool m_paletteRunning = false;
-    std::unordered_map<std::string, nxui::Color> m_paletteCache;
-
-    std::vector<size_t> m_searchResults;
-    std::string m_searchQuery;
 
     Modal m_modal = Modal::None;
     std::string m_keyboardText;
@@ -207,6 +208,7 @@ private:
     int m_modalSelection = 0;
 
     bool m_touchTracking = false;
+    bool m_touchTimelineScrub = false;
     float m_touchStartX = 0.f;
     float m_touchStartY = 0.f;
 };

@@ -14,8 +14,6 @@ public:
                                 std::atomic<uint32_t>* filesVisited = nullptr,
                                 std::atomic<uint32_t>* tracksFound = nullptr);
 
-    static std::vector<size_t> searchTracks(const LibrarySnapshot& library,
-                                            const std::string& query);
 };
 
 } // namespace switchu::menu::music

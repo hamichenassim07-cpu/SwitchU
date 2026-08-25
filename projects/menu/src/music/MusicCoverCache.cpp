@@ -45,6 +45,8 @@ const nxui::Texture* MusicCoverCache::get(const CoverRef& ref, nxui::Renderer& r
     // GPU pressure and making navigation-related crashes much more likely.
     const int qualitySide = maxSide <= 160 ? 160 : 400;
     const std::string key = ref.key() + "@" + std::to_string(qualitySide);
+    if (m_failed.find(key) != m_failed.end())
+        return nullptr;
     auto found = m_map.find(key);
     if (found != m_map.end()) {
         m_lru.splice(m_lru.begin(), m_lru, found->second);
@@ -61,6 +63,9 @@ const nxui::Texture* MusicCoverCache::get(const CoverRef& ref, nxui::Renderer& r
                       ref.path.c_str(),
                       static_cast<unsigned long long>(ref.offset),
                       static_cast<unsigned long long>(ref.size));
+        // A missing/corrupt cover used to retry SD I/O every render frame.
+        // Remember the failure until the next library scan instead.
+        m_failed.insert(key);
         return nullptr;
     }
 
@@ -83,6 +88,7 @@ void MusicCoverCache::clear() {
         DebugLog::log("[music-diag] UNLOAD_COVER clear count=%zu", m_lru.size());
     m_map.clear();
     m_lru.clear();
+    m_failed.clear();
 }
 
 } // namespace switchu::menu::music

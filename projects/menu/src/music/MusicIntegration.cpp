@@ -16,7 +16,7 @@ void WiiUMenuApp::createMusic() {
             // HOME soundtrack as soon as the Music category opens.
             if (active) {
                 if (m_audio.isPlaying())
-                    m_audio.fadeOutForGame(350);
+                    m_audio.fadeOutForGame(180);
             } else {
                 m_audio.playHome(350);
             }
@@ -29,10 +29,8 @@ void WiiUMenuApp::createMusic() {
             oldParent->removeChild(m_musicScreen.get());
         m_overlayLayer->addChild(m_musicScreen);
 
-        // Keep system dialogs/settings above Music. V0.01 attached Music last,
-        // which meant its global mini-player could later paint on top of
-        // unrelated full-screen overlays. Re-adding known overlays restores a
-        // stable z-order while leaving the HOME cursor behind Music.
+        // Keep system dialogs/settings above Music. Re-adding known overlays
+        // preserves the HOME z-order while Music remains the active category.
         auto raise = [this](const std::shared_ptr<nxui::Widget>& widget) {
             if (!widget || widget->parent() != m_overlayLayer.get()) return;
             m_overlayLayer->removeChild(widget.get());

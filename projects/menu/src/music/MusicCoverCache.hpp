@@ -7,6 +7,7 @@
 #include <list>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace nxui { class Renderer; }
 
@@ -18,6 +19,7 @@ public:
 
     const nxui::Texture* get(const CoverRef& ref, nxui::Renderer& ren, int maxSide = 256);
     void clear();
+    void resetFailures() { m_failed.clear(); }
     size_t size() const { return m_lru.size(); }
 
 private:
@@ -33,6 +35,7 @@ private:
     size_t m_maxEntries = 18;
     List m_lru;
     Map m_map;
+    std::unordered_set<std::string> m_failed;
 };
 
 } // namespace switchu::menu::music
