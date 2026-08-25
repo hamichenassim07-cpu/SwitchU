@@ -283,17 +283,23 @@ for forbidden_wait in ("sleep_for", "svcSleepThread", "usleep("):
 require("m_musicScreen->hide();" in integration and "setHomeApplicationsCategory(applications);" in integration,
         "Music close no longer hides UI before restoring HOME")
 
-# V8 autonomous hardening: no implicit future waits on Music teardown.
-require("std::future" not in music_hpp and "m_scanFuture" not in music_cpp,
-        "Music library scan still uses a future that may block on destruction")
-require("ScanTaskState" in music_hpp and "cancelRequested" in music_cpp and ".detach()" in music_cpp,
-        "Music library scan is not an independently owned cancellable worker")
-require("cancelRequested" in library_hpp and "memory_order_relaxed" in library_cpp,
-        "library scan cannot cooperatively cancel between files")
+# V8.1 SAFE ENTRY: restore the V5/V7 joinable scan ownership after a real-Switch
+# Data Abort was observed on a detached Music worker. Artwork analysis remains
+# cancellable, but the library scanner must not outlive its MusicScreen owner.
+require("std::future<LibrarySnapshot>" in music_hpp and "m_scanFuture" in music_cpp,
+        "SAFE-ENTRY joinable library scan ownership is missing")
+require("ScanTaskState" not in music_hpp and "mode=safe-async" in music_cpp,
+        "detached Music library scan path returned")
+require("SCAN_FILE begin" in library_cpp and "SCAN_FILE done" in library_cpp,
+        "per-file library crash diagnostics are missing")
+require("validId3FrameId" in library_cpp and "id3FramePayloadSupported" in library_cpp,
+        "defensive ID3 frame validation is missing")
 require("std::future" not in cover_cache_hpp and "m_styleFuture" not in cover_cache_cpp,
         "artwork analysis still uses a future that may block on destruction")
 require("StyleWorkerState" in cover_cache_hpp and "MusicCoverCache::~MusicCoverCache" in cover_cache_cpp,
         "artwork worker lifecycle is not cancellation-safe")
+require("preflightArtwork" in cover_cache_cpp and "embedded artwork preflight rejected" in cover_cache_cpp,
+        "embedded artwork is not preflighted before image decode")
 
 # No renderer-side fake blur fallback; rear material is either cached texture or
 # the derived smoked back colour.

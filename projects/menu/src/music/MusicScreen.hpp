@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -203,23 +204,16 @@ private:
     nxui::Texture m_nowPlayingRunnerTexture;
     bool m_runnerLoadAttempted = false;
 
-    struct ScanTaskState {
-        std::atomic<uint32_t> filesVisited{0};
-        std::atomic<uint32_t> tracksFound{0};
-        std::atomic<bool> cancelRequested{false};
-        std::atomic<bool> ready{false};
-        std::mutex resultMutex;
-        std::optional<LibrarySnapshot> result;
-    };
-
     LibrarySnapshot m_library;
     MusicPlaylistStore m_playlistStore;
     MusicClient m_client;
     MusicCoverCache m_coverCache{18};
 
-    // Detached scan worker owns only this shared state; destroying MusicScreen
-    // requests cancellation and never waits for filesystem/metadata I/O.
-    std::shared_ptr<ScanTaskState> m_scanTask;
+    // SAFE-ENTRY hotfix: restore the V5/V7 std::async scan ownership model.
+    // This keeps metadata parsing in a joinable task instead of a detached worker.
+    std::future<LibrarySnapshot> m_scanFuture;
+    std::atomic<uint32_t> m_filesVisited{0};
+    std::atomic<uint32_t> m_tracksFound{0};
     bool m_scanRunning = false;
     bool m_hasScanned = false;
 

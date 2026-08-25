@@ -36,6 +36,27 @@ uint64_t epochSeconds() {
     return seconds > 0 ? static_cast<uint64_t>(seconds) : 0;
 }
 
+bool looksLikeSupportedArtwork(const std::vector<uint8_t>& bytes) {
+    if (bytes.size() >= 8 &&
+        bytes[0] == 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G' &&
+        bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A)
+        return true;
+    if (bytes.size() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
+        return true;
+    return false;
+}
+
+bool preflightArtwork(const std::vector<uint8_t>& bytes, int& w, int& h) {
+    w = h = 0;
+    if (!looksLikeSupportedArtwork(bytes)) return false;
+    int comp = 0;
+    if (!stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &comp))
+        return false;
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return false;
+    const uint64_t pixels = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
+    return pixels <= 32ULL * 1024ULL * 1024ULL;
+}
+
 std::vector<uint8_t> readCoverBytes(const CoverRef& ref) {
     if (!ref.valid()) return {};
     std::ifstream file(ref.path, std::ios::binary);
@@ -45,6 +66,11 @@ std::vector<uint8_t> readCoverBytes(const CoverRef& ref) {
     uint64_t size = 0;
     if (ref.embedded) {
         if (ref.size == 0 || ref.size > kMaxEmbeddedCoverBytes) return {};
+        file.seekg(0, std::ios::end);
+        const auto end = file.tellg();
+        if (end <= 0) return {};
+        const uint64_t fileBytes = static_cast<uint64_t>(end);
+        if (ref.offset > fileBytes || ref.size > fileBytes - ref.offset) return {};
         offset = ref.offset;
         size = ref.size;
     } else {
@@ -257,6 +283,14 @@ MusicArtworkStyle MusicCoverCache::sampleArtworkStyle(const CoverRef& ref, uint6
     std::vector<uint8_t> bytes = readCoverBytes(ref);
     if (bytes.empty()) return out;
 
+    int preW=0,preH=0;
+    if (!preflightArtwork(bytes, preW, preH)) {
+        DebugLog::log("[music-style] artwork preflight rejected path=%s embedded=%d offset=%llu size=%llu",
+                      ref.path.c_str(), ref.embedded ? 1 : 0,
+                      static_cast<unsigned long long>(ref.offset),
+                      static_cast<unsigned long long>(ref.size));
+        return out;
+    }
     int w=0,h=0,c=0;
     stbi_uc* pixels=stbi_load_from_memory(bytes.data(),static_cast<int>(bytes.size()),&w,&h,&c,4);
     if(!pixels||w<=0||h<=0){ if(pixels) stbi_image_free(pixels); return out; }
@@ -318,14 +352,19 @@ bool MusicCoverCache::loadTexture(const CoverRef& ref, nxui::Renderer& ren,
     if (!ref.embedded)
         return out.loadFromFile(ren.gpu(), ren, ref.path, maxSide);
 
-    if (ref.size == 0 || ref.size > kMaxEmbeddedCoverBytes) return false;
-    std::ifstream file(ref.path, std::ios::binary);
-    if (!file.is_open()) return false;
-    file.seekg(static_cast<std::streamoff>(ref.offset), std::ios::beg);
-    if (!file) return false;
-    std::vector<uint8_t> bytes(static_cast<size_t>(ref.size));
-    if (!file.read(reinterpret_cast<char*>(bytes.data()),
-                   static_cast<std::streamsize>(bytes.size()))) return false;
+    // SAFE-ENTRY: validate embedded APIC bytes before handing them to the GPU
+    // image decoder. If an ID3 offset/size is malformed, reject the artwork
+    // instead of attempting to decode arbitrary MP3 metadata as an image.
+    std::vector<uint8_t> bytes = readCoverBytes(ref);
+    if (bytes.empty()) return false;
+    int w = 0, h = 0;
+    if (!preflightArtwork(bytes, w, h)) {
+        DebugLog::log("[music-cover] embedded artwork preflight rejected path=%s offset=%llu size=%llu",
+                      ref.path.c_str(),
+                      static_cast<unsigned long long>(ref.offset),
+                      static_cast<unsigned long long>(ref.size));
+        return false;
+    }
     return out.loadFromMemory(ren.gpu(), ren, bytes.data(), bytes.size(), maxSide);
 }
 
@@ -576,10 +615,16 @@ void MusicCoverCache::requestStyle(const CoverRef& ref) {
     auto worker=std::make_shared<StyleWorkerState>();
     m_styleWorker=worker;
     std::thread([worker,ref,key,signature](){
+        DebugLog::log("[music-style] worker begin path=%s embedded=%d offset=%llu size=%llu",
+                      ref.path.c_str(), ref.embedded ? 1 : 0,
+                      static_cast<unsigned long long>(ref.offset),
+                      static_cast<unsigned long long>(ref.size));
         StyleResult result{};
         result.key=key;
         result.signature=signature;
         result.style=sampleArtworkStyle(ref,signature,&worker->cancelRequested);
+        DebugLog::log("[music-style] worker end path=%s sampled=%d",
+                      ref.path.c_str(), result.style.sampled ? 1 : 0);
         if (worker->cancelRequested.load(std::memory_order_relaxed)) return;
         {
             std::lock_guard<std::mutex> lock(worker->resultMutex);

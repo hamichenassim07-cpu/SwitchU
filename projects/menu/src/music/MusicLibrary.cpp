@@ -34,6 +34,28 @@ uint32_t syncsafe32(const uint8_t* p) {
            (uint32_t(p[2] & 0x7F) << 7) | uint32_t(p[3] & 0x7F);
 }
 
+bool validId3FrameId(const uint8_t* p) {
+    if (!p) return false;
+    for (int i = 0; i < 4; ++i) {
+        const uint8_t c = p[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')))
+            return false;
+    }
+    return true;
+}
+
+bool id3FramePayloadSupported(int version, const uint8_t* frameHeader) {
+    if (!frameHeader) return false;
+    const uint8_t formatFlags = frameHeader[9];
+    if (version >= 4) {
+        // v2.4: grouping/compression/encryption/unsynchronisation/data-length
+        // indicator require transformations this compact scanner does not do.
+        return (formatFlags & (0x40u | 0x08u | 0x04u | 0x02u | 0x01u)) == 0;
+    }
+    // v2.3: compression/encryption/grouping alter the payload layout.
+    return (formatFlags & (0x80u | 0x40u | 0x20u)) == 0;
+}
+
 std::string lower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
@@ -309,14 +331,29 @@ bool parseMp3(const std::filesystem::path& path, Track& track) {
                     char(tag[pos]), char(tag[pos+1]), char(tag[pos+2]), char(tag[pos+3]), 0
                 };
                 if (idChars[0] == 0) break;
+                if (!validId3FrameId(tag.data() + pos)) {
+                    DebugLog::log("[music-id3] invalid frame id path=%s pos=%zu; stop tag",
+                                  path.string().c_str(), pos);
+                    break;
+                }
                 const std::string id(idChars);
                 uint32_t frameSize = version >= 4
                     ? syncsafe32(tag.data() + pos + 4)
                     : be32(tag.data() + pos + 4);
-                if (frameSize == 0 || pos + 10ULL + frameSize > tag.size()) break;
+                if (frameSize == 0 || frameSize > 16u * 1024u * 1024u ||
+                    pos + 10ULL + frameSize > tag.size()) {
+                    DebugLog::log("[music-id3] invalid frame size path=%s id=%s pos=%zu size=%u",
+                                  path.string().c_str(), id.c_str(), pos, frameSize);
+                    break;
+                }
                 const uint8_t* data = tag.data() + pos + 10;
+                const bool payloadSupported = id3FramePayloadSupported(version, tag.data() + pos);
+                const bool oversizedText = !id.empty() && id[0] == 'T' && frameSize > 1024u * 1024u;
 
-                if (id == "TIT2") track.title = decodeId3Text(data, frameSize);
+                if (!payloadSupported || oversizedText) {
+                    DebugLog::log("[music-id3] skip unsafe frame path=%s id=%s size=%u transformed=%d",
+                                  path.string().c_str(), id.c_str(), frameSize, payloadSupported ? 0 : 1);
+                } else if (id == "TIT2") track.title = decodeId3Text(data, frameSize);
                 else if (id == "TPE1") track.artist = decodeId3Text(data, frameSize);
                 else if (id == "TPE2") {
                     track.albumArtist = decodeId3Text(data, frameSize);
@@ -546,7 +583,12 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
     for (const auto& path : paths) {
         if (cancelRequested && cancelRequested->load(std::memory_order_relaxed))
             return result;
+        const std::string scanPath = path.string();
+        DebugLog::log("[music-diag] SCAN_FILE begin path=%s", scanPath.c_str());
         Track track = parseTrack(path);
+        DebugLog::log("[music-diag] SCAN_FILE done path=%s id=%016llX title=%s",
+                      scanPath.c_str(), static_cast<unsigned long long>(track.id),
+                      track.title.c_str());
         result.trackById[track.id] = result.tracks.size();
         result.trackByPath[track.path] = result.tracks.size();
         result.tracks.push_back(std::move(track));

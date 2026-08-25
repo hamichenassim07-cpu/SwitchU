@@ -128,12 +128,7 @@ MusicScreen::MusicScreen() {
 }
 
 
-MusicScreen::~MusicScreen() {
-    // Never block HOME/menu teardown on a filesystem scan. The detached worker
-    // owns only ScanTaskState and observes this cancellation flag between files.
-    if (m_scanTask)
-        m_scanTask->cancelRequested.store(true, std::memory_order_relaxed);
-}
+MusicScreen::~MusicScreen() = default;
 
 void MusicScreen::setupActions() {
     addAction(static_cast<uint64_t>(nxui::Button::A), [this]() {
@@ -270,34 +265,24 @@ void MusicScreen::hide() {
 
 void MusicScreen::startScan(bool force) {
     if (m_scanRunning || (m_hasScanned && !force)) return;
-    DebugLog::log("[music-diag] SCAN_LIBRARY begin root=%s", switchu::music::kRootDirectory);
-
-    auto task = std::make_shared<ScanTaskState>();
-    m_scanTask = task;
+    DebugLog::log("[music-diag] SCAN_LIBRARY begin root=%s mode=safe-async", switchu::music::kRootDirectory);
+    m_filesVisited.store(0, std::memory_order_relaxed);
+    m_tracksFound.store(0, std::memory_order_relaxed);
     m_scanRunning = true;
-    std::thread([task]() {
-        LibrarySnapshot snapshot = MusicLibrary::scan(
-            switchu::music::kRootDirectory,
-            &task->filesVisited, &task->tracksFound, &task->cancelRequested);
-        if (task->cancelRequested.load(std::memory_order_relaxed))
-            return;
-        {
-            std::lock_guard<std::mutex> lock(task->resultMutex);
-            task->result.emplace(std::move(snapshot));
-        }
-        task->ready.store(true, std::memory_order_release);
-    }).detach();
+    // Restore the last console-validated ownership model (V5/V7). A joinable
+    // async task avoids a detached metadata worker surviving UI state changes.
+    m_scanFuture = std::async(std::launch::async, [this]() {
+        return MusicLibrary::scan(switchu::music::kRootDirectory,
+                                  &m_filesVisited, &m_tracksFound, nullptr);
+    });
 }
 
 
 void MusicScreen::finishScanIfReady() {
-    const auto task = m_scanTask;
-    if (!m_scanRunning || !task ||
-        !task->ready.load(std::memory_order_acquire))
+    if (!m_scanRunning || !m_scanFuture.valid()) return;
+    if (m_scanFuture.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
         return;
 
-    // Preserve a stable root identity across a rescan instead of trusting the
-    // previous vector index, whose ordering can legitimately change.
     std::string selectedAlbumKey;
     std::string selectedPlaylistId;
     if (m_view == View::Albums && m_selection >= 0 && static_cast<size_t>(m_selection) < m_library.albums.size())
@@ -306,15 +291,9 @@ void MusicScreen::finishScanIfReady() {
         selectedPlaylistId = m_playlistStore.playlists()[static_cast<size_t>(m_selection)].id;
 
     DebugLog::log("[music-diag] SCAN_LIBRARY commit begin");
-    {
-        std::lock_guard<std::mutex> lock(task->resultMutex);
-        if (!task->result) return;
-        m_library = std::move(*task->result);
-        task->result.reset();
-    }
+    m_library = m_scanFuture.get();
     m_scanRunning = false;
     m_hasScanned = true;
-    m_scanTask.reset();
     m_playlistStore.load(m_library);
     m_playlistStore.pruneMissing(m_library);
     m_playlistStore.save();
@@ -338,8 +317,6 @@ void MusicScreen::finishScanIfReady() {
         }
     }
 
-    // A library refresh is allowed to remove the container currently open.
-    // Fall back to its root instead of leaving stale indices in the renderer.
     if (m_view == View::AlbumDetail && m_detailAlbum >= m_library.albums.size()) {
         m_view = View::Albums;
         m_selection = 0;
@@ -358,6 +335,7 @@ void MusicScreen::finishScanIfReady() {
     DebugLog::log("[music-diag] SCAN_LIBRARY done tracks=%zu albums=%zu artists=%zu",
                   m_library.tracks.size(), m_library.albums.size(), m_library.artists.size());
 }
+
 
 void MusicScreen::refreshStatus(bool force) {
     if (!force && m_statusTimer < 0.25f) return;
@@ -2128,9 +2106,9 @@ void MusicScreen::onRender(nxui::Renderer& ren) {
 
     if (m_scanRunning) {
         drawEmpty(ren, "Analyse de la bibliothèque…",
-                  std::to_string(m_scanTask ? m_scanTask->tracksFound.load(std::memory_order_relaxed) : 0) +
+                  std::to_string(m_tracksFound.load(std::memory_order_relaxed)) +
                   " morceaux détectés  •  " +
-                  std::to_string(m_scanTask ? m_scanTask->filesVisited.load(std::memory_order_relaxed) : 0) +
+                  std::to_string(m_filesVisited.load(std::memory_order_relaxed)) +
                   " fichiers parcourus");
     } else {
         switch (m_view) {
