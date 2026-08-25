@@ -5,8 +5,8 @@
 #include "MusicLibrary.hpp"
 #include "MusicPlaylistStore.hpp"
 #include "widgets/TitlePillWidget.hpp"
-#include "widgets/GlossyIcon.hpp"
 #include "widgets/HomeCarouselMotion.hpp"
+#include "MusicPhysicalMediaRenderer.hpp"
 
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Input.hpp>
@@ -14,8 +14,11 @@
 
 #include <atomic>
 #include <functional>
-#include <future>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace switchu::menu::music {
@@ -99,8 +102,13 @@ private:
     CoverRef playlistCover(size_t playlistIndex) const;
     uint64_t playlistDurationMs(size_t playlistIndex) const;
     uint64_t albumDurationMs(size_t albumIndex) const;
-    void drawReflectedCover(nxui::Renderer& ren, const CoverRef& cover,
-                            const nxui::Rect& rect, bool selected, int maxSide = 512);
+    PhysicalMediaGeometry drawPhysicalMedia(nxui::Renderer& ren, const CoverRef& cover,
+                                                const nxui::Rect& rect, bool playlist,
+                                                float yawDeg, float pitchDeg, float rollDeg,
+                                                float zLiftPx, float vinylReveal,
+                                                float vinylSpinRad, float alpha,
+                                                bool playing, int maxSide = 512);
+    nxui::Color artworkAccent(const CoverRef& cover) const;
 
     const Track* currentTrack() const;
     const Track* trackForId(uint64_t id) const;
@@ -122,12 +130,16 @@ private:
                       bool selected, int ordinal = 0);
     void drawNowPlayingIndicator(nxui::Renderer& ren, const nxui::Rect& row);
     void drawRootCategoryHint(nxui::Renderer& ren);
+    void drawPreviousRootCarousel(nxui::Renderer& ren);
     void drawEmpty(nxui::Renderer& ren, const std::string& title,
                    const std::string& detail);
 
     std::string formatDuration(uint64_t ms) const;
     std::string fitText(nxui::Font* font, const std::string& text,
                         float maxWidth, float scale) const;
+    void drawMarqueeOrFit(nxui::Renderer& ren, const std::string& text,
+                          const nxui::Rect& clip, float y, float scale,
+                          const nxui::Color& color, bool animate) const;
     float visibleListStartVisual(size_t count, int rows) const;
     void clampSelectionForView();
     bool contentTransitionBusy() const;
@@ -142,7 +154,6 @@ private:
     nxui::Widget* m_homeProfileWidget = nullptr;
     nxui::Widget* m_homeBatteryWidget = nullptr;
     TitlePillWidget* m_homeTitlePill = nullptr;
-    GlossyIcon m_musicHomeCard;
     std::function<void()> m_closeCb;
     std::function<void(bool)> m_sessionGuardCb;
 
@@ -177,6 +188,9 @@ private:
     float m_rootCategoryTransition = 1.f;
     int m_rootCategoryDirection = 1;
     float m_rootCategoryHintTimer = 0.f;
+    View m_rootCategoryPreviousView = View::Albums;
+    float m_rootCategoryPreviousPosition = 0.f;
+    int m_rootCategoryPreviousSelection = 0;
 
     // Exact HOME entry bounce shared with IconGrid. It runs once when Music
     // receives the carousel, never on every left/right selection change.
@@ -189,14 +203,23 @@ private:
     nxui::Texture m_nowPlayingRunnerTexture;
     bool m_runnerLoadAttempted = false;
 
+    struct ScanTaskState {
+        std::atomic<uint32_t> filesVisited{0};
+        std::atomic<uint32_t> tracksFound{0};
+        std::atomic<bool> cancelRequested{false};
+        std::atomic<bool> ready{false};
+        std::mutex resultMutex;
+        std::optional<LibrarySnapshot> result;
+    };
+
     LibrarySnapshot m_library;
     MusicPlaylistStore m_playlistStore;
     MusicClient m_client;
     MusicCoverCache m_coverCache{18};
 
-    std::future<LibrarySnapshot> m_scanFuture;
-    std::atomic<uint32_t> m_filesVisited{0};
-    std::atomic<uint32_t> m_tracksFound{0};
+    // Detached scan worker owns only this shared state; destroying MusicScreen
+    // requests cancellation and never waits for filesystem/metadata I/O.
+    std::shared_ptr<ScanTaskState> m_scanTask;
     bool m_scanRunning = false;
     bool m_hasScanned = false;
 
@@ -204,6 +227,15 @@ private:
     float m_statusTimer = 0.f;
     float m_hiddenGuardTimer = 0.f;
     float m_uiTime = 0.f;
+    float m_idleTime = 0.f;
+    // V8 physical scene dynamics. Spin phase stays continuous while the
+    // per-track boost decays; parallax is deliberately limited to a few pixels.
+    float m_vinylSpinPhase = 0.f;
+    float m_vinylSpinBoost = 0.f;
+    float m_sceneParallaxX = 0.f;
+    float m_sceneParallaxY = 0.f;
+    uint64_t m_marqueeTrackId = 0;
+    float m_marqueeElapsed = 0.f;
     bool m_nextSoonWasVisible = false;
     float m_nextToastTimer = 0.f;
 

@@ -12,7 +12,8 @@ class MusicLibrary {
 public:
     static LibrarySnapshot scan(const std::string& root,
                                 std::atomic<uint32_t>* filesVisited = nullptr,
-                                std::atomic<uint32_t>* tracksFound = nullptr);
+                                std::atomic<uint32_t>* tracksFound = nullptr,
+                                const std::atomic<bool>* cancelRequested = nullptr);
 
 };
 

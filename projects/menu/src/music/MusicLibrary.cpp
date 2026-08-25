@@ -514,7 +514,8 @@ std::string normalizedKey(const std::string& value) {
 
 LibrarySnapshot MusicLibrary::scan(const std::string& root,
                                    std::atomic<uint32_t>* filesVisited,
-                                   std::atomic<uint32_t>* tracksFound) {
+                                   std::atomic<uint32_t>* tracksFound,
+                                   const std::atomic<bool>* cancelRequested) {
     LibrarySnapshot result{};
     result.scanGeneration = static_cast<uint64_t>(std::time(nullptr));
 
@@ -531,6 +532,8 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
         ec);
     std::filesystem::recursive_directory_iterator end;
     for (; !ec && it != end; it.increment(ec)) {
+        if (cancelRequested && cancelRequested->load(std::memory_order_relaxed))
+            return result;
         if (filesVisited) ++(*filesVisited);
         std::error_code typeEc;
         if (!it->is_regular_file(typeEc)) continue;
@@ -541,6 +544,8 @@ LibrarySnapshot MusicLibrary::scan(const std::string& root,
 
     result.tracks.reserve(paths.size());
     for (const auto& path : paths) {
+        if (cancelRequested && cancelRequested->load(std::memory_order_relaxed))
+            return result;
         Track track = parseTrack(path);
         result.trackById[track.id] = result.tracks.size();
         result.trackByPath[track.path] = result.tracks.size();

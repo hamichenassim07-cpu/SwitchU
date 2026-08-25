@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-side invariants for SwitchU Music's HOME-native contract.
+"""Host-side invariants for SwitchU Music V8 autonomous-finalization / physical-media contract.
 
 This intentionally performs source-level checks without requiring devkitPro. It
 is a regression guard, not a substitute for the real Switch build/test.
@@ -127,12 +127,19 @@ def action_block(source: str, button: str) -> str:
 
 music_cpp = text("projects/menu/src/music/MusicScreen.cpp")
 music_hpp = text("projects/menu/src/music/MusicScreen.hpp")
+physical_cpp = text("projects/menu/src/music/MusicPhysicalMediaRenderer.cpp")
+physical_hpp = text("projects/menu/src/music/MusicPhysicalMediaRenderer.hpp")
+cover_cache_cpp = text("projects/menu/src/music/MusicCoverCache.cpp")
+cover_cache_hpp = text("projects/menu/src/music/MusicCoverCache.hpp")
 integration = text("projects/menu/src/music/MusicIntegration.cpp")
 icon_grid_cpp = text("projects/menu/src/widgets/IconGrid.cpp")
 icon_grid_hpp = text("projects/menu/src/widgets/IconGrid.hpp")
 title_pill = text("projects/menu/src/widgets/TitlePillWidget.cpp")
 game_actions = text("projects/menu/src/widgets/GameActionsHudWidget.cpp")
 typography = text("projects/menu/src/widgets/HomeTypographyStyle.hpp")
+timing = text("projects/menu/src/music/MusicUiTiming.hpp")
+library_cpp = text("projects/menu/src/music/MusicLibrary.cpp")
+library_hpp = text("projects/menu/src/music/MusicLibrary.hpp")
 
 # FIX6 is immutable.
 for rel, expected in FIX6_HASHES.items():
@@ -202,20 +209,107 @@ require("setRootCategory" not in stick_down and "if (!rootView())" in stick_down
 # Root actions / native HOME components.
 require("Y File" not in music_cpp and "Y Files" not in music_cpp,
         "obsolete Y File action returned")
-require("GlossyIcon m_musicHomeCard" in music_hpp,
-        "Music root no longer uses HOME GlossyIcon")
+require("GlossyIcon" not in music_hpp and "m_musicHomeCard" not in music_cpp,
+        "Music content regressed to HOME application cards")
+require("MusicPhysicalMediaRenderer.hpp" in music_hpp and
+        "drawAlbumPhysicalMedia" in physical_cpp and "drawPlaylistPhysicalMedia" in physical_cpp,
+        "physical Music media renderer is missing")
 require("m_homeTitlePill" in music_hpp and "setMusicMode(true)" in integration,
         "Music no longer reuses the real HOME TitlePill")
 require("setWifiVisible(false)" in integration and "setWifiVisible(true)" in integration,
         "Music Wi-Fi hide/restore contract is incomplete")
 
-# Reflection must remain clipped to the declared floor.
-reflection_start = music_cpp.find("Reflection is a property of the floor")
-reflection_end = music_cpp.find("void MusicScreen::drawMusicBackground", reflection_start)
-reflection = music_cpp[reflection_start:reflection_end] if reflection_start >= 0 and reflection_end > reflection_start else ""
-require("floorClip" in reflection and "pushClipRect(floorClip)" in reflection and "popClipRect()" in reflection,
-        "carousel reflection lost its floor-only clip")
-require("drawTexturedTriangle" in reflection, "reflection draw path was unexpectedly removed")
+# Physical sleeves / vinyl / local artwork colour are mandatory in the new DA.
+for token in ("front", "back", "depthPx", "drawVinyl", "vinylReveal", "vinylSpinRad"):
+    require(token in physical_cpp + physical_hpp, f"physical-media contract missing: {token}")
+require("sampleArtworkStyle" in cover_cache_cpp and "stbi_load_from_memory" in cover_cache_cpp,
+        "album accent is no longer sampled from artwork")
+require("gMusicAccent = artworkAccent" in music_cpp,
+        "album accent is not applied to Music surfaces")
+
+# V8: artwork analysis persists, self-prunes, and creates a real blurred/dark rear material.
+for token in ("artwork_style_cache_v7.json", "artwork_back_cache", "boxBlurRgb",
+              "writeTga24", "generateBackTexture", "persistStyleCache",
+              "kMaxPersistentBackBytes", "kPersistentStyleMaxAgeSec",
+              "lastUsedEpochSec", "prunePersistentStyleCache"):
+    require(token in cover_cache_cpp, f"persistent/back-material pipeline missing: {token}")
+require("getBack(" in cover_cache_hpp and "getBack(" in music_cpp,
+        "generated rear material is not consumed by Music rendering")
+require("backTexturePath" in cover_cache_hpp,
+        "artwork style no longer tracks generated back material")
+require("rearMaterialUsable" in cover_cache_cpp and "m_persistedStyles.erase(cached)" in cover_cache_cpp,
+        "persistent rear-material cache no longer self-heals missing generated files")
+require("playingTrack->cover" in music_cpp and "playingTrack->cover.key() != styleCover.key()" in music_cpp,
+        "currently playing artwork is no longer queued as a secondary style request")
+
+# V8 carries forward 3D lighting, level-of-detail, perspective reflection and micro-parallax.
+for token in ("faceLight", "detailLevel", "vinylOutline", "vinylLagPx"):
+    require(token in physical_cpp + physical_hpp, f"physical refinement missing: {token}")
+require("m_sceneParallaxX" in music_cpp + music_hpp and "m_sceneParallaxY" in music_cpp + music_hpp,
+        "micro-parallax state is missing")
+require("m_vinylSpinBoost" in music_cpp + music_hpp and "m_vinylSpinPhase" in music_cpp + music_hpp,
+        "new-track vinyl impulse/continuous spin state is missing")
+
+# Reflection must remain strictly clipped to the floor in the physical renderer.
+require("pushClipRect(floorClip)" in physical_cpp and "popClipRect()" in physical_cpp,
+        "physical-media reflection lost its floor-only clip")
+require("0.235f" in physical_cpp,
+        "reflection is no longer constrained to roughly the lower quarter")
+
+# Tracklist must use contextual marquee instead of shrinking selected long titles.
+require("m_marqueeElapsed" in music_cpp and "drawMarqueeOrFit" in music_cpp and
+        "constexpr float delay=1.0f" in music_cpp,
+        "contextual marquee engine is missing")
+require("titleMarquee" in music_cpp and "artistMarquee" in music_cpp and
+        "View::NowPlaying && m_status.track_id" in music_cpp,
+        "Now Playing long title/artist marquee was not extended")
+require("drawSmokedGlassPanel" in music_cpp,
+        "dark smoked/frosted glass information surfaces are missing")
+require("drawPreviousRootCarousel" in music_cpp and "m_rootCategoryPreviousView" in music_hpp,
+        "Albums/Playlists no longer use the outgoing+incoming vertical exchange")
+
+# Exit is deliberately direct: 110 ms visual fade and no wait stage in the
+# close path. Audio HOME fade-in may continue independently after HOME is back.
+require("kExitToHomeSeconds = 0.11f" in timing and
+        "timing::kExitToHomeSeconds" in music_cpp,
+        "Music exit fade is no longer the 110 ms direct transition")
+require("kRootCategoryTransitionSeconds = 0.22f" in timing and
+        "kDetailTransformSeconds = 0.44f" in timing,
+        "central Music transition timing contract is missing")
+close_sources = music_cpp + integration
+for forbidden_wait in ("sleep_for", "svcSleepThread", "usleep("):
+    require(forbidden_wait not in close_sources,
+            f"blocking wait returned to Music close path: {forbidden_wait}")
+require("m_musicScreen->hide();" in integration and "setHomeApplicationsCategory(applications);" in integration,
+        "Music close no longer hides UI before restoring HOME")
+
+# V8 autonomous hardening: no implicit future waits on Music teardown.
+require("std::future" not in music_hpp and "m_scanFuture" not in music_cpp,
+        "Music library scan still uses a future that may block on destruction")
+require("ScanTaskState" in music_hpp and "cancelRequested" in music_cpp and ".detach()" in music_cpp,
+        "Music library scan is not an independently owned cancellable worker")
+require("cancelRequested" in library_hpp and "memory_order_relaxed" in library_cpp,
+        "library scan cannot cooperatively cancel between files")
+require("std::future" not in cover_cache_hpp and "m_styleFuture" not in cover_cache_cpp,
+        "artwork analysis still uses a future that may block on destruction")
+require("StyleWorkerState" in cover_cache_hpp and "MusicCoverCache::~MusicCoverCache" in cover_cache_cpp,
+        "artwork worker lifecycle is not cancellation-safe")
+
+# No renderer-side fake blur fallback; rear material is either cached texture or
+# the derived smoked back colour.
+require("constexpr float taps" not in physical_cpp and "multi-tap path" not in physical_cpp,
+        "legacy multi-tap rear-cover fallback returned")
+
+# Per-frame physical cost is bounded: circle trig is precomputed and far
+# neighbours use the cheapest LOD/texture tier.
+require("CircleLut" in physical_cpp and "circleLut(" in physical_cpp,
+        "vinyl unit-circle geometry is not precomputed")
+require("pose.detailLevel >= 1" in physical_cpp and "geo.vinylOutlineCount=pose.detailLevel" in physical_cpp,
+        "far-neighbour vinyl LOD is not aggressively simplified")
+require("std::abs(delta) < 1.65f ? 320 : 220" in music_cpp,
+        "root carousel does not use the three-tier 512/320/220 physical LOD")
+require("std::vector<size_t> ends" not in music_cpp,
+        "fitText still allocates a codepoint vector on the frame path")
 
 # Fixed Music background: no known cover-palette machinery should be reintroduced.
 for forbidden in ("dominantColor", "extractPalette", "coverPalette", "adaptivePalette"):
@@ -228,10 +322,10 @@ runner = ROOT / "romfs/icons/music_now_playing_runner.png"
 require(not runner.exists(), "Nintendo/runner image is bundled; asset choice must remain external")
 
 if failures:
-    print("SwitchU Music HOME-native contract: FAILED", file=sys.stderr)
+    print("SwitchU Music V8 physical/glass contract: FAILED", file=sys.stderr)
     for failure in failures:
         print(f" - {failure}", file=sys.stderr)
     sys.exit(1)
 
-print("SwitchU Music HOME-native contract: OK")
+print("SwitchU Music V8 physical/glass contract: OK")
 print("FIX6 audio hashes: OK")
