@@ -32,8 +32,8 @@ public:
     nxui::Texture* get(const CoverRef& ref, nxui::Renderer& ren, int maxSide = 256);
     nxui::Texture* getBack(const CoverRef& ref, nxui::Renderer& ren, int maxSide = 160);
 
-    // V8.3 safe-style compatibility API. Per-album colours are resolved without
-    // re-decoding artwork or launching a background image worker.
+    // V8.4 single-decode style API. The colour is sampled from the same RGBA
+    // buffer used for the first texture upload; no secondary decode/worker exists.
     void requestStyle(const CoverRef& ref);
     void pollStyleRequest();
     MusicArtworkStyle styleFor(const CoverRef& ref) const;
@@ -56,6 +56,7 @@ private:
     List m_lru;
     Map m_map;
     std::unordered_set<std::string> m_failed;
+    std::unordered_map<std::string, MusicArtworkStyle> m_styles;
 };
 
 } // namespace switchu::menu::music

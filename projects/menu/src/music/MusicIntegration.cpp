@@ -61,8 +61,10 @@ void WiiUMenuApp::showMusic() {
     // V0.02: merely entering Music does not silence HOME BGM. The session
     // guard fades it only after a user track actually becomes active.
     m_musicReturnHomeCategory = m_clock ? m_clock->homeCategory() : 1;
-    if (m_clock)
+    if (m_clock) {
         m_clock->setHomeCategory(2);
+        m_clock->setHomeTabsVisible(true);
+    }
     if (m_battery)
         m_battery->setWifiVisible(false);
     if (m_titlePill) {
@@ -114,8 +116,10 @@ void WiiUMenuApp::closeMusic() {
         m_titlePill->setMusicPlayable(false);
     }
     setHomeApplicationsCategory(applications);
-    if (m_clock)
+    if (m_clock) {
+        m_clock->setHomeTabsVisible(true);
         m_clock->setHomeCategory(applications ? 1 : 0);
+    }
     if (m_battery)
         m_battery->setWifiVisible(true);
 

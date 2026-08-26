@@ -257,6 +257,11 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
 
     // V10.7: date intentionally removed from the HOME HUD.
 
+    // Music detail/Now Playing keeps this exact HOME clock but deliberately
+    // hides the centered HOME category pill to free the upper composition.
+    if (!m_homeTabsVisible)
+        return;
+
     // V10 centered HOME categories. There is intentionally no Nintendo eShop
     // entry. The indicator is a real animated state controlled by the menu.
     const nxui::Rect navRect = homeTabsRect();

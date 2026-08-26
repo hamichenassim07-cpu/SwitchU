@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-side invariants for SwitchU Music V9 MD-Vinyl visual refactor contract.
+"""Host-side invariants for SwitchU Music V8.4 reference-interface contract.
 
 This intentionally performs source-level checks without requiring devkitPro. It
 is a regression guard, not a substitute for the real Switch build/test.
@@ -223,49 +223,36 @@ require("setWifiVisible(false)" in integration and "setWifiVisible(true)" in int
 for token in ("front", "back", "depthPx", "drawVinyl", "vinylReveal", "vinylSpinRad"):
     require(token in physical_cpp + physical_hpp, f"physical-media contract missing: {token}")
 
-# V9 keeps the V8.3 console crash fix: there is still no detached/async artwork
-# worker and no second artwork decode. Instead, one synchronous UI-thread decode
-# supplies both the GPU texture and the album-dominant accent.
+# V8.4 keeps the V8.3 real-console crash boundary: the detached secondary
+# artwork worker remains gone. The dynamic album accent is sampled from the SAME
+# RGBA buffer used for the first texture upload, so there is still only one full
+# image decode and no background artwork-analysis thread.
 require("m_coverCache.requestStyle(" not in music_cpp,
-        "MusicScreen unexpectedly requests an artwork worker")
+        "MusicScreen unexpectedly requests the removed artwork worker")
+require("decodeArtworkOnce" in cover_cache_cpp and "sampledArtworkStyle" in cover_cache_cpp,
+        "V8.4 single-decode artwork accent path is missing")
+require("safeSyntheticArtworkStyle" in cover_cache_cpp,
+        "decoder-free fallback style is missing")
 require("std::thread" not in cover_cache_cpp and "std::async" not in cover_cache_cpp,
-        "MusicCoverCache reintroduced a background image job")
+        "MusicCoverCache reintroduced a background job")
 require(cover_cache_cpp.count("stbi_load_from_memory") == 1,
-        "V9 artwork path must contain exactly one full decode site")
-require("loadFromPixels" in cover_cache_cpp and "m_styles[ref.key()]" in cover_cache_cpp,
-        "single-decode texture/accent path is missing")
-require("styleFromPixels" in cover_cache_cpp and "rgbToHsv" in cover_cache_cpp,
-        "real cover-derived dominant accent extraction is missing")
-require("MusicArtworkStyle MusicCoverCache::styleFor" in cover_cache_cpp and "m_styles.find" in cover_cache_cpp,
-        "resolved artwork style cache is missing")
-require("std::future" not in cover_cache_hpp and "m_styleFuture" not in cover_cache_cpp,
-        "artwork analysis unexpectedly uses a future")
-require("StyleWorkerState" not in cover_cache_hpp and "m_styleWorker" not in cover_cache_cpp,
-        "removed secondary artwork worker returned")
-require("getBack" in cover_cache_cpp and "return nullptr" in cover_cache_cpp,
-        "rear sleeve can trigger a second artwork texture load")
-require("single_decode_accent=ON" in music_cpp and "artwork_worker=OFF" in music_cpp,
-        "V9 safe single-decode runtime mode is not declared")
+        "artwork path must contain exactly one full memory decode site")
+require("out.loadFromPixels" in cover_cache_cpp and "m_styles[ref.key()]" in cover_cache_cpp,
+        "sampled accent is not coupled to the first texture upload")
+request_pos = cover_cache_cpp.find("void MusicCoverCache::requestStyle")
+require(request_pos >= 0 and "(void)ref" in cover_cache_cpp[request_pos:request_pos + 500],
+        "requestStyle is no longer the safe no-worker compatibility stub")
+get_back_pos = cover_cache_cpp.find("nxui::Texture* MusicCoverCache::getBack")
+require(get_back_pos >= 0 and "return nullptr" in cover_cache_cpp[get_back_pos:get_back_pos + 700],
+        "rear sleeve can trigger a second artwork texture load again")
+for forbidden in ("sampleArtworkStyle", "generateBackTexture", "artwork_style_cache_v7.json",
+                  "artwork_back_cache", "m_styleWorker", "m_styleRunning"):
+    require(forbidden not in cover_cache_cpp + cover_cache_hpp,
+            f"removed unstable artwork pipeline returned: {forbidden}")
 require("gMusicAccent = artworkAccent" in music_cpp,
-        "Music accent plumbing is missing")
-
-# V9 composition contract from the approved mockups.
-require("coverFlowSize" in music_cpp and "coverFlowCenterOffset" in music_cpp,
-        "MD-Vinyl Cover Flow geometry helpers are missing")
-require("-delta * 39.f" in music_cpp and "-64.f, 64.f" in music_cpp,
-        "Cover Flow no longer uses the strong perspective/yaw treatment")
-require("constexpr int rows = 7" in music_cpp,
-        "album tracklist must expose seven visible rows")
-require("setHomeTabsVisible(rootView())" in music_cpp,
-        "HOME category pill is not limited to Music root")
-require("m_homeTabsVisible" in text("projects/menu/src/widgets/DateTimeWidget.hpp"),
-        "DateTimeWidget cannot suppress only the HOME category capsule")
-require("album's real dominant colour" in music_cpp or "real dominant colour" in music_cpp,
-        "dynamic selected-track accent contract is missing")
-require("tiny animated equalizer" in music_cpp,
-        "playing-track equalizer indicator is missing")
-require("artwork_worker=OFF" in music_cpp,
-        "worker-off diagnostic is missing")
+        "Music accent plumbing changed during V8.3 crash fix")
+require("secondary_decode=OFF" in music_cpp and "single_decode_accent=ON" in music_cpp,
+        "V8.4 single-decode safe accent mode is not declared in the runtime log")
 
 # V8 carries forward 3D lighting, level-of-detail, perspective reflection and micro-parallax.
 for token in ("faceLight", "detailLevel", "vinylOutline", "vinylLagPx"):
@@ -285,9 +272,9 @@ require("0.235f" in physical_cpp,
 require("m_marqueeElapsed" in music_cpp and "drawMarqueeOrFit" in music_cpp and
         "constexpr float delay=1.0f" in music_cpp,
         "contextual marquee engine is missing")
-require("drawMarqueeOrFit(ren, title" in music_cpp and
+require("titleMarquee" in music_cpp and "artistMarquee" in music_cpp and
         "View::NowPlaying && m_status.track_id" in music_cpp,
-        "Now Playing title marquee support is missing")
+        "Now Playing long title/artist marquee was not extended")
 require("drawSmokedGlassPanel" in music_cpp,
         "dark smoked/frosted glass information surfaces are missing")
 require("drawPreviousRootCarousel" in music_cpp and "m_rootCategoryPreviousView" in music_hpp,
@@ -308,9 +295,8 @@ for forbidden_wait in ("sleep_for", "svcSleepThread", "usleep("):
 require("m_musicScreen->hide();" in integration and "setHomeApplicationsCategory(applications);" in integration,
         "Music close no longer hides UI before restoring HOME")
 
-# V8.1 SAFE ENTRY retained the joinable library scan ownership. V8.3 leaves
-# that path intact; the real-console evidence points instead to the secondary
-# artwork decoder, which has now been removed completely.
+# V8.1 SAFE ENTRY joinable library scan ownership remains intact. V8.4 changes
+# only the visual surfaces and the first-decode colour sample.
 require("std::future<LibrarySnapshot>" in music_hpp and "m_scanFuture" in music_cpp,
         "SAFE-ENTRY joinable library scan ownership is missing")
 require("ScanTaskState" not in music_hpp and "mode=safe-async" in music_cpp,
@@ -323,8 +309,8 @@ require("std::future" not in cover_cache_hpp and "m_styleFuture" not in cover_ca
         "artwork analysis still uses a future that may block on destruction")
 require("StyleWorkerState" not in cover_cache_hpp and "std::thread" not in cover_cache_cpp,
         "removed secondary artwork worker returned")
-require("preflightArtwork" in cover_cache_cpp and "artwork preflight rejected" in cover_cache_cpp,
-        "artwork is not preflighted before image decode")
+require("preflightArtwork" in cover_cache_cpp and "embedded artwork preflight rejected" in cover_cache_cpp,
+        "embedded artwork is not preflighted before image decode")
 
 # No renderer-side fake blur fallback; rear material is either cached texture or
 # the derived smoked back colour.
@@ -337,14 +323,41 @@ require("CircleLut" in physical_cpp and "circleLut(" in physical_cpp,
         "vinyl unit-circle geometry is not precomputed")
 require("pose.detailLevel >= 1" in physical_cpp and "geo.vinylOutlineCount=pose.detailLevel" in physical_cpp,
         "far-neighbour vinyl LOD is not aggressively simplified")
-require("? 512" in music_cpp and "? 320 : 220" in music_cpp,
-        "root Cover Flow does not use the three-tier 512/320/220 physical LOD")
+require("std::abs(delta) < 1.65f ? 320 : 220" in music_cpp,
+        "root carousel does not use the three-tier 512/320/220 physical LOD")
 require("std::vector<size_t> ends" not in music_cpp,
         "fitText still allocates a codepoint vector on the frame path")
 
-# Fixed Music background: no known cover-palette machinery should be reintroduced.
+# Fixed Music background: album accent may colour active controls/rows only, never the background.
 for forbidden in ("dominantColor", "extractPalette", "coverPalette", "adaptivePalette"):
     require(forbidden not in music_cpp, f"cover-adaptive background path returned: {forbidden}")
+
+
+# Reference UI composition: root keeps the HOME capsule, detail/player hide it,
+# Album shows seven large rows, selected-row colour comes from the album accent,
+# and Now Playing uses the supplied large-sleeve/transport geometry.
+datetime_hpp = text("projects/menu/src/widgets/DateTimeWidget.hpp")
+datetime_cpp = text("projects/menu/src/widgets/DateTimeWidget.cpp")
+require("setHomeTabsVisible(rootView())" in music_cpp,
+        "Music no longer hides the HOME category pill outside the root")
+require("m_homeTabsVisible" in datetime_hpp and "if (!m_homeTabsVisible)" in datetime_cpp,
+        "HOME clock cannot hide only its category pill on detail/player")
+require("setHomeTabsVisible(true)" in integration,
+        "HOME category pill is not restored when Music closes")
+require("constexpr int rows = 7" in music_cpp and "const nxui::Rect panel{732.f" in music_cpp,
+        "Album detail no longer matches the seven-row reference composition")
+require("Ajouter à la playlist" in music_cpp and
+        "addAction(static_cast<uint64_t>(nxui::Button::Y)" in music_cpp and
+        "contextualY();" in music_cpp and
+        "if (m_view == View::AlbumDetail)" in music_cpp and
+        "openPlaylistChooser(m_library.tracks[ti].id)" in music_cpp,
+        "Album Y action is not wired to playlist insertion")
+require("0.018f + gMusicAccent.r * 0.19f" in music_cpp and "accent(0.72f)" in music_cpp,
+        "selected track row lost the dark dynamic artwork accent")
+require("const nxui::Rect timeline{762.f" in music_cpp and "Aléatoire" in music_cpp and "Précédent" in music_cpp,
+        "Now Playing reference transport layout is missing")
+require("const float reveal = 0.f;" in music_cpp,
+        "root album carousel exposes vinyl instead of clean sleeves")
 
 # Real Now Playing remains present; Mario/Nintendo asset is not bundled by us.
 require("View::NowPlaying" in music_cpp and "drawNowPlaying" in music_cpp,
@@ -353,10 +366,10 @@ runner = ROOT / "romfs/icons/music_now_playing_runner.png"
 require(not runner.exists(), "Nintendo/runner image is bundled; asset choice must remain external")
 
 if failures:
-    print("SwitchU Music V9 MD-VINYL contract: FAILED", file=sys.stderr)
+    print("SwitchU Music V8.4 REFERENCE-UI contract: FAILED", file=sys.stderr)
     for failure in failures:
         print(f" - {failure}", file=sys.stderr)
     sys.exit(1)
 
-print("SwitchU Music V9 MD-VINYL contract: OK")
+print("SwitchU Music V8.4 REFERENCE-UI contract: OK")
 print("FIX6 audio hashes: OK")

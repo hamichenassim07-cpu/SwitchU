@@ -5,6 +5,7 @@
 #include "MusicLibrary.hpp"
 #include "MusicPlaylistStore.hpp"
 #include "widgets/TitlePillWidget.hpp"
+#include "widgets/DateTimeWidget.hpp"
 #include "widgets/HomeCarouselMotion.hpp"
 #include "MusicPhysicalMediaRenderer.hpp"
 
@@ -32,7 +33,7 @@ public:
     void setFonts(nxui::Font* normal, nxui::Font* small, nxui::Font* icons) {
         m_font = normal; m_smallFont = small; m_iconFont = icons;
     }
-    void setHomeHudWidgets(nxui::Widget* clock, nxui::Widget* profile,
+    void setHomeHudWidgets(DateTimeWidget* clock, nxui::Widget* profile,
                            nxui::Widget* battery, TitlePillWidget* titlePill) {
         m_homeClockWidget = clock;
         m_homeProfileWidget = profile;
@@ -151,7 +152,7 @@ private:
     nxui::Font* m_font = nullptr;
     nxui::Font* m_smallFont = nullptr;
     nxui::Font* m_iconFont = nullptr;
-    nxui::Widget* m_homeClockWidget = nullptr;
+    DateTimeWidget* m_homeClockWidget = nullptr;
     nxui::Widget* m_homeProfileWidget = nullptr;
     nxui::Widget* m_homeBatteryWidget = nullptr;
     TitlePillWidget* m_homeTitlePill = nullptr;
@@ -197,12 +198,6 @@ private:
     // receives the carousel, never on every left/right selection change.
     bool m_rootEntryBounceActive = false;
     float m_rootEntryBounceTime = 0.f;
-
-    // Optional four-frame horizontal sprite sheet for the intended now-playing
-    // runner. No Nintendo asset is bundled. Until an asset decision is made,
-    // the UI shows only a neutral technical play-state indicator.
-    nxui::Texture m_nowPlayingRunnerTexture;
-    bool m_runnerLoadAttempted = false;
 
     LibrarySnapshot m_library;
     MusicPlaylistStore m_playlistStore;

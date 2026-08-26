@@ -5,7 +5,10 @@
 #include <nxui/third_party/stb/stb_image.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <vector>
 
@@ -98,17 +101,178 @@ nxui::Color hsvToRgb(float h, float s, float v) {
     return {r + m, g + m, b + m, 1.f};
 }
 
-// V8.3 console crash fix.
+// V8.4 reference-UI accent extraction.
 //
-// The V8.1 console log proves the library scan completes, normal cover textures
-// load successfully, and the process dies immediately after the secondary
-// "[music-style] worker begin" line for Kiss Land / Odd Look.  The unsafe part
-// was therefore the second image decode performed by the detached style worker,
-// not the HOME carousel, library scan or FIX6 audio engine.
-//
-// Resolve an album-specific visual style without touching image bytes, the GPU,
-// the filesystem or another thread.  This keeps the physical sleeve/vinyl DA
-// alive while removing the crash path completely.
+// V8.3 removed the detached artwork-style worker because it performed a SECOND
+// full image decode and crashed on real hardware. V8.4 keeps that safety rule:
+// artwork is decoded exactly once on the render thread when the texture is first
+// loaded. The same decoded RGBA buffer is used both for the GPU upload and for a
+// small colour sample. There is no second decode, no background worker and no
+// additional rear-sleeve texture.
+struct DecodedArtwork {
+    std::vector<uint8_t> rgba;
+    int width = 0;
+    int height = 0;
+};
+
+bool decodeArtworkOnce(const std::vector<uint8_t>& bytes, int maxSide,
+                       DecodedArtwork& out) {
+    out = {};
+    int w = 0, h = 0, comp = 0;
+    uint8_t* decoded = stbi_load_from_memory(bytes.data(),
+                                              static_cast<int>(bytes.size()),
+                                              &w, &h, &comp, 4);
+    if (!decoded || w <= 0 || h <= 0) {
+        if (decoded) stbi_image_free(decoded);
+        return false;
+    }
+
+    int dw = w, dh = h;
+    if (maxSide > 0 && (w > maxSide || h > maxSide)) {
+        const float scale = std::min(static_cast<float>(maxSide) / static_cast<float>(w),
+                                     static_cast<float>(maxSide) / static_cast<float>(h));
+        dw = std::max(1, static_cast<int>(std::round(static_cast<float>(w) * scale)));
+        dh = std::max(1, static_cast<int>(std::round(static_cast<float>(h) * scale)));
+    }
+
+    out.rgba.resize(static_cast<size_t>(dw) * static_cast<size_t>(dh) * 4u);
+    if (dw == w && dh == h) {
+        std::memcpy(out.rgba.data(), decoded, out.rgba.size());
+    } else {
+        for (int y = 0; y < dh; ++y) {
+            const int sy = std::min(h - 1, y * h / dh);
+            for (int x = 0; x < dw; ++x) {
+                const int sx = std::min(w - 1, x * w / dw);
+                std::memcpy(out.rgba.data() +
+                                (static_cast<size_t>(y) * static_cast<size_t>(dw) +
+                                 static_cast<size_t>(x)) * 4u,
+                            decoded +
+                                (static_cast<size_t>(sy) * static_cast<size_t>(w) +
+                                 static_cast<size_t>(sx)) * 4u,
+                            4u);
+            }
+        }
+    }
+    stbi_image_free(decoded);
+    out.width = dw;
+    out.height = dh;
+    return true;
+}
+
+struct Hsv {
+    float h = 0.f;
+    float s = 0.f;
+    float v = 0.f;
+};
+
+Hsv rgbToHsv(float r, float g, float b) {
+    const float mx = std::max({r, g, b});
+    const float mn = std::min({r, g, b});
+    const float d = mx - mn;
+    Hsv out{};
+    out.v = mx;
+    out.s = mx <= 1e-6f ? 0.f : d / mx;
+    if (d <= 1e-6f) return out;
+    if (mx == r) out.h = std::fmod((g - b) / d, 6.f) / 6.f;
+    else if (mx == g) out.h = ((b - r) / d + 2.f) / 6.f;
+    else out.h = ((r - g) / d + 4.f) / 6.f;
+    if (out.h < 0.f) out.h += 1.f;
+    return out;
+}
+
+MusicArtworkStyle styleFromAccent(const nxui::Color& accent, uint64_t signature) {
+    MusicArtworkStyle out{};
+    out.accent = accent;
+    out.spine = {0.030f + accent.r * 0.24f,
+                 0.033f + accent.g * 0.24f,
+                 0.041f + accent.b * 0.24f, 1.f};
+    out.back = {0.016f + accent.r * 0.085f,
+                0.018f + accent.g * 0.085f,
+                0.024f + accent.b * 0.085f, 1.f};
+    out.signature = signature;
+    out.sampled = true;
+    return out;
+}
+
+MusicArtworkStyle sampledArtworkStyle(const DecodedArtwork& image,
+                                       const CoverRef& ref) {
+    if (image.rgba.empty() || image.width <= 0 || image.height <= 0)
+        return {};
+
+    // Hue bins avoid the muddy result of averaging an entire cover. Neutral,
+    // near-black and near-white pixels are ignored on the main pass so a real
+    // blue/orange/red/etc. visual family wins. The winning bin is then averaged
+    // and gently normalised for legible UI accents.
+    constexpr int kHueBins = 24;
+    struct Bin {
+        double weight = 0.0;
+        double r = 0.0, g = 0.0, b = 0.0;
+    };
+    std::array<Bin, kHueBins> bins{};
+    double neutralWeight = 0.0;
+    double neutralR = 0.0, neutralG = 0.0, neutralB = 0.0;
+
+    const int stepX = std::max(1, image.width / 80);
+    const int stepY = std::max(1, image.height / 80);
+    for (int y = 0; y < image.height; y += stepY) {
+        for (int x = 0; x < image.width; x += stepX) {
+            const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(image.width) +
+                              static_cast<size_t>(x)) * 4u;
+            const float a = image.rgba[i + 3] / 255.f;
+            if (a < 0.35f) continue;
+            const float r = image.rgba[i + 0] / 255.f;
+            const float g = image.rgba[i + 1] / 255.f;
+            const float b = image.rgba[i + 2] / 255.f;
+            const Hsv hsv = rgbToHsv(r, g, b);
+
+            const float neutral = std::clamp(1.f - hsv.s, 0.f, 1.f);
+            const float midLight = 1.f - std::min(1.f, std::abs(hsv.v - 0.55f) / 0.55f);
+            const double neutralW = static_cast<double>(0.12f + 0.88f * midLight) *
+                                    static_cast<double>(0.25f + 0.75f * neutral) * a;
+            neutralWeight += neutralW;
+            neutralR += neutralW * r;
+            neutralG += neutralW * g;
+            neutralB += neutralW * b;
+
+            if (hsv.s < 0.16f || hsv.v < 0.13f || hsv.v > 0.94f)
+                continue;
+            const int binIndex = std::clamp(static_cast<int>(hsv.h * kHueBins),
+                                            0, kHueBins - 1);
+            const float brightnessWeight = 0.36f + 0.64f * midLight;
+            const float saturationWeight = 0.28f + 0.72f * hsv.s;
+            const double w = static_cast<double>(brightnessWeight * saturationWeight * a);
+            bins[static_cast<size_t>(binIndex)].weight += w;
+            bins[static_cast<size_t>(binIndex)].r += w * r;
+            bins[static_cast<size_t>(binIndex)].g += w * g;
+            bins[static_cast<size_t>(binIndex)].b += w * b;
+        }
+    }
+
+    const Bin* best = nullptr;
+    for (const auto& bin : bins)
+        if (!best || bin.weight > best->weight) best = &bin;
+
+    float r = 0.54f, g = 0.72f, b = 1.00f;
+    if (best && best->weight > 0.01) {
+        r = static_cast<float>(best->r / best->weight);
+        g = static_cast<float>(best->g / best->weight);
+        b = static_cast<float>(best->b / best->weight);
+    } else if (neutralWeight > 0.01) {
+        r = static_cast<float>(neutralR / neutralWeight);
+        g = static_cast<float>(neutralG / neutralWeight);
+        b = static_cast<float>(neutralB / neutralWeight);
+    }
+
+    Hsv hsv = rgbToHsv(r, g, b);
+    // Keep the album hue but make the accent usable on a black/grey Switch UI.
+    hsv.s = std::clamp(std::max(hsv.s, 0.38f), 0.38f, 0.78f);
+    hsv.v = std::clamp(hsv.v, 0.62f, 0.84f);
+    const nxui::Color accent = hsvToRgb(hsv.h, hsv.s, hsv.v);
+    return styleFromAccent(accent, fnv1a64(ref.key()));
+}
+
+// Decoder-free fallback used before a cover texture has been requested or for
+// an uncommon standalone format that is handled by Texture::loadFromFile.
 MusicArtworkStyle safeSyntheticArtworkStyle(const CoverRef& ref) {
     MusicArtworkStyle out{};
     if (!ref.valid()) return out;
@@ -119,41 +283,40 @@ MusicArtworkStyle safeSyntheticArtworkStyle(const CoverRef& ref) {
     const float valJitter = static_cast<float>((hash >> 24) & 0xffu) / 255.f;
     const float saturation = 0.42f + satJitter * 0.20f;
     const float value = 0.70f + valJitter * 0.12f;
-
-    out.accent = hsvToRgb(hue, saturation, value);
-    out.spine = {0.030f + out.accent.r * 0.24f,
-                 0.033f + out.accent.g * 0.24f,
-                 0.041f + out.accent.b * 0.24f, 1.f};
-    out.back = {0.016f + out.accent.r * 0.085f,
-                0.018f + out.accent.g * 0.085f,
-                0.024f + out.accent.b * 0.085f, 1.f};
-    out.signature = hash;
-    // Existing renderer code uses 'sampled' as "resolved style available".
-    out.sampled = true;
-    return out;
+    return styleFromAccent(hsvToRgb(hue, saturation, value), hash);
 }
 } // namespace
 
 bool MusicCoverCache::loadTexture(const CoverRef& ref, nxui::Renderer& ren,
                                   nxui::Texture& out, int maxSide) {
     if (!ref.valid()) return false;
-    if (!ref.embedded)
-        return out.loadFromFile(ren.gpu(), ren, ref.path, maxSide);
 
-    // Embedded APIC validation stays on the render/UI thread.  This exact path
-    // completed successfully in the crash session before the old style worker
-    // was started, so retain it while rejecting malformed offsets/sizes.
     std::vector<uint8_t> bytes = readCoverBytes(ref);
-    if (bytes.empty()) return false;
-    int w = 0, h = 0;
-    if (!preflightArtwork(bytes, w, h)) {
+    int sourceW = 0, sourceH = 0;
+    if (!bytes.empty() && preflightArtwork(bytes, sourceW, sourceH)) {
+        DecodedArtwork decoded{};
+        if (!decodeArtworkOnce(bytes, maxSide, decoded)) {
+            DebugLog::log("[music-cover] artwork decode failed path=%s embedded=%d",
+                          ref.path.c_str(), ref.embedded ? 1 : 0);
+            return false;
+        }
+        m_styles[ref.key()] = sampledArtworkStyle(decoded, ref);
+        return out.loadFromPixels(ren.gpu(), ren, decoded.rgba.data(),
+                                  decoded.width, decoded.height);
+    }
+
+    if (ref.embedded) {
         DebugLog::log("[music-cover] embedded artwork preflight rejected path=%s offset=%llu size=%llu",
                       ref.path.c_str(),
                       static_cast<unsigned long long>(ref.offset),
                       static_cast<unsigned long long>(ref.size));
         return false;
     }
-    return out.loadFromMemory(ren.gpu(), ren, bytes.data(), bytes.size(), maxSide);
+
+    // Preserve V8.3 compatibility for uncommon standalone image formats. They
+    // retain the decoder-free synthetic accent because decoding them a second
+    // time purely for colour would violate the real-console crash boundary.
+    return out.loadFromFile(ren.gpu(), ren, ref.path, maxSide);
 }
 
 nxui::Texture* MusicCoverCache::get(const CoverRef& ref, nxui::Renderer& ren, int maxSide) {
@@ -214,6 +377,8 @@ void MusicCoverCache::pollStyleRequest() {
 }
 
 MusicArtworkStyle MusicCoverCache::styleFor(const CoverRef& ref) const {
+    auto found = m_styles.find(ref.key());
+    if (found != m_styles.end()) return found->second;
     return safeSyntheticArtworkStyle(ref);
 }
 
@@ -223,6 +388,7 @@ void MusicCoverCache::clear() {
     m_map.clear();
     m_lru.clear();
     m_failed.clear();
+    m_styles.clear();
 }
 
 } // namespace switchu::menu::music

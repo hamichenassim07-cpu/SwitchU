@@ -21,6 +21,8 @@ public:
     void setHomeCategory(int category); // 0 Jeux, 1 Applications, 2 Musique
     int homeCategory() const { return m_homeCategory; }
     bool homeApplicationsActive() const { return m_homeCategory == 1; }
+    void setHomeTabsVisible(bool visible) { m_homeTabsVisible = visible; }
+    bool homeTabsVisible() const { return m_homeTabsVisible; }
     void setHomeTabsFocused(bool focused) { m_homeTabsFocused = focused; }
     nxui::Rect activeHomeTabRect() const;
     nxui::Rect homeTabsRect() const;
@@ -44,6 +46,7 @@ private:
 
     int m_homeCategory = 0;
     bool m_homeTabsFocused = false;
+    bool m_homeTabsVisible = true;
     float m_homeTabSlide = 0.f;
     float m_homeTabPop = 0.f;
     float m_homeTabAnimFrom = 0.f;
