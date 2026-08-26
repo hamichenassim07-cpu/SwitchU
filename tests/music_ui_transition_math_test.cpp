@@ -17,7 +17,7 @@ float outgoingOffset(int direction, float t) {
     const float e=smoothStep(t);
     return static_cast<float>(direction)*e*52.f;
 }
-float exposedDiscFraction(float reveal) { return 0.30f*reveal; }
+float vinylCenterShiftRadiusUnits(float reveal) { return 1.32f*reveal; }
 }
 
 int main() {
@@ -31,9 +31,12 @@ int main() {
     assert(outgoingOffset(-1,1.f)<-51.9f);
     assert(incomingOffset(-1,0.f)>51.9f);
 
-    // Root selected album ≈18.6% visible record; detail ≈27.6%.
-    assert(std::abs(exposedDiscFraction(0.62f)-0.186f)<0.001f);
-    assert(std::abs(exposedDiscFraction(0.92f)-0.276f)<0.001f);
+    // V8.5: the root intentionally hides the record, while detailed views
+    // push the vinyl centre far enough out from behind the sleeve to keep its
+    // silhouette readable on the real Switch display.
+    assert(std::abs(vinylCenterShiftRadiusUnits(0.0f)-0.0f)<0.001f);
+    assert(std::abs(vinylCenterShiftRadiusUnits(0.72f)-0.9504f)<0.001f);
+    assert(std::abs(vinylCenterShiftRadiusUnits(0.98f)-1.2936f)<0.001f);
 
     // Current contract: category exchange stays 200-250 ms, the cinematic
     // detail transform never exceeds 500 ms, and Music -> HOME stays <=160 ms.

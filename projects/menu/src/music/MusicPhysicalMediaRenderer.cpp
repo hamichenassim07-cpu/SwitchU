@@ -243,14 +243,19 @@ void drawDiscFan(nxui::Renderer& ren, const PhysicalMediaPose& pose,
     }
 }
 
-void drawVinyl(nxui::Renderer& ren, const PhysicalMediaPose& pose,
+void drawVinyl(nxui::Renderer& ren, nxui::Texture* cover,
+               const PhysicalMediaPose& pose,
                float reveal, float spin, PhysicalMediaGeometry& geo) {
     reveal = std::clamp(reveal,0.f,1.f);
     if (reveal <= 0.001f) return;
 
-    const float radius = pose.rect.height * 0.405f;
+    // V8.4 only displaced the disc by 0.60R, leaving almost the whole record
+    // hidden behind the sleeve on real hardware.  V8.5 keeps the same 3D model
+    // but gives the record the overlap visible in the supplied Album/Player
+    // concepts: clearly present, still physically connected to the sleeve.
+    const float radius = pose.rect.height * 0.455f;
     const float localCx = pose.rect.width * 0.5f - radius +
-                          (radius * 0.60f) * reveal + pose.vinylLagPx;
+                          (radius * 1.32f) * reveal + pose.vinylLagPx;
     const float localCy = 0.f;
     const float zFront = -pose.depthPx*0.58f;
     const float zBack = zFront - std::max(1.5f,pose.depthPx*0.24f);
@@ -261,8 +266,11 @@ void drawVinyl(nxui::Renderer& ren, const PhysicalMediaPose& pose,
                                              pose.pitchDeg*kDeg,
                                              pose.rollDeg*kDeg);
 
-    // Far neighbours do not need disc thickness; the front silhouette is all
-    // that survives at ~220 px and this removes 40 projected quads per object.
+    // A restrained neutral rim separates black vinyl from the black Music
+    // background without turning it into a glowing object.
+    drawDiscFan(ren,pose,localCx,localCy,radius*1.018f,zBack-0.25f,
+                {0.34f,0.36f,0.41f,0.070f*a},segs,basis);
+
     if (pose.detailLevel >= 1) {
         for (int i=0;i<segs;++i) {
             const size_t i0=static_cast<size_t>(i), i1=static_cast<size_t>(i+1);
@@ -270,39 +278,105 @@ void drawVinyl(nxui::Renderer& ren, const PhysicalMediaPose& pose,
             const nxui::Vec2 p1=projectDiscPointCS(lut.c[i1],lut.s[i1],radius,localCx,localCy,zBack,pose,basis);
             const nxui::Vec2 p2=projectDiscPointCS(lut.c[i1],lut.s[i1],radius,localCx,localCy,zFront,pose,basis);
             const nxui::Vec2 p3=projectDiscPointCS(lut.c[i0],lut.s[i0],radius,localCx,localCy,zFront,pose,basis);
-            drawQuad(ren,{p0,p1,p2,p3},{0.018f,0.020f,0.024f,0.96f*a});
+            drawQuad(ren,{p0,p1,p2,p3},{0.022f,0.024f,0.030f,0.98f*a});
         }
     }
 
     drawDiscFan(ren,pose,localCx,localCy,radius,zFront,
-                {0.018f,0.020f,0.024f,0.995f*a},segs,basis);
+                {0.036f,0.039f,0.048f,0.998f*a},segs,basis);
+    drawDiscFan(ren,pose,localCx,localCy,radius*0.965f,zFront+0.08f,
+                {0.026f,0.029f,0.036f,0.995f*a},segs,basis);
 
-    const int grooveRings = pose.detailLevel >= 2 ? 6 : (pose.detailLevel == 1 ? 3 : 0);
     const float discLight=faceLight(pose,{0.f,0.f,1.f},0.30f);
-    const float grooveAlpha=(0.010f+0.030f*std::clamp((discLight-0.30f)/0.70f,0.f,1.f))*a;
+    const int grooveRings = pose.detailLevel >= 2 ? 9 : (pose.detailLevel == 1 ? 4 : 0);
+    const float grooveAlpha=(0.045f+0.065f*std::clamp((discLight-0.30f)/0.70f,0.f,1.f))*a;
     for (int ring=0;ring<grooveRings;++ring) {
-        const float rr=radius*(0.58f+0.055f*ring);
+        const float rr=radius*(0.49f+0.052f*ring);
         nxui::Vec2 prev=projectDiscPointCS(lut.c[0],lut.s[0],rr,localCx,localCy,zFront+0.15f,pose,basis);
         for (int i=1;i<=segs;++i) {
             const size_t li=static_cast<size_t>(i);
             const nxui::Vec2 cur=projectDiscPointCS(lut.c[li],lut.s[li],rr,localCx,localCy,zFront+0.15f,pose,basis);
-            ren.drawLine(prev,cur,{0.58f,0.62f,0.70f,grooveAlpha*(0.82f+0.03f*ring)},0.72f);
+            ren.drawLine(prev,cur,{0.58f,0.62f,0.70f,grooveAlpha*(0.74f+0.025f*ring)},0.75f);
             prev=cur;
         }
     }
 
-    const float labelR=radius*0.205f;
+    // Stronger outer definition + three studio-highlight arcs. These are short
+    // reflections, not a full bright outline, so the record remains black.
+    {
+        nxui::Vec2 prev=projectDiscPointCS(lut.c[0],lut.s[0],radius*0.995f,
+                                           localCx,localCy,zFront+0.22f,pose,basis);
+        for (int i=1;i<=segs;++i) {
+            const size_t li=static_cast<size_t>(i);
+            const nxui::Vec2 cur=projectDiscPointCS(lut.c[li],lut.s[li],radius*0.995f,
+                                                     localCx,localCy,zFront+0.22f,pose,basis);
+            ren.drawLine(prev,cur,{0.70f,0.73f,0.80f,0.20f*a},0.92f);
+            prev=cur;
+        }
+    }
+    if (pose.detailLevel >= 1) {
+        for (int band=0; band<3; ++band) {
+            const float rr=radius*(0.74f+0.075f*band);
+            constexpr int arcSegs=13;
+            const float begin=-1.16f+0.08f*band;
+            const float finish=0.10f+0.04f*band;
+            nxui::Vec2 prev=projectDiscAngle(begin,rr,localCx,localCy,zFront+0.30f,pose,basis);
+            for (int i=1;i<=arcSegs;++i) {
+                const float t=static_cast<float>(i)/static_cast<float>(arcSegs);
+                const float ang=begin+(finish-begin)*t;
+                const nxui::Vec2 cur=projectDiscAngle(ang,rr,localCx,localCy,zFront+0.30f,pose,basis);
+                const float fade=std::sin(t*kPi);
+                ren.drawLine(prev,cur,{0.90f,0.92f,0.97f,(0.035f+0.070f*fade)*a},1.05f);
+                prev=cur;
+            }
+        }
+    }
+
+    const float labelR=radius*0.218f;
     const int labelSegments=pose.detailLevel>=2?32:(pose.detailLevel==1?24:20);
     drawDiscFan(ren,pose,localCx,localCy,labelR,zFront+0.4f,
-                mix({0.08f,0.08f,0.09f,1.f},pose.accent,0.84f,0.98f*a),labelSegments,basis);
+                mix({0.050f,0.052f,0.060f,1.f},pose.accent,0.58f,0.99f*a),labelSegments,basis);
+
+    // Reuse the already-decoded cover texture as a tiny printed centre label.
+    // This makes each vinyl album-specific without any second artwork decode or
+    // worker: it is the exact GPU texture already used for the sleeve.
+    if (pose.detailLevel >= 2 && cover && cover->valid() && cover->descriptorSlot() >= 0) {
+        const float half=labelR*0.58f;
+        const float cs=std::cos(spin), sn=std::sin(spin);
+        const std::array<V3,4> local={{
+            {-half,-half,zFront+0.54f}, {half,-half,zFront+0.54f},
+            {half,half,zFront+0.54f}, {-half,half,zFront+0.54f}
+        }};
+        const float screenCx=pose.rect.x+pose.rect.width*.5f;
+        const float screenCy=pose.rect.y+pose.rect.height*.5f;
+        std::array<nxui::Vec2,4> q{};
+        for (int i=0;i<4;++i) {
+            const float rx=local[static_cast<size_t>(i)].x*cs-local[static_cast<size_t>(i)].y*sn;
+            const float ry=local[static_cast<size_t>(i)].x*sn+local[static_cast<size_t>(i)].y*cs;
+            q[static_cast<size_t>(i)]=project(
+                basis.apply({localCx+rx,localCy+ry,local[static_cast<size_t>(i)].z}),
+                screenCx,screenCy,pose.zLiftPx);
+        }
+        drawTexturedQuad(ren,cover,q,{0.72f,0.74f,0.78f,0.62f*a});
+        drawQuad(ren,q,{pose.accent.r,pose.accent.g,pose.accent.b,0.08f*a});
+    }
 
     if (pose.detailLevel >= 1) {
-        drawDiscFan(ren,pose,localCx,localCy,labelR*0.18f,zFront+0.55f,
-                    {0.015f,0.016f,0.019f,1.f*a},20,basis);
-        const float tickR0=labelR*0.42f, tickR1=labelR*0.82f;
-        const nxui::Vec2 tick0=projectDiscAngle(spin,tickR0,localCx,localCy,zFront+0.62f,pose,basis);
-        const nxui::Vec2 tick1=projectDiscAngle(spin,tickR1,localCx,localCy,zFront+0.62f,pose,basis);
-        ren.drawLine(tick0,tick1,{1.f,1.f,1.f,0.28f*a},1.3f);
+        // Printed label rings and spindle hole stay visible above the artwork.
+        const float guideR=labelR*0.90f;
+        nxui::Vec2 prev=projectDiscPointCS(lut.c[0],lut.s[0],guideR,localCx,localCy,zFront+0.60f,pose,basis);
+        for (int i=1;i<=segs;++i) {
+            const size_t li=static_cast<size_t>(i);
+            const nxui::Vec2 cur=projectDiscPointCS(lut.c[li],lut.s[li],guideR,localCx,localCy,zFront+0.60f,pose,basis);
+            ren.drawLine(prev,cur,{1.f,1.f,1.f,0.20f*a},0.72f);
+            prev=cur;
+        }
+        drawDiscFan(ren,pose,localCx,localCy,labelR*0.16f,zFront+0.66f,
+                    {0.012f,0.013f,0.016f,1.f*a},20,basis);
+        const float tickR0=labelR*0.43f, tickR1=labelR*0.78f;
+        const nxui::Vec2 tick0=projectDiscAngle(spin,tickR0,localCx,localCy,zFront+0.70f,pose,basis);
+        const nxui::Vec2 tick1=projectDiscAngle(spin,tickR1,localCx,localCy,zFront+0.70f,pose,basis);
+        ren.drawLine(tick0,tick1,{1.f,1.f,1.f,0.42f*a},1.15f);
     }
 
     const float screenCx=pose.rect.x+pose.rect.width*.5f;
@@ -332,7 +406,7 @@ PhysicalMediaGeometry drawAlbumImpl(nxui::Renderer& ren,
                                     bool playlist) {
     PhysicalMediaGeometry geo{};
     const float reveal = playlist ? pose.vinylReveal*0.58f : pose.vinylReveal;
-    drawVinyl(ren,pose,reveal,pose.vinylSpinRad,geo);
+    drawVinyl(ren,cover,pose,reveal,pose.vinylSpinRad,geo);
 
     if (playlist) {
         // Backing geometry is intentionally cheaper on neighbours.
