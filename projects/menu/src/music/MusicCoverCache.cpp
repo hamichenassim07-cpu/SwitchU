@@ -321,9 +321,12 @@ bool MusicCoverCache::loadTexture(const CoverRef& ref, nxui::Renderer& ren,
 
 nxui::Texture* MusicCoverCache::get(const CoverRef& ref, nxui::Renderer& ren, int maxSide) {
     if (!ref.valid()) return nullptr;
+    ++m_getEpoch;
     const int qualitySide = maxSide <= 160 ? 160 : 400;
     const std::string key = ref.key() + "@" + std::to_string(qualitySide);
-    if (m_failed.find(key) != m_failed.end()) return nullptr;
+    auto failed = m_failed.find(key);
+    if (failed != m_failed.end() && m_getEpoch < failed->second.retryEpoch)
+        return nullptr;
 
     auto found = m_map.find(key);
     if (found != m_map.end()) {
@@ -337,13 +340,19 @@ nxui::Texture* MusicCoverCache::get(const CoverRef& ref, nxui::Renderer& ren, in
                   ref.path.c_str(), ref.embedded ? 1 : 0,
                   static_cast<unsigned long long>(ref.size), qualitySide);
     if (!loadTexture(ref, ren, entry.texture, qualitySide)) {
-        DebugLog::log("[music-cover] unable to load %s offset=%llu size=%llu",
+        auto& state = m_failed[key];
+        state.attempts = std::min<uint32_t>(state.attempts + 1u, 4u);
+        // Hardware can transiently fail a texture allocation/descriptor update.
+        // Do not blacklist a valid cover for the whole Music session: retry with
+        // a slow increasing backoff so a real artwork can replace the fallback.
+        state.retryEpoch = m_getEpoch + 900u * static_cast<uint64_t>(state.attempts);
+        DebugLog::log("[music-cover] unable to load %s offset=%llu size=%llu retry_attempt=%u",
                       ref.path.c_str(),
                       static_cast<unsigned long long>(ref.offset),
-                      static_cast<unsigned long long>(ref.size));
-        m_failed.insert(key);
+                      static_cast<unsigned long long>(ref.size), state.attempts);
         return nullptr;
     }
+    m_failed.erase(key);
 
     m_lru.push_front(std::move(entry));
     m_map[m_lru.front().key] = m_lru.begin();

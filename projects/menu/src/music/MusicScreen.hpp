@@ -11,6 +11,7 @@
 
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Input.hpp>
+#include <nxui/core/Texture.hpp>
 #include <nxui/widgets/Widget.hpp>
 
 #include <atomic>
@@ -143,7 +144,8 @@ private:
                         float maxWidth, float scale) const;
     void drawMarqueeOrFit(nxui::Renderer& ren, const std::string& text,
                           const nxui::Rect& clip, float y, float scale,
-                          const nxui::Color& color, bool animate) const;
+                          const nxui::Color& color, bool animate,
+                          float elapsedOverride = -1.f) const;
     float visibleListStartVisual(size_t count, int rows) const;
     void clampSelectionForView();
     bool contentTransitionBusy() const;
@@ -227,6 +229,11 @@ private:
     float m_sceneParallaxY = 0.f;
     uint64_t m_marqueeTrackId = 0;
     float m_marqueeElapsed = 0.f;
+    // Album-title marquee owns its own clock. Track selection changes must not
+    // restart the album name animation.
+    float m_albumTitleMarqueeElapsed = 0.f;
+    nxui::Texture m_homePlayTimeClockTexture;
+    bool m_homePlayTimeClockLoadAttempted = false;
     bool m_nextSoonWasVisible = false;
     float m_nextToastTimer = 0.f;
 

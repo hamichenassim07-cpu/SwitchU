@@ -22,20 +22,20 @@ namespace {
 constexpr float kScreenW = 1280.f;
 constexpr float kScreenH = 720.f;
 constexpr float kBottomY = 681.f;
-constexpr float kFloorY = 506.f;
+constexpr float kFloorY = 494.f;
 constexpr float kFloorH = kScreenH - kFloorY;
-// V8.6 keeps HOME's motion state/inertia/snap, while Music owns a dedicated
+// V8.7 keeps HOME's motion state/inertia/snap, while Music owns a dedicated
 // Cover-Flow presentation.  The previous V8.4 reused HOME card geometry, which
 // made the screen read as "HOME with covers" instead of the supplied concept.
 constexpr float kMusicCarouselBaselineY = 515.f;
-// V8.6 is tuned from the real V8.5 Switch capture, not only from nominal pixel
+// V8.7 is tuned from the real V8.6 Switch capture, not only from nominal pixel
 // values.  The selected sleeve stays dominant while neighbours get more air so
 // their perspective never reads as two cards intersecting during a slide.
 constexpr float kMusicCarouselSelectedSize = 366.f;
 constexpr float kMusicCarouselNeighborSize = 294.f;
 constexpr float kMusicCarouselFarSize = 274.f;
-constexpr float kMusicCarouselFirstOffset = 310.f;
-constexpr float kMusicCarouselNeighborStep = 230.f;
+constexpr float kMusicCarouselFirstOffset = 322.f;
+constexpr float kMusicCarouselNeighborStep = 238.f;
 
 float musicCarouselSizeForDistance(float distance) {
     const float a = std::abs(distance);
@@ -120,7 +120,7 @@ nxui::Color panel2(float a = 1.f) { return {0.105f, 0.116f, 0.138f, a * gMusicUi
 
 void drawDarkTrackPanel(nxui::Renderer& ren, const nxui::Rect& rect,
                         float radius, float alphaValue = 1.f) {
-    // V8.6 deliberately does NOT use Liquid Glass here.  The V8.5 offscreen
+    // V8.7 deliberately does NOT use Liquid Glass here.  The older offscreen
     // capture produced the large circular/lens artefact visible on real Switch
     // hardware and cost GPU work for an effect the design no longer wants.
     ren.drawRoundedRect(rect,
@@ -134,7 +134,7 @@ void drawDarkTrackPanel(nxui::Renderer& ren, const nxui::Rect& rect,
                                radius, 1.f);
 }
 
-void drawMetaClockIcon(nxui::Renderer& ren, float cx, float cy,
+void drawMetaClockFallback(nxui::Renderer& ren, float cx, float cy,
                        const nxui::Color& color) {
     ren.drawCircle({cx, cy}, 7.2f, color, 22);
     ren.drawCircle({cx, cy}, 5.7f,
@@ -152,15 +152,15 @@ float smoothStep(float v) {
 void drawShuffleIcon(nxui::Renderer& ren, float cx, float cy,
                      const nxui::Color& color) {
     // Two clean crossing routes with arrowheads; avoids the ambiguous ⇄ glyph.
-    ren.drawLine({cx - 15.f, cy - 9.f}, {cx - 7.f, cy - 9.f}, color, 2.2f);
-    ren.drawLine({cx - 7.f, cy - 9.f}, {cx + 8.f, cy + 9.f}, color, 2.2f);
-    ren.drawLine({cx + 8.f, cy + 9.f}, {cx + 15.f, cy + 9.f}, color, 2.2f);
+    ren.drawLine({cx - 15.f, cy - 9.f}, {cx - 7.f, cy - 9.f}, color, 2.35f);
+    ren.drawLine({cx - 7.f, cy - 9.f}, {cx + 8.f, cy + 9.f}, color, 2.35f);
+    ren.drawLine({cx + 8.f, cy + 9.f}, {cx + 15.f, cy + 9.f}, color, 2.35f);
     ren.drawTriangle({cx + 15.f, cy + 9.f}, {cx + 8.f, cy + 4.f},
                      {cx + 8.f, cy + 14.f}, color);
 
-    ren.drawLine({cx - 15.f, cy + 9.f}, {cx - 7.f, cy + 9.f}, color, 2.2f);
-    ren.drawLine({cx - 7.f, cy + 9.f}, {cx + 8.f, cy - 9.f}, color, 2.2f);
-    ren.drawLine({cx + 8.f, cy - 9.f}, {cx + 15.f, cy - 9.f}, color, 2.2f);
+    ren.drawLine({cx - 15.f, cy + 9.f}, {cx - 7.f, cy + 9.f}, color, 2.35f);
+    ren.drawLine({cx - 7.f, cy + 9.f}, {cx + 8.f, cy - 9.f}, color, 2.35f);
+    ren.drawLine({cx + 8.f, cy - 9.f}, {cx + 15.f, cy - 9.f}, color, 2.35f);
     ren.drawTriangle({cx + 15.f, cy - 9.f}, {cx + 8.f, cy - 14.f},
                      {cx + 8.f, cy - 4.f}, color);
 }
@@ -188,6 +188,27 @@ void drawRepeatIcon(nxui::Renderer& ren, float cx, float cy,
         ren.drawCircle({cx + 4.2f, cy}, 3.7f, color, 14);
         ren.drawCircle({cx - 4.2f, cy}, 2.2f, {0.02f,0.022f,0.027f,color.a}, 14);
         ren.drawCircle({cx + 4.2f, cy}, 2.2f, {0.02f,0.022f,0.027f,color.a}, 14);
+    }
+}
+
+void drawSkipIcon(nxui::Renderer& ren, float cx, float cy,
+                  const nxui::Color& color, bool next) {
+    constexpr float halfH = 17.f;
+    constexpr float triangleHalfW = 12.f;
+    constexpr float barHalfH = 15.f;
+    constexpr float barW = 2.6f;
+    if (next) {
+        ren.drawTriangle({cx - triangleHalfW, cy - halfH},
+                         {cx - triangleHalfW, cy + halfH},
+                         {cx + triangleHalfW, cy}, color);
+        ren.drawRoundedRect({cx + 13.f, cy - barHalfH, barW, barHalfH * 2.f},
+                            color, 1.2f);
+    } else {
+        ren.drawRoundedRect({cx - 15.6f, cy - barHalfH, barW, barHalfH * 2.f},
+                            color, 1.2f);
+        ren.drawTriangle({cx + triangleHalfW, cy - halfH},
+                         {cx + triangleHalfW, cy + halfH},
+                         {cx - triangleHalfW, cy}, color);
     }
 }
 
@@ -327,7 +348,7 @@ void MusicScreen::show() {
     refreshStatus(true);
     if (!m_hasScanned) startScan(false);
     DebugLog::log("[music-diag] OPEN_MUSIC ready scan=%d", m_scanRunning ? 1 : 0);
-    DebugLog::log("[music-diag] V8.6 final-polish artwork_worker=OFF secondary_decode=OFF single_decode_accent=ON physical_media=ON liquid_glass_tracklist=OFF");
+    DebugLog::log("[music-diag] V8.7 visual-finish artwork_worker=OFF secondary_decode=OFF single_decode_accent=ON physical_media=ON liquid_glass_tracklist=OFF");
 }
 
 
@@ -656,6 +677,11 @@ void MusicScreen::onUpdate(float dt) {
         m_marqueeElapsed = 0.f;
     }
 
+    // Album title animation is independent from the selected track marquee.
+    // Navigating the tracklist no longer restarts the album name.
+    if (m_view == View::AlbumDetail && !m_detailClosing)
+        m_albumTitleMarqueeElapsed += std::max(0.f, dt);
+
     finishScanIfReady();
     refreshStatus(false);
 
@@ -794,6 +820,7 @@ void MusicScreen::openAlbum(size_t index) {
     m_listVisualSelection = 0.f;
     m_detailTransition = 0.f;
     m_detailClosing = false;
+    m_albumTitleMarqueeElapsed = 0.f;
 }
 
 
@@ -939,7 +966,7 @@ void MusicScreen::contextualX() {
     if (m_scanRunning || m_closing || contentTransitionBusy()) return;
     if (m_view == View::Albums) {
         if (m_selection >= 0 && static_cast<size_t>(m_selection) < m_library.albums.size()) {
-            // V8.6: X Lecture is a real shortcut, not a decorative hint.  It
+            // V8.7: X Lecture remains a real shortcut, not a decorative hint.  It
             // loads the selected album queue, starts its first track and then
             // moves directly into the existing Now Playing screen.
             if (playTrackIds(albumTrackIds(static_cast<size_t>(m_selection)), 0))
@@ -1215,7 +1242,8 @@ std::string MusicScreen::fitText(nxui::Font* font, const std::string& text,
 
 void MusicScreen::drawMarqueeOrFit(nxui::Renderer& ren, const std::string& text,
                                    const nxui::Rect& clip, float y, float scale,
-                                   const nxui::Color& color, bool animate) const {
+                                   const nxui::Color& color, bool animate,
+                                   float elapsedOverride) const {
     if (!m_font || text.empty() || clip.width <= 0.f) return;
     const float fullWidth=m_font->measure(text).x*scale;
     if (fullWidth <= clip.width) {
@@ -1223,7 +1251,8 @@ void MusicScreen::drawMarqueeOrFit(nxui::Renderer& ren, const std::string& text,
         return;
     }
     constexpr float delay=1.0f;
-    if (!animate || m_marqueeElapsed <= delay) {
+    const float marqueeElapsed = elapsedOverride >= 0.f ? elapsedOverride : m_marqueeElapsed;
+    if (!animate || marqueeElapsed <= delay) {
         // Before the contextual marquee starts, show a clean ellipsis instead
         // of letting a long title end abruptly at the clip edge.
         ren.drawText(fitText(m_font,text,clip.width,scale),{clip.x,y},m_font,color,scale);
@@ -1236,10 +1265,10 @@ void MusicScreen::drawMarqueeOrFit(nxui::Renderer& ren, const std::string& text,
     constexpr float returnDuration=0.34f;
     constexpr float startPause=0.56f;
     float offset=0.f;
-    if (m_marqueeElapsed>delay && travel>0.5f) {
+    if (marqueeElapsed>delay && travel>0.5f) {
         const float forwardDuration=travel/speed;
         const float cycleDuration=forwardDuration+endPause+returnDuration+startPause;
-        const float tCycle=std::fmod(m_marqueeElapsed-delay,std::max(0.01f,cycleDuration));
+        const float tCycle=std::fmod(marqueeElapsed-delay,std::max(0.01f,cycleDuration));
         if (tCycle<forwardDuration) offset=tCycle*speed;
         else if (tCycle<forwardDuration+endPause) offset=travel;
         else if (tCycle<forwardDuration+endPause+returnDuration) {
@@ -1321,7 +1350,7 @@ PhysicalMediaGeometry MusicScreen::drawPhysicalMedia(nxui::Renderer& ren,
     pose.playing = playing;
     pose.detailLevel = maxSide >= 500 ? 2 : (maxSide >= 280 ? 1 : 0);
     pose.vinylLagPx = -m_sceneParallaxX * (pose.selected ? 0.72f : 0.34f);
-    pose.vinylLabelFont = m_smallFont ? m_smallFont : m_font;
+    pose.vinylLabelFont = m_font ? m_font : m_smallFont;
     pose.vinylLabelTitle = vinylLabelTitle;
     pose.vinylLabelArtist = vinylLabelArtist;
 
@@ -1371,10 +1400,10 @@ void MusicScreen::drawMusicBackground(nxui::Renderer& ren) {
 
     // Reflective floor / Hi-Fi presentation surface.
     ren.drawGradientRect({0.f, kFloorY, kScreenW, kFloorH},
-                         {0.074f, 0.080f, 0.092f, 0.34f * a},
+                         {0.074f, 0.080f, 0.092f, 0.39f * a},
                          {0.016f, 0.018f, 0.024f, 0.98f * a});
     ren.drawRect({0.f, kFloorY, kScreenW, 1.f},
-                 {0.76f, 0.80f, 0.88f, 0.085f * a});
+                 {0.76f, 0.80f, 0.88f, 0.105f * a});
 }
 
 void MusicScreen::drawTopBar(nxui::Renderer& ren) {
@@ -1558,68 +1587,81 @@ void MusicScreen::drawAlbums(nxui::Renderer& ren) {
     const auto& album = m_library.albums[static_cast<size_t>(m_selection)];
     gMusicAccent = artworkAccent(album.cover);
 
-    // Dedicated Music metadata composition.  The HOME TitlePill is deliberately
-    // not used here anymore: only its top category capsule remains shared.  This
-    // creates the breathing room and hierarchy of the supplied reference.
+    // V8.7: Music keeps its own hierarchy but deliberately inherits HOME's
+    // typography/action rhythm. Album -> artist -> metadata is centred and the
+    // exact HOME play-time clock asset is reused instead of a near-match icon.
     const std::string title = fitText(
-        m_font, album.title.empty() ? "Album sans titre" : album.title, 660.f, 1.24f);
+        m_font, album.title.empty() ? "Album sans titre" : album.title, 660.f, 1.22f);
     const std::string artist = fitText(
-        m_font, album.artist.empty() ? "Artiste inconnu" : album.artist, 620.f, 0.92f);
+        m_font, album.artist.empty() ? "Artiste inconnu" : album.artist, 620.f, 0.94f);
 
-    const float titleScale = 1.24f;
-    const float artistScale = 0.92f;
-    const float metaScale = 0.86f;
+    constexpr float titleScale = 1.22f;
+    constexpr float artistScale = 0.94f;
+    constexpr float metaScale = 0.97f;
     const auto titleSize = m_font->measure(title);
     const auto artistSize = m_font->measure(artist);
     ren.drawText(title,
-                 {640.f - titleSize.x * titleScale * 0.5f, 534.f},
+                 {640.f - titleSize.x * titleScale * 0.5f, 536.f},
                  m_font, textPrimary(infoAlpha), titleScale);
     ren.drawText(artist,
-                 {640.f - artistSize.x * artistScale * 0.5f, 575.f},
+                 {640.f - artistSize.x * artistScale * 0.5f, 577.f},
                  m_font, textSecondary(0.92f * infoAlpha), artistScale);
 
-    // HOME-like secondary information rhythm, adapted to Music.  Icons are
-    // intentionally larger than V8.5 and aligned optically with the text.
     const std::string countText = std::to_string(album.tracks.size()) + " titres";
     const std::string durationText = formatDuration(
         albumDurationMs(static_cast<size_t>(m_selection)));
-    const float noteScale = 1.02f;
+    constexpr float noteScale = 1.14f;
+    constexpr float iconClockW = 24.f;
+    constexpr float gapA = 9.f;
+    constexpr float gapB = 17.f;
+    constexpr float gapC = 10.f;
     const float noteW = m_font->measure("♪").x * noteScale;
     const float countW = m_font->measure(countText).x * metaScale;
     const float bulletW = m_font->measure("•").x * metaScale;
     const float durationW = m_font->measure(durationText).x * metaScale;
-    constexpr float iconClockW = 16.f;
-    constexpr float gapA = 8.f;
-    constexpr float gapB = 16.f;
-    constexpr float gapC = 14.f;
     const float metaW = noteW + gapA + countW + gapB + bulletW + gapB +
                         iconClockW + gapC + durationW;
     float metaX = 640.f - metaW * 0.5f;
-    const float metaY = 617.f;
-    const nxui::Color metaColor = textSecondary(0.92f * infoAlpha);
-    ren.drawText("♪", {metaX, metaY - 3.f}, m_font, metaColor, noteScale);
+    constexpr float metaY = 619.f;
+    const nxui::Color metaColor = textSecondary(0.94f * infoAlpha);
+    ren.drawText("♪", {metaX, metaY - 4.f}, m_font, metaColor, noteScale);
     metaX += noteW + gapA;
     ren.drawText(countText, {metaX, metaY}, m_font, metaColor, metaScale);
     metaX += countW + gapB;
     ren.drawText("•", {metaX, metaY}, m_font, metaColor, metaScale);
     metaX += bulletW + gapB;
-    drawMetaClockIcon(ren, metaX + iconClockW * 0.5f, metaY + 9.f, metaColor);
+
+    if (!m_homePlayTimeClockLoadAttempted) {
+        m_homePlayTimeClockLoadAttempted = true;
+        m_homePlayTimeClockTexture.loadFromFile(
+            ren.gpu(), ren, "romfs:/icons/playtime_clock_v1030.png", 0);
+    }
+    const nxui::Rect clockRect{metaX, metaY - 2.f, iconClockW, iconClockW};
+    if (m_homePlayTimeClockTexture.valid()) {
+        ren.drawTexture(&m_homePlayTimeClockTexture, clockRect,
+                        nxui::Color::white().withAlpha(0.92f * infoAlpha * gMusicUiAlpha));
+    } else {
+        drawMetaClockFallback(ren, metaX + iconClockW * 0.5f,
+                              metaY + iconClockW * 0.5f - 2.f, metaColor);
+    }
     metaX += iconClockW + gapC;
     ren.drawText(durationText, {metaX, metaY}, m_font, metaColor, metaScale);
 
-    // V8.6 removes the fake Settings/Joy-Con controls.  Root actions now use
-    // the same plain Switch language as HOME: button glyph + text only.
+    // Plain HOME-style actions, enlarged slightly and dropped toward the real
+    // lower action zone. X remains a real play shortcut, A opens the tracklist.
     auto drawRootAction = [&](float x, nxui::Button button, const char* label) {
+        constexpr float glyphScale = 1.08f;
+        constexpr float labelScale = 0.94f;
         if (m_iconFont) {
-            ren.drawText(buttonGlyph(button), {x, 648.f}, m_iconFont,
-                         textPrimary(0.98f * infoAlpha), 0.96f);
-            x += 29.f;
+            ren.drawText(buttonGlyph(button), {x, 670.f}, m_iconFont,
+                         textPrimary(0.98f * infoAlpha), glyphScale);
+            x += 31.f;
         }
-        ren.drawText(label, {x, 649.f}, m_font,
-                     textSecondary(0.96f * infoAlpha), kHomeMinTextScale);
+        ren.drawText(label, {x, 671.f}, m_font,
+                     textSecondary(0.97f * infoAlpha), labelScale);
     };
-    drawRootAction(1000.f, nxui::Button::X, "Lecture");
-    drawRootAction(1132.f, nxui::Button::A, "Ouvrir");
+    drawRootAction(990.f, nxui::Button::X, "Lecture");
+    drawRootAction(1127.f, nxui::Button::A, "Ouvrir");
 
     gMusicUiAlpha = savedAlpha;
 }
@@ -1642,7 +1684,7 @@ void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
     const float saved = gMusicUiAlpha;
     const bool playing = statusFlag(m_status, switchu::music::MusicStatus_Playing);
 
-    // V8.6 keeps the sleeve itself continuous across contexts. From Album it
+    // V8.7 keeps the sleeve itself continuous across contexts. From Album it
     // starts at the Album-detail sleeve; from the Music root it starts at the
     // selected Cover-Flow hero. Controls/text fade in separately around it.
     nxui::Rect sourceRect{34.f, 140.f, 400.f, 400.f};
@@ -1683,10 +1725,10 @@ void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
     const std::string nowTitle = track->title.empty() ? "Morceau sans titre" : track->title;
     const std::string nowArtist = track->artist.empty() ? "Artiste inconnu" : track->artist;
 
-    constexpr float rightX = 708.f;
-    constexpr float titleMaxW = 520.f;
-    constexpr float artistMaxW = 510.f;
-    constexpr float titleTargetScale = 1.50f;
+    constexpr float rightX = 722.f;
+    constexpr float titleMaxW = 506.f;
+    constexpr float artistMaxW = 500.f;
+    constexpr float titleTargetScale = 1.54f;
     constexpr float titleMinimumScale = 1.24f;
     constexpr float artistTargetScale = 0.97f;
     constexpr float artistMinimumScale = 0.88f;
@@ -1700,8 +1742,8 @@ void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
     const float artistScale = std::min(artistTargetScale,
         std::max(artistMinimumScale, artistFitScale));
 
-    const float titleY = 250.f;
-    const float artistY = 301.f;
+    const float titleY = 247.f;
+    const float artistY = 299.f;
     const bool titleMarquee = rawTitleW * titleScale > titleMaxW + 0.5f;
     const bool artistMarquee = !titleMarquee && rawArtistW * artistScale > artistMaxW + 0.5f;
     drawMarqueeOrFit(ren, nowTitle,
@@ -1714,7 +1756,7 @@ void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
     const float progress = m_status.duration_ms > 0
         ? std::clamp(float(double(m_status.position_ms) / double(m_status.duration_ms)), 0.f, 1.f)
         : 0.f;
-    const nxui::Rect timeline{808.f, 393.f, 360.f, 5.f};
+    const nxui::Rect timeline{820.f, 393.f, 348.f, 5.f};
     if (m_nowControl == 5)
         ren.drawRoundedRectOutline(timeline.expanded(8.f), accent(0.50f), 10.f, 1.15f);
     ren.drawRoundedRect(timeline, {0.24f, 0.25f, 0.28f, 0.86f * gMusicUiAlpha}, 3.f);
@@ -1726,7 +1768,7 @@ void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
     const std::string elapsed = formatDuration(m_status.position_ms);
     const std::string duration = formatDuration(m_status.duration_ms);
     const auto durSz = m_font->measure(duration);
-    ren.drawText(elapsed, {708.f, 380.f}, m_font,
+    ren.drawText(elapsed, {722.f, 380.f}, m_font,
                  textSecondary(0.92f), kHomeMinTextScale);
     ren.drawText(duration,
                  {1214.f - durSz.x * kHomeMinTextScale, 380.f},
@@ -1745,12 +1787,12 @@ void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
             ren.drawCircle({cx, cy}, focused ? 40.5f : 41.5f,
                            {0.020f, 0.022f, 0.027f, 0.98f * gMusicUiAlpha}, 48);
             if (playing) {
-                ren.drawRoundedRect({cx - 12.f, cy - 18.f, 7.f, 36.f}, textPrimary(), 2.f);
-                ren.drawRoundedRect({cx + 5.f, cy - 18.f, 7.f, 36.f}, textPrimary(), 2.f);
+                ren.drawRoundedRect({cx - 11.5f, cy - 17.f, 6.5f, 34.f}, textPrimary(), 2.2f);
+                ren.drawRoundedRect({cx + 5.f, cy - 17.f, 6.5f, 34.f}, textPrimary(), 2.2f);
             } else {
-                ren.drawTriangle({cx - 10.f, cy - 20.f},
-                                 {cx - 10.f, cy + 20.f},
-                                 {cx + 23.f, cy}, textPrimary());
+                ren.drawTriangle({cx - 9.f, cy - 19.f},
+                                 {cx - 9.f, cy + 19.f},
+                                 {cx + 22.f, cy}, textPrimary());
             }
             continue;
         }
@@ -1762,13 +1804,9 @@ void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
         if (i == 0) {
             drawShuffleIcon(ren, cx, cy, iconColor);
         } else if (i == 1) {
-            ren.drawRect({cx - 16.f, cy - 15.f, 3.f, 30.f}, iconColor);
-            ren.drawTriangle({cx + 12.f, cy - 17.f}, {cx + 12.f, cy + 17.f},
-                             {cx - 12.f, cy}, iconColor);
+            drawSkipIcon(ren, cx, cy, iconColor, false);
         } else if (i == 3) {
-            ren.drawRect({cx + 13.f, cy - 15.f, 3.f, 30.f}, iconColor);
-            ren.drawTriangle({cx - 12.f, cy - 17.f}, {cx - 12.f, cy + 17.f},
-                             {cx + 12.f, cy}, iconColor);
+            drawSkipIcon(ren, cx, cy, iconColor, true);
         } else if (i == 4) {
             drawRepeatIcon(ren, cx, cy, iconColor, m_status.repeat_mode);
         }
@@ -2035,11 +2073,12 @@ void MusicScreen::drawAlbumDetail(nxui::Renderer& ren) {
     const bool albumTitleMarquee = albumTitleRawW * albumTitleScale > albumTitleMaxW + 0.5f;
     drawMarqueeOrFit(ren,albumTitle,
                      {rightX,77.f,albumTitleMaxW,44.f},
-                     82.f,albumTitleScale,textPrimary(),albumTitleMarquee);
+                     82.f,albumTitleScale,textPrimary(),albumTitleMarquee,
+                     m_albumTitleMarqueeElapsed);
     ren.drawText(fitText(m_font,albumArtist,500.f,0.92f),
                  {rightX+1.f,124.f},m_font,textSecondary(0.90f),0.92f);
 
-    // V8.6 removes the non-functional heart/ellipsis and the expensive Liquid
+    // V8.7 keeps the non-functional heart/ellipsis removed and the expensive Liquid
     // Glass lens entirely.  This is a simple translucent panel: no offscreen
     // capture, no background distortion, no giant circular artefact.
     const nxui::Rect panel{730.f + listShift, 162.f, 510.f, 448.f};
@@ -2244,31 +2283,35 @@ void MusicScreen::drawBottomHints(nxui::Renderer& ren) {
     using Hint = std::pair<nxui::Button,std::string>;
 
     auto drawHintAt = [&](float x, float y, nxui::Button button, const std::string& label) {
+        // V8.7 unifies Album/Player footers with the readable HOME action
+        // rhythm: Nintendo glyph first, then one generously spaced label.
+        constexpr float glyphScale = 1.09f;
+        constexpr float labelScale = 0.94f;
         if (m_iconFont) {
-            ren.drawText(buttonGlyph(button), {x, y}, m_iconFont, textPrimary(), 0.97f);
-            x += 30.f;
+            ren.drawText(buttonGlyph(button), {x, y}, m_iconFont, textPrimary(), glyphScale);
+            x += 33.f;
         }
-        ren.drawText(label, {x, y + 1.f}, m_font, textSecondary(0.94f), kHomeMinTextScale);
+        ren.drawText(label, {x, y + 1.f}, m_font, textSecondary(0.96f), labelScale);
     };
 
     // The two reference screens use a wide console-style footer rather than a
     // centred compact hint cluster.
     if (m_modal == Modal::None && m_view == View::AlbumDetail) {
-        ren.drawRect({42.f, 624.f, 1196.f, 1.f},
+        ren.drawRect({42.f, 640.f, 1196.f, 1.f},
                      {0.82f, 0.85f, 0.90f, 0.18f * gMusicUiAlpha});
-        drawHintAt(44.f,   648.f, nxui::Button::B,     "Retour");
-        drawHintAt(318.f,  648.f, nxui::Button::Minus, "Lecture en cours");
-        drawHintAt(680.f,  648.f, nxui::Button::Y,     "Ajouter à la playlist");
-        drawHintAt(1110.f, 648.f, nxui::Button::A,     "Relire");
+        drawHintAt(44.f,   671.f, nxui::Button::B,     "Retour");
+        drawHintAt(306.f,  671.f, nxui::Button::Minus, "Lecture en cours");
+        drawHintAt(668.f,  671.f, nxui::Button::Y,     "Ajouter à la playlist");
+        drawHintAt(1095.f, 671.f, nxui::Button::A,     "Relire");
         return;
     }
 
     if (m_modal == Modal::None && m_view == View::NowPlaying) {
-        ren.drawRect({42.f, 624.f, 1196.f, 1.f},
+        ren.drawRect({42.f, 640.f, 1196.f, 1.f},
                      {0.82f, 0.85f, 0.90f, 0.18f * gMusicUiAlpha});
-        drawHintAt(44.f,   648.f, nxui::Button::B, "Retour");
-        drawHintAt(582.f,  648.f, nxui::Button::Y, "À suivre");
-        drawHintAt(1110.f, 648.f, nxui::Button::A, "Action");
+        drawHintAt(44.f,   671.f, nxui::Button::B, "Retour");
+        drawHintAt(570.f,  671.f, nxui::Button::Y, "À suivre");
+        drawHintAt(1095.f, 671.f, nxui::Button::A, "Action");
         return;
     }
 
@@ -2460,7 +2503,7 @@ void MusicScreen::handleTouch(nxui::Input& input) {
 
         m_touchTimelineScrub = m_modal == Modal::None &&
             m_view == View::NowPlaying && !contentTransitionBusy() &&
-            m_touchStartX >= 790.f && m_touchStartX <= 1186.f &&
+            m_touchStartX >= 802.f && m_touchStartX <= 1186.f &&
             m_touchStartY >= 371.f && m_touchStartY <= 421.f;
 
         m_touchStartedInCarousel = m_modal == Modal::None && rootView() &&
@@ -2531,7 +2574,7 @@ void MusicScreen::handleTouch(nxui::Input& input) {
         m_touchTimelineScrub = false;
         resetRootTouch();
         if (m_status.duration_ms > 0) {
-            const float ratio = clamp01((x - 808.f) / 360.f);
+            const float ratio = clamp01((x - 820.f) / 348.f);
             const uint64_t target = static_cast<uint64_t>(
                 static_cast<double>(m_status.duration_ms) * static_cast<double>(ratio));
             m_nowControl = 5;

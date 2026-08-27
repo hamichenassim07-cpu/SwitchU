@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-side invariants for SwitchU Music V8.6 final-polish contract.
+"""Host-side invariants for SwitchU Music V8.7 visual-finish contract.
 
 This intentionally performs source-level checks without requiring devkitPro. It
 is a regression guard, not a substitute for the real Switch build/test.
@@ -150,7 +150,7 @@ for rel, expected in FIX6_HASHES.items():
 for token in ("m_tabIndex", "setTab(", "drawCrtBackground", "kTabCount"):
     require(token not in music_cpp + music_hpp, f"legacy Music identifier returned: {token}")
 
-# HOME and Music still share the exact motion engine; V8.6 keeps Music's own visual Cover-Flow geometry.
+# HOME and Music still share the exact motion engine; V8.7 keeps Music's own visual Cover-Flow geometry.
 for source, name in ((music_hpp, "MusicScreen.hpp"), (icon_grid_hpp, "IconGrid.hpp")):
     require("HomeCarouselMotion.hpp" in source, f"{name} does not consume shared HOME motion")
 require("HomeCarouselStyle.hpp" in icon_grid_cpp, "IconGrid lost shared HOME carousel style")
@@ -158,12 +158,12 @@ require("HomeCarouselStyle.hpp" in music_cpp, "Music lost HOME bounce/style prim
 require("HomeCarouselMotionState" in music_hpp, "Music root does not own shared HOME motion state")
 require("kMusicCarouselSelectedSize = 366.f" in music_cpp and
         "kMusicCarouselNeighborSize = 294.f" in music_cpp and
-        "kMusicCarouselFirstOffset = 310.f" in music_cpp and
-        "kMusicCarouselNeighborStep = 230.f" in music_cpp and
+        "kMusicCarouselFirstOffset = 322.f" in music_cpp and
+        "kMusicCarouselNeighborStep = 238.f" in music_cpp and
         "kMusicCarouselBaselineY = 515.f" in music_cpp and
         "musicCarouselYaw" in music_cpp and "-42.f, 42.f" in music_cpp and
         "std::stable_sort" in music_cpp,
-        "V8.6 dedicated Music Cover-Flow geometry is missing")
+        "V8.7 dedicated Music Cover-Flow geometry is missing")
 require("HomeCarouselMotionState" in icon_grid_hpp, "IconGrid does not own shared HOME motion state")
 
 # HOME typography floor is a single source of truth.
@@ -231,14 +231,14 @@ require("setWifiVisible(false)" in integration and "setWifiVisible(true)" in int
 for token in ("front", "back", "depthPx", "drawVinyl", "vinylReveal", "vinylSpinRad"):
     require(token in physical_cpp + physical_hpp, f"physical-media contract missing: {token}")
 
-# V8.6 keeps the V8.3 real-console crash boundary: the detached secondary
+# V8.7 keeps the V8.3 real-console crash boundary: the detached secondary
 # artwork worker remains gone. The dynamic album accent is sampled from the SAME
 # RGBA buffer used for the first texture upload, so there is still only one full
 # image decode and no background artwork-analysis thread.
 require("m_coverCache.requestStyle(" not in music_cpp,
         "MusicScreen unexpectedly requests the removed artwork worker")
 require("decodeArtworkOnce" in cover_cache_cpp and "sampledArtworkStyle" in cover_cache_cpp,
-        "V8.6 single-decode artwork accent path is missing")
+        "V8.7 single-decode artwork accent path is missing")
 require("safeSyntheticArtworkStyle" in cover_cache_cpp,
         "decoder-free fallback style is missing")
 require("std::thread" not in cover_cache_cpp and "std::async" not in cover_cache_cpp,
@@ -259,10 +259,10 @@ for forbidden in ("sampleArtworkStyle", "generateBackTexture", "artwork_style_ca
             f"removed unstable artwork pipeline returned: {forbidden}")
 require("gMusicAccent = artworkAccent" in music_cpp,
         "Music accent plumbing changed during V8.3 crash fix")
-require("V8.6 final-polish" in music_cpp and
+require("V8.7 visual-finish" in music_cpp and
         "secondary_decode=OFF" in music_cpp and "single_decode_accent=ON" in music_cpp and
         "liquid_glass_tracklist=OFF" in music_cpp,
-        "V8.6 single-decode/simplified-panel mode is not declared in the runtime log")
+        "V8.7 single-decode/simplified-panel mode is not declared in the runtime log")
 
 # V8 carries forward 3D lighting, level-of-detail, perspective reflection and micro-parallax.
 for token in ("faceLight", "detailLevel", "vinylOutline", "vinylLagPx"):
@@ -272,15 +272,15 @@ require("m_sceneParallaxX" in music_cpp + music_hpp and "m_sceneParallaxY" in mu
 require("m_vinylSpinBoost" in music_cpp + music_hpp and "m_vinylSpinPhase" in music_cpp + music_hpp,
         "new-track vinyl impulse/continuous spin state is missing")
 require("pose.rect.height * 0.478f" in physical_cpp and "radius * 1.32f" in physical_cpp,
-        "V8.6 vinyl is no longer large/offset enough to remain visible behind the sleeve")
+        "V8.7 vinyl size/overlap contract changed unexpectedly")
 require("labelR=radius*0.300f" in physical_cpp and
         "vinylLabelTitle" in physical_cpp + physical_hpp and
         "vinylLabelArtist" in physical_cpp + physical_hpp and
         'const std::string side="SIDE A"' in physical_cpp and
         "drawTexturedQuad(ren,cover,q" not in physical_cpp,
-        "V8.6 metadata-driven vinyl label contract is missing")
+        "V8.7 readable metadata-driven vinyl label contract is missing")
 require("grooveRings = pose.detailLevel >= 2 ? 7" in physical_cpp,
-        "V8.6 bounded high-detail vinyl groove contract changed")
+        "V8.7 bounded high-detail vinyl groove contract changed")
 require("pausedHeights" in music_cpp and "activelyPlaying ? animatedH" in music_cpp,
         "track equalizer does not settle when playback is paused")
 
@@ -293,7 +293,7 @@ require("0.235f" in physical_cpp,
 # Tracklist must use contextual marquee instead of shrinking selected long titles.
 require("m_marqueeElapsed" in music_cpp and "drawMarqueeOrFit" in music_cpp and
         "constexpr float delay=1.0f" in music_cpp and
-        "m_marqueeElapsed <= delay" in music_cpp,
+        "marqueeElapsed <= delay" in music_cpp,
         "contextual marquee/clean pre-scroll ellipsis engine is missing")
 require("titleMarquee" in music_cpp and "artistMarquee" in music_cpp and
         "View::NowPlaying && m_status.track_id" in music_cpp,
@@ -301,7 +301,7 @@ require("titleMarquee" in music_cpp and "artistMarquee" in music_cpp and
 require("drawDarkTrackPanel" in music_cpp,
         "cheap dark tracklist panel is missing")
 panel_start = music_cpp.find("void drawDarkTrackPanel")
-panel_end = music_cpp.find("void drawMetaClockIcon", panel_start)
+panel_end = music_cpp.find("void drawMetaClockFallback", panel_start)
 panel_block = music_cpp[panel_start:panel_end] if panel_start >= 0 and panel_end > panel_start else ""
 require("captureToOffscreen" not in panel_block and "drawLiquidGlass" not in panel_block,
         "tracklist panel still performs Liquid Glass/offscreen work")
@@ -317,7 +317,7 @@ require("kRootCategoryTransitionSeconds = 0.22f" in timing and
         "kDetailTransformSeconds = 0.40f" in timing and
         "kNowPlayingEnterSeconds = 0.28f" in timing and
         "kNowPlayingExitSeconds = 0.23f" in timing,
-        "central V8.6 Music transition timing contract is missing")
+        "central V8.7 Music transition timing contract is missing")
 close_sources = music_cpp + integration
 for forbidden_wait in ("sleep_for", "svcSleepThread", "usleep("):
     require(forbidden_wait not in close_sources,
@@ -325,7 +325,7 @@ for forbidden_wait in ("sleep_for", "svcSleepThread", "usleep("):
 require("m_musicScreen->hide();" in integration and "setHomeApplicationsCategory(applications);" in integration,
         "Music close no longer hides UI before restoring HOME")
 
-# V8.1 SAFE ENTRY joinable library scan ownership remains intact. V8.6 changes
+# V8.1 SAFE ENTRY joinable library scan ownership remains intact. V8.7 changes
 # only the visual surfaces and the first-decode colour sample.
 require("std::future<LibrarySnapshot>" in music_hpp and "m_scanFuture" in music_cpp,
         "SAFE-ENTRY joinable library scan ownership is missing")
@@ -375,10 +375,10 @@ require("m_homeTabsVisible" in datetime_hpp and "if (!m_homeTabsVisible)" in dat
 require("setHomeTabsVisible(true)" in integration,
         "HOME category pill is not restored when Music closes")
 require("kMusicCarouselNeighborSize = 294.f" in music_cpp and
-        "kMusicCarouselFirstOffset = 310.f" in music_cpp and
-        "kMusicCarouselNeighborStep = 230.f" in music_cpp and
+        "kMusicCarouselFirstOffset = 322.f" in music_cpp and
+        "kMusicCarouselNeighborStep = 238.f" in music_cpp and
         "musicCarouselSideLift" in music_cpp,
-        "Music root proportions no longer match the V8.6 hardware-tuned layout")
+        "Music root proportions no longer match the V8.7 hardware-tuned layout")
 require("Ouvrir" in music_cpp and "Lecture" in music_cpp and
         '"⚙"' not in music_cpp and "openCap" not in music_cpp and
         "m_homeTitlePill->render(ren)" not in music_cpp,
@@ -397,7 +397,7 @@ require("Ajouter à la playlist" in music_cpp and
         "Album Y action is not wired to playlist insertion")
 require("0.018f + gMusicAccent.r * 0.19f" in music_cpp and "accent(0.72f)" in music_cpp,
         "selected track row lost the dark dynamic artwork accent")
-require("const nxui::Rect timeline{808.f" in music_cpp and "Aléatoire" in music_cpp and "Précédent" in music_cpp and
+require("const nxui::Rect timeline{820.f" in music_cpp and "Aléatoire" in music_cpp and "Précédent" in music_cpp and
         "drawShuffleIcon" in music_cpp and "drawRepeatIcon" in music_cpp and
         "{758.f, 870.f, 980.f, 1090.f, 1194.f}" in music_cpp,
         "Now Playing reference transport layout/vector controls are missing")
@@ -406,6 +406,41 @@ require('"♡"' not in music_cpp and '"···"' not in music_cpp,
 require("const float reveal = 0.f;" in music_cpp,
         "root album carousel exposes vinyl instead of clean sleeves")
 
+# V8.7 hardware-finish specifics: reuse HOME visual language, keep the floor/reflections
+# coherent, make footers larger/lower, retry transient cover failures, and keep
+# Album title marquee timing independent from track selection.
+require("kFloorY = 494.f" in music_cpp,
+        "V8.7 reflective floor height changed")
+require("romfs:/icons/playtime_clock_v1030.png" in music_cpp and
+        "m_homePlayTimeClockTexture" in music_cpp + music_hpp and
+        "iconClockW = 24.f" in music_cpp,
+        "Music root does not reuse the real HOME play-time clock at readable size")
+require("metaScale = 0.97f" in music_cpp and "noteScale = 1.14f" in music_cpp,
+        "V8.7 root metadata readability contract changed")
+require("glyphScale = 1.08f" in music_cpp and "labelScale = 0.94f" in music_cpp and
+        'drawRootAction(990.f, nxui::Button::X, "Lecture")' in music_cpp and
+        'drawRootAction(1127.f, nxui::Button::A, "Ouvrir")' in music_cpp,
+        "V8.7 root actions are no longer enlarged HOME-style X/A hints")
+require("m_albumTitleMarqueeElapsed" in music_cpp + music_hpp and
+        "elapsedOverride" in music_cpp + music_hpp,
+        "Album title marquee no longer owns an independent timer")
+require("retryEpoch" in cover_cache_cpp + cover_cache_hpp and
+        "retry_attempt" in cover_cache_cpp and "m_failed.erase(key)" in cover_cache_cpp,
+        "transient cover failures are permanently blacklisted again")
+require("0.18f*fade" in physical_cpp and "alpha*0.043f*fade" in physical_cpp,
+        "V8.7 stronger floor-clipped physical reflections are missing")
+require("glyphScale = 1.09f" in music_cpp and
+        'drawHintAt(44.f,   671.f, nxui::Button::B' in music_cpp and
+        'drawHintAt(1095.f, 671.f, nxui::Button::A' in music_cpp,
+        "Album/Now Playing footer readability contract changed")
+require("(x - 820.f) / 348.f" in music_cpp,
+        "Now Playing touch seek no longer matches the visible V8.7 timeline")
+require("drawSkipIcon" in music_cpp and "2.35f" in music_cpp,
+        "V8.7 transport icon harmonisation is missing")
+require("angularLight" in physical_cpp and "ArcSpec" in physical_cpp and
+        "radius*0.885f" in physical_cpp and "radius*0.690f" in physical_cpp,
+        "V8.7 physical vinyl material/edge-light refinements are missing")
+
 # Real Now Playing remains present; Mario/Nintendo asset is not bundled by us.
 require("View::NowPlaying" in music_cpp and "drawNowPlaying" in music_cpp,
         "Now Playing surface is missing")
@@ -413,10 +448,10 @@ runner = ROOT / "romfs/icons/music_now_playing_runner.png"
 require(not runner.exists(), "Nintendo/runner image is bundled; asset choice must remain external")
 
 if failures:
-    print("SwitchU Music V8.6 FINAL-POLISH contract: FAILED", file=sys.stderr)
+    print("SwitchU Music V8.7 VISUAL-FINISH contract: FAILED", file=sys.stderr)
     for failure in failures:
         print(f" - {failure}", file=sys.stderr)
     sys.exit(1)
 
-print("SwitchU Music V8.6 FINAL-POLISH contract: OK")
+print("SwitchU Music V8.7 VISUAL-FINISH contract: OK")
 print("FIX6 audio hashes: OK")

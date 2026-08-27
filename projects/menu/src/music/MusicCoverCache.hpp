@@ -5,10 +5,10 @@
 #include <nxui/core/Types.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <list>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace nxui { class Renderer; }
 
@@ -55,7 +55,12 @@ private:
     size_t m_maxEntries = 18;
     List m_lru;
     Map m_map;
-    std::unordered_set<std::string> m_failed;
+    struct FailureState {
+        uint32_t attempts = 0;
+        uint64_t retryEpoch = 0;
+    };
+    std::unordered_map<std::string, FailureState> m_failed;
+    uint64_t m_getEpoch = 0;
     std::unordered_map<std::string, MusicArtworkStyle> m_styles;
 };
 
