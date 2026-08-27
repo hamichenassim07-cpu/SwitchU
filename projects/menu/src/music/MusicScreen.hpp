@@ -94,7 +94,7 @@ private:
 
     void openAlbum(size_t index);
     void openPlaylist(size_t index);
-    void playTrackIds(const std::vector<uint64_t>& ids, int index);
+    bool playTrackIds(const std::vector<uint64_t>& ids, int index);
     void updateNowPlayingSelection(int delta);
     void activateNowPlayingControl();
     void seekRelative(int64_t deltaMs);
@@ -109,7 +109,9 @@ private:
                                                 float yawDeg, float pitchDeg, float rollDeg,
                                                 float zLiftPx, float vinylReveal,
                                                 float vinylSpinRad, float alpha,
-                                                bool playing, int maxSide = 512);
+                                                bool playing, int maxSide = 512,
+                                                const std::string* vinylLabelTitle = nullptr,
+                                                const std::string* vinylLabelArtist = nullptr);
     nxui::Color artworkAccent(const CoverRef& cover) const;
 
     const Track* currentTrack() const;

@@ -4,8 +4,9 @@
 #include <nxui/core/Texture.hpp>
 
 #include <array>
+#include <string>
 
-namespace nxui { class Renderer; }
+namespace nxui { class Renderer; class Font; }
 
 namespace switchu::menu::music {
 
@@ -26,6 +27,11 @@ struct PhysicalMediaPose {
     int detailLevel = 2;       // 0 neighbour, 1 normal, 2 selected/detail.
     bool selected = false;
     bool playing = false;
+    // V8.6 label data is rendered from already-known metadata.  No artwork
+    // decode or extra texture is needed to make the record album-specific.
+    nxui::Font* vinylLabelFont = nullptr;
+    const std::string* vinylLabelTitle = nullptr;
+    const std::string* vinylLabelArtist = nullptr;
 };
 
 struct PhysicalMediaGeometry {

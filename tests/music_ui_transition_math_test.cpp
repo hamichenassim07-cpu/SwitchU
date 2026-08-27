@@ -31,20 +31,22 @@ int main() {
     assert(outgoingOffset(-1,1.f)<-51.9f);
     assert(incomingOffset(-1,0.f)>51.9f);
 
-    // V8.5: the root intentionally hides the record, while detailed views
+    // V8.6: the root intentionally hides the record, while detailed views
     // push the vinyl centre far enough out from behind the sleeve to keep its
     // silhouette readable on the real Switch display.
     assert(std::abs(vinylCenterShiftRadiusUnits(0.0f)-0.0f)<0.001f);
     assert(std::abs(vinylCenterShiftRadiusUnits(0.72f)-0.9504f)<0.001f);
     assert(std::abs(vinylCenterShiftRadiusUnits(0.98f)-1.2936f)<0.001f);
 
-    // Current contract: category exchange stays 200-250 ms, the cinematic
-    // detail transform never exceeds 500 ms, and Music -> HOME stays <=160 ms.
+    // V8.6 contract: category exchange stays 200-250 ms, the physical detail
+    // hand-off remains <=500 ms, Music -> HOME stays <=160 ms, and the
+    // Now Playing hand-off gets a little more time so sleeve/vinyl/text can
+    // travel rather than pop.
     using namespace switchu::menu::music::timing;
     assert(kRootCategoryTransitionSeconds >= 0.20f && kRootCategoryTransitionSeconds <= 0.25f);
     assert(kDetailTransformSeconds <= 0.50f);
     assert(kExitToHomeSeconds <= 0.16f);
-    assert(kNowPlayingEnterSeconds <= 0.25f);
-    assert(kNowPlayingExitSeconds <= 0.20f);
+    assert(kNowPlayingEnterSeconds >= 0.25f && kNowPlayingEnterSeconds <= 0.32f);
+    assert(kNowPlayingExitSeconds >= 0.20f && kNowPlayingExitSeconds <= 0.26f);
     return 0;
 }

@@ -1,5 +1,6 @@
 #include "MusicPhysicalMediaRenderer.hpp"
 
+#include <nxui/core/Font.hpp>
 #include <nxui/core/Renderer.hpp>
 
 #include <algorithm>
@@ -190,9 +191,23 @@ void drawSleeve(nxui::Renderer& ren, nxui::Texture* cover, nxui::Texture* backCo
     drawQuad(ren, {p.back[0],p.back[1],p.front[1],p.front[0]}, top);
     drawQuad(ren, {p.front[3],p.front[2],p.back[2],p.back[3]}, bottom);
 
-    if (textureFront)
-        drawTexturedQuad(ren, cover, p.front, {1.f,1.f,1.f,a});
-    else
+    if (textureFront) {
+        if (cover && cover->valid() && cover->descriptorSlot() >= 0) {
+            drawTexturedQuad(ren, cover, p.front, {1.f,1.f,1.f,a});
+        } else {
+            // A missing/unsupported cover must read as an intentional fallback,
+            // not the nearly-black "empty panel" seen at the far left of the
+            // V8.5 hardware capture.
+            drawQuad(ren, p.front,
+                     mix({0.055f,0.060f,0.072f,1.f}, pose.accent, 0.16f, a));
+            const nxui::Vec2 c0{(p.front[0].x+p.front[2].x)*0.5f,
+                                (p.front[0].y+p.front[2].y)*0.5f};
+            ren.drawCircle(c0, std::max(8.f,pose.rect.width*0.045f),
+                           {1.f,1.f,1.f,0.16f*a},24);
+            ren.drawCircle(c0, std::max(6.f,pose.rect.width*0.032f),
+                           {0.04f,0.045f,0.055f,0.94f*a},24);
+        }
+    } else
         drawQuad(ren, p.front, mix({0.055f,0.060f,0.072f,1.f}, pose.accent, 0.12f, a));
 
     // Orientation-aware studio catches. They strengthen only as the relevant
@@ -246,14 +261,15 @@ void drawDiscFan(nxui::Renderer& ren, const PhysicalMediaPose& pose,
 void drawVinyl(nxui::Renderer& ren, nxui::Texture* cover,
                const PhysicalMediaPose& pose,
                float reveal, float spin, PhysicalMediaGeometry& geo) {
+    (void)cover;
     reveal = std::clamp(reveal,0.f,1.f);
     if (reveal <= 0.001f) return;
 
     // V8.4 only displaced the disc by 0.60R, leaving almost the whole record
-    // hidden behind the sleeve on real hardware.  V8.5 keeps the same 3D model
+    // hidden behind the sleeve on real hardware.  V8.6 keeps the same 3D model
     // but gives the record the overlap visible in the supplied Album/Player
     // concepts: clearly present, still physically connected to the sleeve.
-    const float radius = pose.rect.height * 0.455f;
+    const float radius = pose.rect.height * 0.478f;
     const float localCx = pose.rect.width * 0.5f - radius +
                           (radius * 1.32f) * reveal + pose.vinylLagPx;
     const float localCy = 0.f;
@@ -283,20 +299,20 @@ void drawVinyl(nxui::Renderer& ren, nxui::Texture* cover,
     }
 
     drawDiscFan(ren,pose,localCx,localCy,radius,zFront,
-                {0.036f,0.039f,0.048f,0.998f*a},segs,basis);
+                {0.046f,0.049f,0.058f,0.998f*a},segs,basis);
     drawDiscFan(ren,pose,localCx,localCy,radius*0.965f,zFront+0.08f,
-                {0.026f,0.029f,0.036f,0.995f*a},segs,basis);
+                {0.031f,0.034f,0.041f,0.995f*a},segs,basis);
 
     const float discLight=faceLight(pose,{0.f,0.f,1.f},0.30f);
-    const int grooveRings = pose.detailLevel >= 2 ? 9 : (pose.detailLevel == 1 ? 4 : 0);
-    const float grooveAlpha=(0.045f+0.065f*std::clamp((discLight-0.30f)/0.70f,0.f,1.f))*a;
+    const int grooveRings = pose.detailLevel >= 2 ? 7 : (pose.detailLevel == 1 ? 4 : 0);
+    const float grooveAlpha=(0.060f+0.085f*std::clamp((discLight-0.30f)/0.70f,0.f,1.f))*a;
     for (int ring=0;ring<grooveRings;++ring) {
-        const float rr=radius*(0.49f+0.052f*ring);
+        const float rr=radius*(0.48f+0.061f*ring);
         nxui::Vec2 prev=projectDiscPointCS(lut.c[0],lut.s[0],rr,localCx,localCy,zFront+0.15f,pose,basis);
         for (int i=1;i<=segs;++i) {
             const size_t li=static_cast<size_t>(i);
             const nxui::Vec2 cur=projectDiscPointCS(lut.c[li],lut.s[li],rr,localCx,localCy,zFront+0.15f,pose,basis);
-            ren.drawLine(prev,cur,{0.58f,0.62f,0.70f,grooveAlpha*(0.74f+0.025f*ring)},0.75f);
+            ren.drawLine(prev,cur,{0.62f,0.66f,0.74f,grooveAlpha*(0.76f+0.026f*ring)},0.80f);
             prev=cur;
         }
     }
@@ -310,7 +326,7 @@ void drawVinyl(nxui::Renderer& ren, nxui::Texture* cover,
             const size_t li=static_cast<size_t>(i);
             const nxui::Vec2 cur=projectDiscPointCS(lut.c[li],lut.s[li],radius*0.995f,
                                                      localCx,localCy,zFront+0.22f,pose,basis);
-            ren.drawLine(prev,cur,{0.70f,0.73f,0.80f,0.20f*a},0.92f);
+            ren.drawLine(prev,cur,{0.72f,0.76f,0.84f,0.23f*a},0.96f);
             prev=cur;
         }
     }
@@ -326,57 +342,85 @@ void drawVinyl(nxui::Renderer& ren, nxui::Texture* cover,
                 const float ang=begin+(finish-begin)*t;
                 const nxui::Vec2 cur=projectDiscAngle(ang,rr,localCx,localCy,zFront+0.30f,pose,basis);
                 const float fade=std::sin(t*kPi);
-                ren.drawLine(prev,cur,{0.90f,0.92f,0.97f,(0.035f+0.070f*fade)*a},1.05f);
+                ren.drawLine(prev,cur,{0.91f,0.93f,0.98f,(0.050f+0.105f*fade)*a},1.08f);
                 prev=cur;
             }
         }
     }
 
-    const float labelR=radius*0.218f;
+    // A real LP label is much larger than the V8.5 thumbnail centre.  The new
+    // 0.30R proportion is intentionally substantial without consuming the
+    // grooved playing surface.
+    const float labelR=radius*0.300f;
     const int labelSegments=pose.detailLevel>=2?32:(pose.detailLevel==1?24:20);
     drawDiscFan(ren,pose,localCx,localCy,labelR,zFront+0.4f,
-                mix({0.050f,0.052f,0.060f,1.f},pose.accent,0.58f,0.99f*a),labelSegments,basis);
+                mix({0.055f,0.058f,0.068f,1.f},pose.accent,0.68f,0.995f*a),labelSegments,basis);
 
-    // Reuse the already-decoded cover texture as a tiny printed centre label.
-    // This makes each vinyl album-specific without any second artwork decode or
-    // worker: it is the exact GPU texture already used for the sleeve.
-    if (pose.detailLevel >= 2 && cover && cover->valid() && cover->descriptorSlot() >= 0) {
-        const float half=labelR*0.58f;
-        const float cs=std::cos(spin), sn=std::sin(spin);
-        const std::array<V3,4> local={{
-            {-half,-half,zFront+0.54f}, {half,-half,zFront+0.54f},
-            {half,half,zFront+0.54f}, {-half,half,zFront+0.54f}
-        }};
-        const float screenCx=pose.rect.x+pose.rect.width*.5f;
-        const float screenCy=pose.rect.y+pose.rect.height*.5f;
-        std::array<nxui::Vec2,4> q{};
-        for (int i=0;i<4;++i) {
-            const float rx=local[static_cast<size_t>(i)].x*cs-local[static_cast<size_t>(i)].y*sn;
-            const float ry=local[static_cast<size_t>(i)].x*sn+local[static_cast<size_t>(i)].y*cs;
-            q[static_cast<size_t>(i)]=project(
-                basis.apply({localCx+rx,localCy+ry,local[static_cast<size_t>(i)].z}),
-                screenCx,screenCy,pose.zLiftPx);
+    // Printed geometric rings rotate with the record and give the centre a
+    // designed pressing identity without sampling/decoding the artwork again.
+    for (int band=0; band<3; ++band) {
+        const float rr=labelR*(0.56f+0.12f*band);
+        nxui::Vec2 prev=projectDiscAngle(spin,rr,localCx,localCy,zFront+0.56f,pose,basis);
+        for (int i=1;i<=12;++i) {
+            const float ang=spin+2.f*kPi*static_cast<float>(i)/12.f;
+            const nxui::Vec2 cur=projectDiscAngle(ang,rr,localCx,localCy,zFront+0.56f,pose,basis);
+            ren.drawLine(prev,cur,{1.f,1.f,1.f,(0.034f+0.018f*band)*a},0.65f);
+            prev=cur;
         }
-        drawTexturedQuad(ren,cover,q,{0.72f,0.74f,0.78f,0.62f*a});
-        drawQuad(ren,q,{pose.accent.r,pose.accent.g,pose.accent.b,0.08f*a});
     }
 
     if (pose.detailLevel >= 1) {
-        // Printed label rings and spindle hole stay visible above the artwork.
-        const float guideR=labelR*0.90f;
+        const float guideR=labelR*0.92f;
         nxui::Vec2 prev=projectDiscPointCS(lut.c[0],lut.s[0],guideR,localCx,localCy,zFront+0.60f,pose,basis);
         for (int i=1;i<=segs;++i) {
             const size_t li=static_cast<size_t>(i);
             const nxui::Vec2 cur=projectDiscPointCS(lut.c[li],lut.s[li],guideR,localCx,localCy,zFront+0.60f,pose,basis);
-            ren.drawLine(prev,cur,{1.f,1.f,1.f,0.20f*a},0.72f);
+            ren.drawLine(prev,cur,{1.f,1.f,1.f,0.18f*a},0.72f);
             prev=cur;
         }
-        drawDiscFan(ren,pose,localCx,localCy,labelR*0.16f,zFront+0.66f,
+        drawDiscFan(ren,pose,localCx,localCy,labelR*0.072f,zFront+0.66f,
                     {0.012f,0.013f,0.016f,1.f*a},20,basis);
-        const float tickR0=labelR*0.43f, tickR1=labelR*0.78f;
+        const float tickR0=labelR*0.52f, tickR1=labelR*0.82f;
         const nxui::Vec2 tick0=projectDiscAngle(spin,tickR0,localCx,localCy,zFront+0.70f,pose,basis);
         const nxui::Vec2 tick1=projectDiscAngle(spin,tickR1,localCx,localCy,zFront+0.70f,pose,basis);
-        ren.drawLine(tick0,tick1,{1.f,1.f,1.f,0.42f*a},1.15f);
+        ren.drawLine(tick0,tick1,{1.f,1.f,1.f,0.34f*a},1.05f);
+    }
+
+    // Album title/artist are already known metadata, so they can be printed on
+    // the label with zero artwork work.  Draw before the sleeve: the sleeve then
+    // naturally occludes any hidden part of the record.  Text stays screen-
+    // upright for 720p legibility while the surrounding ring/tick still spins.
+    if (pose.detailLevel >= 2 && pose.vinylLabelFont &&
+        (pose.vinylLabelTitle || pose.vinylLabelArtist)) {
+        const float screenCx=pose.rect.x+pose.rect.width*.5f;
+        const float screenCy=pose.rect.y+pose.rect.height*.5f;
+        const nxui::Vec2 labelCenter=project(
+            basis.apply({localCx,localCy,zFront+0.74f}),
+            screenCx,screenCy,pose.zLiftPx);
+        const float maxTextW=labelR*1.44f;
+        auto drawLabelLine=[&](const std::string* value, float yOffset,
+                               float targetScale, float minScale,
+                               const nxui::Color& color) {
+            if (!value || value->empty()) return;
+            const float rawW=std::max(1.f,pose.vinylLabelFont->measure(*value).x);
+            const float scale=std::clamp(maxTextW/rawW,minScale,targetScale);
+            const float w=rawW*scale;
+            const nxui::Rect clip{labelCenter.x-maxTextW*.5f,
+                                  labelCenter.y+yOffset-8.f,maxTextW,18.f};
+            ren.pushClipRect(clip);
+            ren.drawText(*value,{labelCenter.x-w*.5f,labelCenter.y+yOffset},
+                         pose.vinylLabelFont,color,scale);
+            ren.popClipRect();
+        };
+        drawLabelLine(pose.vinylLabelArtist,-18.f,0.34f,0.20f,
+                      {1.f,1.f,1.f,0.74f*a});
+        drawLabelLine(pose.vinylLabelTitle,-4.f,0.31f,0.18f,
+                      {1.f,1.f,1.f,0.91f*a});
+        const std::string side="SIDE A";
+        const float sideScale=0.23f;
+        const float sideW=pose.vinylLabelFont->measure(side).x*sideScale;
+        ren.drawText(side,{labelCenter.x-sideW*.5f,labelCenter.y+16.f},
+                     pose.vinylLabelFont,{1.f,1.f,1.f,0.60f*a},sideScale);
     }
 
     const float screenCx=pose.rect.x+pose.rect.width*.5f;
