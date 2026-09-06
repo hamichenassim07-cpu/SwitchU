@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MusicTypes.hpp"
+#include "MusicAmbientPalette.hpp"
 #include <nxui/core/Texture.hpp>
 #include <nxui/core/Types.hpp>
 
@@ -22,6 +23,7 @@ struct MusicArtworkStyle {
     uint64_t signature = 0;
     uint64_t lastUsedEpochSec = 0;
     bool sampled = false;
+    ambient::Palette backgroundPalette{};
 };
 
 class MusicCoverCache {
@@ -37,6 +39,8 @@ public:
     void requestStyle(const CoverRef& ref);
     void pollStyleRequest();
     MusicArtworkStyle styleFor(const CoverRef& ref) const;
+    // Read-only lookup with a caller-owned key: no allocation or cover load.
+    const ambient::Palette* backgroundPaletteForKey(const std::string& key) const;
 
     void clear();
     void resetFailures() { m_failed.clear(); }

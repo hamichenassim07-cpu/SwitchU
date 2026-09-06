@@ -8,6 +8,7 @@
 #include "widgets/DateTimeWidget.hpp"
 #include "widgets/HomeCarouselMotion.hpp"
 #include "MusicPhysicalMediaRenderer.hpp"
+#include "MusicAmbientBackground.hpp"
 
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Input.hpp>
@@ -110,9 +111,7 @@ private:
                                                 float yawDeg, float pitchDeg, float rollDeg,
                                                 float zLiftPx, float vinylReveal,
                                                 float vinylSpinRad, float alpha,
-                                                bool playing, int maxSide = 512,
-                                                const std::string* vinylLabelTitle = nullptr,
-                                                const std::string* vinylLabelArtist = nullptr);
+                                                bool playing, int maxSide = 512);
     nxui::Color artworkAccent(const CoverRef& cover) const;
 
     const Track* currentTrack() const;
@@ -122,6 +121,9 @@ private:
     size_t selectedTrackIndex() const;
 
     void drawMusicBackground(nxui::Renderer& ren);
+    const CoverRef* ambientCover() const;
+    void updateAmbientBackground(float dt);
+    void drawAlbumInformation(nxui::Renderer& ren, const Album& album, float alpha);
     void drawTopBar(nxui::Renderer& ren);
     void drawAlbums(nxui::Renderer& ren);
     void drawPlaylists(nxui::Renderer& ren);
@@ -221,10 +223,9 @@ private:
     float m_hiddenGuardTimer = 0.f;
     float m_uiTime = 0.f;
     float m_idleTime = 0.f;
-    // V8 physical scene dynamics. Spin phase stays continuous while the
-    // per-track boost decays; parallax is deliberately limited to a few pixels.
-    float m_vinylSpinPhase = 0.f;
-    float m_vinylSpinBoost = 0.f;
+    // Compatibility argument at protected carousel call sites; no disc state,
+    // spin update, geometry, texture, or label survives in the renderer.
+    static constexpr float m_vinylSpinPhase = 0.f;
     float m_sceneParallaxX = 0.f;
     float m_sceneParallaxY = 0.f;
     uint64_t m_marqueeTrackId = 0;
@@ -234,6 +235,20 @@ private:
     float m_albumTitleMarqueeElapsed = 0.f;
     nxui::Texture m_homePlayTimeClockTexture;
     bool m_homePlayTimeClockLoadAttempted = false;
+    MusicAmbientBackground m_ambientBackground;
+    const CoverRef* m_ambientCoverRef = nullptr;
+    uint64_t m_ambientScanGeneration = 0;
+    std::string m_ambientPaletteKey;
+
+    struct AlbumInformation {
+        const Album* album = nullptr;
+        const nxui::Font* font = nullptr;
+        uint64_t generation = 0, fontRevision = 0;
+        std::string title, artist, duration, count;
+        float titleScale = 1.f, artistScale = 1.f, metaScale = 1.f;
+        float titleWidth = 0.f, artistWidth = 0.f;
+        float countWidth = 0.f, durationWidth = 0.f;
+    } m_albumInformation;
     bool m_nextSoonWasVisible = false;
     float m_nextToastTimer = 0.f;
 

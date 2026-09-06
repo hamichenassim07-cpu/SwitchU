@@ -66,7 +66,7 @@ void WiiUMenuApp::showMusic() {
         m_clock->setHomeTabsVisible(true);
     }
     if (m_battery)
-        m_battery->setWifiVisible(false);
+        m_battery->setWifiVisible(true);
     if (m_titlePill) {
         m_titlePill->setMusicMode(true);
         m_titlePill->setGameActionsVisible(true);

@@ -1,5 +1,6 @@
 #include "MusicScreen.hpp"
 #include "MusicUiTiming.hpp"
+#include "MusicAlbumInformation.hpp"
 
 #include "core/DebugLog.hpp"
 #include "widgets/HomeCarouselStyle.hpp"
@@ -134,14 +135,6 @@ void drawDarkTrackPanel(nxui::Renderer& ren, const nxui::Rect& rect,
                                radius, 1.f);
 }
 
-void drawMetaClockFallback(nxui::Renderer& ren, float cx, float cy,
-                       const nxui::Color& color) {
-    ren.drawCircle({cx, cy}, 7.2f, color, 22);
-    ren.drawCircle({cx, cy}, 5.7f,
-                   {0.012f,0.014f,0.020f,color.a}, 22);
-    ren.drawLine({cx, cy}, {cx, cy - 3.7f}, color, 1.35f);
-    ren.drawLine({cx, cy}, {cx + 3.2f, cy + 1.7f}, color, 1.35f);
-}
 
 float clamp01(float v) { return std::clamp(v, 0.f, 1.f); }
 float smoothStep(float v) {
@@ -348,7 +341,7 @@ void MusicScreen::show() {
     refreshStatus(true);
     if (!m_hasScanned) startScan(false);
     DebugLog::log("[music-diag] OPEN_MUSIC ready scan=%d", m_scanRunning ? 1 : 0);
-    DebugLog::log("[music-diag] V8.7 visual-finish artwork_worker=OFF secondary_decode=OFF single_decode_accent=ON physical_media=ON liquid_glass_tracklist=OFF");
+    DebugLog::log("[music-diag] V8.8 ambient-flow animated_background=ON vinyl=OFF artwork_worker=OFF secondary_decode=OFF single_decode_accent=ON physical_media=ON liquid_glass_tracklist=OFF");
 }
 
 
@@ -459,10 +452,6 @@ void MusicScreen::refreshStatus(bool force) {
             DebugLog::log("[music-diag] STATUS track changed %016llX -> %016llX",
                           static_cast<unsigned long long>(previousTrackId),
                           static_cast<unsigned long long>(fresh.track_id));
-            // A new record side gets a tiny, quickly decaying start impulse.
-            // This is UI-only state and never touches decoder/audio timing.
-            if (fresh.track_id != 0)
-                m_vinylSpinBoost = 1.f;
         }
 
         const bool session = statusFlag(fresh, switchu::music::MusicStatus_SessionActive);
@@ -500,8 +489,7 @@ void MusicScreen::onUpdate(float dt) {
     m_uiTime += dt;
     m_statusTimer += dt;
     if (m_nextToastTimer > 0.f) m_nextToastTimer = std::max(0.f, m_nextToastTimer - dt);
-    // The environment stays stable, while local Music surfaces can adopt the
-    // selected album accent after its artwork style has been sampled.
+    // Existing local accents stay independent of the animated environment.
     gMusicAccent = kMusicAccent;
     m_idleTime += std::max(0.f, dt);
 
@@ -557,19 +545,10 @@ void MusicScreen::onUpdate(float dt) {
         }
     }
 
-    // Physical record phase is continuous. A track change adds a short boost,
-    // then exponentially returns to the calm 0.74 rad/s presentation speed.
     const float safeDt = std::max(0.f, dt);
-    m_vinylSpinPhase = std::fmod(
-        m_vinylSpinPhase + safeDt * (0.74f + 4.10f * m_vinylSpinBoost),
-        6.28318530718f);
-    if (m_vinylSpinPhase < 0.f) m_vinylSpinPhase += 6.28318530718f;
-    m_vinylSpinBoost *= std::exp(-safeDt * 3.15f);
-    if (m_vinylSpinBoost < 0.002f) m_vinylSpinBoost = 0.f;
 
-    // Three-layer micro-parallax: environment moves least, sleeve follows the
-    // HOME carousel normally, and the record receives a few pixels of lag in
-    // drawPhysicalMedia(). No camera motion is large enough to affect focus.
+    // Existing sleeve parallax is protected. The new background has its own
+    // independent animation and never changes or follows this motion state.
     float parallaxTargetX = 0.f;
     float parallaxTargetY = 0.f;
     if (rootView()) {
@@ -684,6 +663,7 @@ void MusicScreen::onUpdate(float dt) {
 
     finishScanIfReady();
     refreshStatus(false);
+    updateAmbientBackground(dt);
 
     // V8.3 crash fix: the console logs proved the library scan completes and
     // the crash occurs immediately after the old [music-style] worker begins.
@@ -1118,8 +1098,20 @@ void MusicScreen::modalCancel() {
 }
 
 void MusicScreen::openNowPlaying() {
-    if (!currentTrack() || m_closing || contentTransitionBusy())
+    // Idempotent entry: once NowPlaying owns the view, Minus must not overwrite
+    // its original return view, reset the transition, or cancel a B exit.
+    if (!m_active || m_modal != Modal::None || m_view == View::NowPlaying ||
+        !currentTrack() || m_closing || contentTransitionBusy())
         return;
+    if (m_view == View::Queue && m_queueReturnView == View::NowPlaying) {
+        // The queue is a child of the SAME player, not a new return destination.
+        // Keep the album/root origin, preventing a Queue <-> NowPlaying cycle.
+        m_view = View::NowPlaying;
+        m_selection = 0;
+        m_nowPlayingEnter = 1.f;
+        m_nowPlayingClosing = false;
+        return;
+    }
     m_nowPlayingReturnView = m_view;
     m_nowPlayingReturnSelection = m_selection;
     m_view = View::NowPlaying;
@@ -1308,6 +1300,122 @@ CoverRef MusicScreen::playlistCover(size_t playlistIndex) const {
     return {};
 }
 
+const CoverRef* MusicScreen::ambientCover() const {
+    if (m_scanRunning) return nullptr;
+    if (m_view == View::Albums) {
+        return m_selection >= 0 && size_t(m_selection) < m_library.albums.size()
+            ? &m_library.albums[size_t(m_selection)].cover : nullptr;
+    }
+    if (m_view == View::AlbumDetail)
+        return m_detailAlbum < m_library.albums.size()
+            ? &m_library.albums[m_detailAlbum].cover : nullptr;
+    if (m_view == View::Playlists || m_view == View::PlaylistDetail) {
+        const size_t index = m_view == View::Playlists ? size_t(std::max(0, m_selection))
+                                                      : m_detailPlaylist;
+        if (index < m_playlistStore.playlists().size())
+            for (uint64_t id : m_playlistStore.playlists()[index].trackIds) {
+                const Track* track = trackForId(id);
+                if (track && track->cover.valid()) return &track->cover;
+            }
+        return nullptr;
+    }
+    const Track* track = currentTrack();
+    return track ? &track->cover : nullptr;
+}
+
+void MusicScreen::updateAmbientBackground(float dt) {
+    // Read-only view of the selected metadata. No carousel motion, input,
+    // selection, audio or artwork loading is driven by the background.
+    const CoverRef* cover = ambientCover();
+    if (cover != m_ambientCoverRef || m_ambientScanGeneration != m_library.scanGeneration) {
+        m_ambientCoverRef = cover;
+        m_ambientScanGeneration = m_library.scanGeneration;
+        m_ambientPaletteKey = cover && cover->valid() ? cover->key() : std::string{};
+        m_ambientBackground.setPalette({});
+    }
+    // A new cover is decoded by the existing renderer later in this frame.
+    // Cached colours take over smoothly; unavailable art uses neutral light.
+    if (!m_ambientPaletteKey.empty()) {
+        const auto* palette = m_coverCache.backgroundPaletteForKey(m_ambientPaletteKey);
+        if (palette) m_ambientBackground.setPalette(*palette);
+    }
+    m_ambientBackground.update(dt);
+}
+
+void MusicScreen::drawAlbumInformation(nxui::Renderer& ren, const Album& album, float alpha) {
+    // During the vertical category exchange the outgoing sleeves may cross
+    // this band. Delay only the new information, never their motion or render.
+    if (!m_font || alpha <= 0.f || m_rootCategoryTransition < 0.999f) return;
+    auto& info = m_albumInformation;
+    if (info.album != &album || info.generation != m_library.scanGeneration ||
+        info.font != m_font || info.fontRevision != m_font->revision()) {
+        info.album = &album;
+        info.generation = m_library.scanGeneration;
+        info.font = m_font;
+        info.fontRevision = m_font->revision();
+        const float baseSize = float(std::max(1, m_font->ptSize()));
+        info.titleScale = 32.f / baseSize;
+        info.artistScale = 26.f / baseSize;
+        info.metaScale = 25.f / baseSize;
+        info.title = fitText(m_font, albuminfo::singleLine(album.title, "Album sans titre"),
+                             704.f, info.titleScale);
+        info.artist = fitText(m_font, albuminfo::singleLine(album.artist, "Artiste inconnu"),
+                              620.f, info.artistScale);
+        const auto summary = albuminfo::summarise(album, m_library);
+        info.duration = fitText(m_font, summary.duration, 282.f, info.metaScale);
+        info.count = fitText(m_font, summary.count, 260.f, info.metaScale);
+        info.titleWidth = m_font->measure(info.title).x * info.titleScale;
+        info.artistWidth = m_font->measure(info.artist).x * info.artistScale;
+        info.durationWidth = m_font->measure(info.duration).x * info.metaScale;
+        info.countWidth = m_font->measure(info.count).x * info.metaScale;
+    }
+
+    // Three dedicated lines below the unchanged sleeve reflections. Font sizes
+    // remain fixed and readable; UTF-8 ellipsis handles even very long tags.
+    ren.pushClipRect({288.f, 614.f, 704.f, 38.f});
+    ren.drawText(info.title, {640.f - info.titleWidth*0.5f, 614.f},
+                 m_font, textPrimary(alpha), info.titleScale);
+    ren.popClipRect();
+    ren.pushClipRect({330.f, 653.f, 620.f, 32.f});
+    ren.drawText(info.artist, {640.f - info.artistWidth*0.5f, 653.f},
+                 m_font, textSecondary(0.98f*alpha), info.artistScale);
+    ren.popClipRect();
+
+    constexpr float iconClockW = 30.f, noteW = 28.f, iconGap = 10.f, groupGap = 28.f;
+    const float width = iconClockW + iconGap + info.durationWidth + groupGap +
+                        noteW + iconGap + info.countWidth;
+    float x = 640.f - width*0.5f;
+    constexpr float metaY = 685.f;
+    const nxui::Color colour = textSecondary(0.96f*alpha);
+    ren.pushClipRect({288.f, metaY, 704.f, 32.f});
+    if (!m_homePlayTimeClockLoadAttempted) {
+        m_homePlayTimeClockLoadAttempted = true;
+        m_homePlayTimeClockTexture.loadFromFile(
+            ren.gpu(), ren, "romfs:/icons/playtime_clock_v1030.png", 0);
+    }
+    if (m_homePlayTimeClockTexture.valid())
+        ren.drawTexture(&m_homePlayTimeClockTexture, {x, metaY, iconClockW, iconClockW},
+                         nxui::Color::white().withAlpha(0.96f*alpha*gMusicUiAlpha));
+    // The HOME asset is bundled. If its load fails the duration remains readable.
+    x += iconClockW + iconGap;
+    ren.drawText(info.duration, {x, metaY}, m_font, colour, info.metaScale);
+    x += info.durationWidth + groupGap;
+
+    // Informational double note, deliberately independent of transport icons.
+    // Solid stems/beam and round heads remain clear at 1280 x 720.
+    ren.drawCircle({x+6.f, metaY+25.f}, 4.6f, colour, 16);
+    ren.drawCircle({x+21.f, metaY+21.f}, 4.6f, colour, 16);
+    ren.drawRect({x+7.f, metaY+7.f, 3.8f, 18.f}, colour);
+    ren.drawRect({x+22.f, metaY+3.f, 3.8f, 18.f}, colour);
+    ren.drawTriangle({x+7.f,metaY+7.f}, {x+25.8f,metaY+2.f},
+                      {x+25.8f,metaY+7.f}, colour);
+    ren.drawTriangle({x+7.f,metaY+7.f}, {x+25.8f,metaY+7.f},
+                      {x+7.f,metaY+12.f}, colour);
+    x += noteW + iconGap;
+    ren.drawText(info.count, {x, metaY}, m_font, colour, info.metaScale);
+    ren.popClipRect();
+}
+
 nxui::Color MusicScreen::artworkAccent(const CoverRef& cover) const {
     const MusicArtworkStyle style = m_coverCache.styleFor(cover);
     return style.sampled ? style.accent : kMusicAccent;
@@ -1322,12 +1430,10 @@ PhysicalMediaGeometry MusicScreen::drawPhysicalMedia(nxui::Renderer& ren,
                                                        float rollDeg,
                                                        float zLiftPx,
                                                        float vinylReveal,
-                                                       float vinylSpinRad,
+                                                       [[maybe_unused]] float vinylSpinRad,
                                                        float alphaValue,
-                                                       bool playing,
-                                                       int maxSide,
-                                                       const std::string* vinylLabelTitle,
-                                                       const std::string* vinylLabelArtist) {
+                                                       [[maybe_unused]] bool playing,
+                                                       int maxSide) {
     nxui::Texture* tex = m_coverCache.get(cover, ren, maxSide);
     // V8.3: no second artwork texture is decoded/generated for the rear sleeve.
     // The renderer receives nullptr and uses the safe smoked back colour.
@@ -1343,16 +1449,8 @@ PhysicalMediaGeometry MusicScreen::drawPhysicalMedia(nxui::Renderer& ren,
     pose.rollDeg = rollDeg;
     pose.depthPx = std::clamp(rect.width * 0.021f, 4.5f, 8.f);
     pose.zLiftPx = zLiftPx;
-    pose.vinylReveal = vinylReveal;
-    pose.vinylSpinRad = vinylSpinRad;
     pose.alpha = alphaValue * gMusicUiAlpha;
-    pose.selected = vinylReveal > 0.45f;
-    pose.playing = playing;
     pose.detailLevel = maxSide >= 500 ? 2 : (maxSide >= 280 ? 1 : 0);
-    pose.vinylLagPx = -m_sceneParallaxX * (pose.selected ? 0.72f : 0.34f);
-    pose.vinylLabelFont = m_font ? m_font : m_smallFont;
-    pose.vinylLabelTitle = vinylLabelTitle;
-    pose.vinylLabelArtist = vinylLabelArtist;
 
     const PhysicalMediaGeometry geometry = playlist
         ? drawPlaylistPhysicalMedia(ren, tex, backTex, pose)
@@ -1369,34 +1467,12 @@ PhysicalMediaGeometry MusicScreen::drawPhysicalMedia(nxui::Renderer& ren,
 void MusicScreen::drawMusicBackground(nxui::Renderer& ren) {
     const float a = gMusicUiAlpha;
 
-    // Stable premium dark environment. Album colours never repaint this layer.
+    // Keep the original base and floor; ambient light is clipped above the floor.
     ren.drawGradientRect({0.f, 0.f, kScreenW, kScreenH},
                          {0.026f, 0.029f, 0.037f, a},
                          {0.009f, 0.011f, 0.016f, a});
 
-    // Smoked Hi-Fi structure: almost invisible rack lines establish depth
-    // without decorative circles or a constantly moving waveform.
-    for (int y = 116; y < static_cast<int>(kFloorY); y += 42)
-        ren.drawRect({0.f, static_cast<float>(y), kScreenW, 1.f},
-                     {0.55f, 0.60f, 0.70f, 0.010f * a});
-    const float backgroundParallaxX = m_sceneParallaxX * 0.28f;
-    const float backgroundParallaxY = m_sceneParallaxY * 0.18f;
-    for (int x = 96; x < 1280; x += 188)
-        ren.drawRect({static_cast<float>(x) + backgroundParallaxX,
-                      108.f + backgroundParallaxY, 1.f, kFloorY - 108.f},
-                     {0.52f, 0.57f, 0.66f, 0.006f * a});
-
-    // Diffuse studio light: a soft vertical ribbon, not a visible beam. It is
-    // intentionally neutral so only the physical media picks up album colour.
-    constexpr float lightCenter = 760.f;
-    for (int i = -7; i <= 7; ++i) {
-        const float t = std::abs(static_cast<float>(i)) / 7.f;
-        const float w = 34.f;
-        const float x = lightCenter + i * 30.f - w * 0.5f + backgroundParallaxX * 0.55f;
-        ren.drawGradientRect({x, 82.f + backgroundParallaxY * 0.35f, w, kFloorY - 82.f},
-                             {0.82f, 0.86f, 0.94f, (1.f - t) * 0.0065f * a},
-                             {0.70f, 0.76f, 0.88f, (1.f - t) * 0.0015f * a});
-    }
+    m_ambientBackground.draw(ren, a, kFloorY);
 
     // Reflective floor / Hi-Fi presentation surface.
     ren.drawGradientRect({0.f, kFloorY, kScreenW, kFloorH},
@@ -1410,8 +1486,8 @@ void MusicScreen::drawTopBar(nxui::Renderer& ren) {
     // Do not redraw a Music approximation of HOME's HUD. Render the actual
     // HOME widgets on top of Music's dark backdrop so dimensions, fonts,
     // Liquid Glass, category animation and shared HOME polish stays identical.
-    // MusicIntegration sets the real DateTimeWidget to category 2 and hides
-    // Wi-Fi on the real BatteryWidget while this screen is active.
+    // MusicIntegration sets the real DateTimeWidget to category 2 and enables
+    // the existing HOME Wi-Fi component on the real BatteryWidget.
     if (m_homeClockWidget) {
         m_homeClockWidget->setHomeTabsVisible(rootView());
         m_homeClockWidget->render(ren);
@@ -1587,65 +1663,7 @@ void MusicScreen::drawAlbums(nxui::Renderer& ren) {
     const auto& album = m_library.albums[static_cast<size_t>(m_selection)];
     gMusicAccent = artworkAccent(album.cover);
 
-    // V8.7: Music keeps its own hierarchy but deliberately inherits HOME's
-    // typography/action rhythm. Album -> artist -> metadata is centred and the
-    // exact HOME play-time clock asset is reused instead of a near-match icon.
-    const std::string title = fitText(
-        m_font, album.title.empty() ? "Album sans titre" : album.title, 660.f, 1.22f);
-    const std::string artist = fitText(
-        m_font, album.artist.empty() ? "Artiste inconnu" : album.artist, 620.f, 0.94f);
-
-    constexpr float titleScale = 1.22f;
-    constexpr float artistScale = 0.94f;
-    constexpr float metaScale = 0.97f;
-    const auto titleSize = m_font->measure(title);
-    const auto artistSize = m_font->measure(artist);
-    ren.drawText(title,
-                 {640.f - titleSize.x * titleScale * 0.5f, 536.f},
-                 m_font, textPrimary(infoAlpha), titleScale);
-    ren.drawText(artist,
-                 {640.f - artistSize.x * artistScale * 0.5f, 577.f},
-                 m_font, textSecondary(0.92f * infoAlpha), artistScale);
-
-    const std::string countText = std::to_string(album.tracks.size()) + " titres";
-    const std::string durationText = formatDuration(
-        albumDurationMs(static_cast<size_t>(m_selection)));
-    constexpr float noteScale = 1.14f;
-    constexpr float iconClockW = 24.f;
-    constexpr float gapA = 9.f;
-    constexpr float gapB = 17.f;
-    constexpr float gapC = 10.f;
-    const float noteW = m_font->measure("♪").x * noteScale;
-    const float countW = m_font->measure(countText).x * metaScale;
-    const float bulletW = m_font->measure("•").x * metaScale;
-    const float durationW = m_font->measure(durationText).x * metaScale;
-    const float metaW = noteW + gapA + countW + gapB + bulletW + gapB +
-                        iconClockW + gapC + durationW;
-    float metaX = 640.f - metaW * 0.5f;
-    constexpr float metaY = 619.f;
-    const nxui::Color metaColor = textSecondary(0.94f * infoAlpha);
-    ren.drawText("♪", {metaX, metaY - 4.f}, m_font, metaColor, noteScale);
-    metaX += noteW + gapA;
-    ren.drawText(countText, {metaX, metaY}, m_font, metaColor, metaScale);
-    metaX += countW + gapB;
-    ren.drawText("•", {metaX, metaY}, m_font, metaColor, metaScale);
-    metaX += bulletW + gapB;
-
-    if (!m_homePlayTimeClockLoadAttempted) {
-        m_homePlayTimeClockLoadAttempted = true;
-        m_homePlayTimeClockTexture.loadFromFile(
-            ren.gpu(), ren, "romfs:/icons/playtime_clock_v1030.png", 0);
-    }
-    const nxui::Rect clockRect{metaX, metaY - 2.f, iconClockW, iconClockW};
-    if (m_homePlayTimeClockTexture.valid()) {
-        ren.drawTexture(&m_homePlayTimeClockTexture, clockRect,
-                        nxui::Color::white().withAlpha(0.92f * infoAlpha * gMusicUiAlpha));
-    } else {
-        drawMetaClockFallback(ren, metaX + iconClockW * 0.5f,
-                              metaY + iconClockW * 0.5f - 2.f, metaColor);
-    }
-    metaX += iconClockW + gapC;
-    ren.drawText(durationText, {metaX, metaY}, m_font, metaColor, metaScale);
+    drawAlbumInformation(ren, album, infoAlpha);
 
     // Plain HOME-style actions, enlarged slightly and dropped toward the real
     // lower action zone. X remains a real play shortcut, A opens the tracklist.
@@ -1705,17 +1723,10 @@ void MusicScreen::drawNowPlaying(nxui::Renderer& ren) {
         sourceRect.height + (targetRect.height - sourceRect.height) * e
     };
 
-    const std::string* labelArtist = !track->albumArtist.empty()
-        ? &track->albumArtist : &track->artist;
-    const bool fromRoot = m_nowPlayingReturnView == View::Albums ||
-                          m_nowPlayingReturnView == View::Playlists;
-    const float playerVinylReveal = fromRoot ? 0.99f * e : 0.99f;
     drawPhysicalMedia(ren, track->cover, sleeve, false,
                       -0.6f + std::sin(m_uiTime * 0.28f) * 0.16f,
                       -0.65f, 0.f, 9.f,
-                      playerVinylReveal, playing ? m_vinylSpinPhase : 0.f,
-                      1.f, playing, 512,
-                      &track->album, labelArtist);
+                      0.f, 0.f, 1.f, playing, 512);
     gMusicAccent = artworkAccent(track->cover);
 
     // UI elements reveal after the physical media is already present, avoiding
@@ -2039,18 +2050,12 @@ void MusicScreen::drawAlbumDetail(nxui::Renderer& ren) {
 
     const float cinematic = std::sin(clamp01(e) * 3.14159265f);
     const bool playingAlbum = albumIsPlaying(m_detailAlbum);
-    // Root carousel has no exposed record. Let the vinyl physically emerge as
-    // the same sleeve travels into Album Detail instead of popping in at 72%.
-    const float vinylReveal = 0.99f * smoothStep((e - 0.05f) / 0.88f);
     drawPhysicalMedia(ren, album.cover, cover, false,
                       -0.8f + 3.6f * cinematic,
                       -0.7f - 0.35f * cinematic,
                       0.8f * cinematic,
                       8.f + 6.f * cinematic,
-                      vinylReveal,
-                      playingAlbum ? m_vinylSpinPhase : cinematic * 0.34f,
-                      1.f, playingAlbum, 512,
-                      &album.title, &album.artist);
+                      0.f, 0.f, 1.f, playingAlbum, 512);
 
     // drawPhysicalMedia() performs the only cover decode. styleFor() now
     // returns the accent sampled from that same RGBA buffer.

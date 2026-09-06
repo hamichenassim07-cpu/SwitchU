@@ -300,7 +300,18 @@ bool MusicCoverCache::loadTexture(const CoverRef& ref, nxui::Renderer& ren,
                           ref.path.c_str(), ref.embedded ? 1 : 0);
             return false;
         }
+        // V8.8 samples the ambient palette from this SAME decoded buffer.
+        // Reuse it after texture eviction; the existing sleeve accent remains
+        // calculated by the original, unmodified V8.7 function below.
+        const std::string paletteKey = ref.key();
+        const auto prior = m_styles.find(paletteKey);
+        const ambient::Palette background =
+            prior != m_styles.end() && prior->second.backgroundPalette.sampled
+                ? prior->second.backgroundPalette
+                : ambient::samplePalette(decoded.rgba.data(), decoded.rgba.size(),
+                                         decoded.width, decoded.height);
         m_styles[ref.key()] = sampledArtworkStyle(decoded, ref);
+        m_styles.find(paletteKey)->second.backgroundPalette = background;
         return out.loadFromPixels(ren.gpu(), ren, decoded.rgba.data(),
                                   decoded.width, decoded.height);
     }
@@ -389,6 +400,12 @@ MusicArtworkStyle MusicCoverCache::styleFor(const CoverRef& ref) const {
     auto found = m_styles.find(ref.key());
     if (found != m_styles.end()) return found->second;
     return safeSyntheticArtworkStyle(ref);
+}
+
+const ambient::Palette* MusicCoverCache::backgroundPaletteForKey(const std::string& key) const {
+    const auto found = m_styles.find(key);
+    return found != m_styles.end() && found->second.backgroundPalette.sampled
+        ? &found->second.backgroundPalette : nullptr;
 }
 
 void MusicCoverCache::clear() {

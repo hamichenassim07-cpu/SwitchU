@@ -3,10 +3,7 @@
 #include <nxui/core/Types.hpp>
 #include <nxui/core/Texture.hpp>
 
-#include <array>
-#include <string>
-
-namespace nxui { class Renderer; class Font; }
+namespace nxui { class Renderer; }
 
 namespace switchu::menu::music {
 
@@ -20,30 +17,18 @@ struct PhysicalMediaPose {
     float rollDeg = 0.f;
     float depthPx = 6.f;
     float zLiftPx = 0.f;
-    float vinylReveal = 0.f;   // 0..1, fraction of the disc exposed to the right.
-    float vinylSpinRad = 0.f;
-    float vinylLagPx = 0.f;    // tiny parallax delay relative to the sleeve.
     float alpha = 1.f;
     int detailLevel = 2;       // 0 neighbour, 1 normal, 2 selected/detail.
-    bool selected = false;
-    bool playing = false;
-    // V8.7 label data is rendered from already-known metadata.  No artwork
-    // decode or extra texture is needed to make the record album-specific.
-    nxui::Font* vinylLabelFont = nullptr;
-    const std::string* vinylLabelTitle = nullptr;
-    const std::string* vinylLabelArtist = nullptr;
+
 };
 
 struct PhysicalMediaGeometry {
     nxui::Vec2 front[4]{}; // TL, TR, BR, BL after 3D projection.
-    nxui::Vec2 vinylCenter{};
-    float vinylRadius = 0.f;
-    std::array<nxui::Vec2,32> vinylOutline{};
-    int vinylOutlineCount = 0;
+
 };
 
 // Lightweight real 3D geometry projected through the existing 2D renderer.
-// The sleeve is a six-face thin box and the record is a thin circular disc.
+// The sleeve is a six-face thin box. Vinyl geometry/resources were removed.
 PhysicalMediaGeometry drawAlbumPhysicalMedia(nxui::Renderer& ren,
                                              nxui::Texture* cover,
                                              nxui::Texture* backCover,
