@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdio>
+#include <cerrno>
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace switchu::menu::music {
@@ -44,12 +46,24 @@ bool MusicPreferences::save() {
         std::filesystem::create_directories(std::filesystem::path(m_path).parent_path(), ec);
         if (ec) return false;
         const auto temporary = m_path + ".tmp";
-        FILE* f = std::fopen(temporary.c_str(), "wb");
-        if (!f) return false;
-        bool ok = std::fwrite(data.data(), 1, data.size(), f) == data.size();
-        if (std::fflush(f) != 0) ok = false;
-        if (ok && ::fsync(::fileno(f)) != 0) ok = false;
-        if (std::fclose(f) != 0) ok = false;
+        // Use the descriptor directly: newlib does not expose fileno in every
+        // strict C++20 configuration used by devkitPro.
+        const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (fd < 0) return false;
+        bool ok = true;
+        size_t written = 0;
+        while (written < data.size()) {
+            const auto count = ::write(fd, data.data() + written, data.size() - written);
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) { ok = false; break; }
+            written += static_cast<size_t>(count);
+        }
+        if (ok) {
+            int synced;
+            do { synced = ::fsync(fd); } while (synced < 0 && errno == EINTR);
+            if (synced != 0) ok = false;
+        }
+        if (::close(fd) != 0) ok = false;
         // Atomic replacement; do not remove the previous preferences first.
         if (ok) ok = std::rename(temporary.c_str(), m_path.c_str()) == 0;
         if (!ok) { std::remove(temporary.c_str()); return false; }
