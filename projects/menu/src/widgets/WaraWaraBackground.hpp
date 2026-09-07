@@ -1,4 +1,5 @@
 #pragma once
+#include "music/MusicAmbientBackground.hpp"
 #include <nxui/widgets/Background.hpp>
 #include <nxui/core/GpuDevice.hpp>
 #include <nxui/core/Renderer.hpp>
@@ -25,6 +26,7 @@ struct WaraPreviewRuntime;
 
 class WaraWaraBackground : public nxui::Background {
 public:
+    switchu::menu::music::MusicAmbientBackground& ambientBackground() { return m_ambientBackground; }
     enum class Layout {
         Floating,
         Grid,
@@ -124,6 +126,7 @@ private:
     float m_time = 0.f;
 
     // V8.1/V9 : tout l'etat preview est encapsule ici.
+    switchu::menu::music::MusicAmbientBackground m_ambientBackground;
     std::shared_ptr<WaraPreviewRuntime> m_previewRuntime;
     bool m_previewActive = true;
 };

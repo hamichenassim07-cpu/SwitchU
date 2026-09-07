@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <cstdint>
 #include "HomeCarouselMotion.hpp"
+#include "HomeUiTween.hpp"
 
 class GlossyIcon;
 
@@ -49,6 +50,7 @@ public:
     void setSuspendedTitleId(uint64_t titleId);
     void refreshDisplayOrder();
     void setCarouselFocusActive(bool active);
+    void onTouchSelection(std::function<void(nxui::Widget*)> cb) { m_touchSelectionCb = std::move(cb); }
     bool carouselFocusActive() const { return m_carouselFocusActive; }
     int visibleCount() const { return m_displayCount; }
     int firstVisibleGlobalIndex() const;
@@ -126,9 +128,10 @@ private:
     switchu::homeui::HomeCarouselMotionState m_carouselMotion{};
 
     bool m_preserveScrollOnNextFocus = false;
-    bool m_selectionBounceActive = false;
-    bool m_entryBouncePending = false;
-    float m_selectionBounceTime = 0.f;
+    bool m_touchOwnsSelection = false;
+    std::function<void(nxui::Widget*)> m_touchSelectionCb;
+    void publishTouchSelection();
+    switchu::homeui::UiTween m_focusAmount{1.f};
     float m_suspendedIdleTime = 0.f;
     // V10.27: occasional, non-looping suspended-cartridge tumble.
     float m_suspendedTumbleWait = 0.f;

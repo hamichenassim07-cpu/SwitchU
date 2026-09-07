@@ -9,7 +9,7 @@
 #include "widgets/HomeCarouselMotion.hpp"
 #include "MusicPhysicalMediaRenderer.hpp"
 #include "MusicAmbientBackground.hpp"
-#include "MusicAlbumDetails.hpp"
+#include "MusicPreferences.hpp"
 
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Input.hpp>
@@ -43,11 +43,13 @@ public:
         m_homeBatteryWidget = battery;
         m_homeTitlePill = titlePill;
     }
+    void onVisibilityChanged(std::function<void(bool)> cb) { m_visibilityCb = std::move(cb); }
     void onClose(std::function<void()> cb) { m_closeCb = std::move(cb); }
     void onSessionGuard(std::function<void(bool)> cb) { m_sessionGuardCb = std::move(cb); }
 
     void show();
     void hide();
+    MusicAmbientBackground& ambientBackground() { return m_ambientBackground; }
     bool isActive() const { return m_active; }
     void handleTouch(nxui::Input& input);
 
@@ -74,7 +76,6 @@ private:
         None,
         PlaylistNameKeyboard,
         PlaylistChooser,
-        AlbumInformation,
     };
 
     void setupActions();
@@ -254,13 +255,21 @@ private:
     } m_albumInformation;
     bool m_nextSoonWasVisible = false;
     float m_nextToastTimer = 0.f;
+    std::string m_uiNotice;
+    float m_uiNoticeTimer = 0.f;
 
     // HOME <-> Music transition and BGM ownership state.
     float m_transitionAlpha = 0.f;
     bool m_closing = false;
     bool m_lastSessionGuardState = false;
 
-    MusicAlbumDetails m_albumDetails;
+    std::function<void(bool)> m_visibilityCb;
+    MusicPreferences m_preferences;
+    bool m_preferencesLoaded = false;
+    float m_preferencesSaveDelay = 0.f;
+    int m_rememberedSelection = -1;
+    void restoreAlbumSelection();
+    void nextFavourite(int direction);
     Modal m_modal = Modal::None;
     std::string m_keyboardText;
     int m_keyboardIndex = 0;

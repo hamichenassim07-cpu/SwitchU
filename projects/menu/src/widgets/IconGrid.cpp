@@ -10,19 +10,8 @@
 #include <algorithm>
 #include <cmath>
 
-namespace {
-// Touch-specific constants remain local. Canonical carousel geometry and snap
-// motion live in HomeCarouselStyle.hpp and are shared with SwitchU Music.
-constexpr float kSelectionBounceDuration = switchu::homeui::kCarouselSelectionBounceDuration;
-}
-
 IconGrid::IconGrid() {
     m_focus.onFocusChanged([this](nxui::Widget*, nxui::Widget*) {
-        // The bounce itself starts once the newly focused cover reaches the
-        // centre. Cancelling a previous bounce avoids stacking responses when
-        // the user scrolls rapidly.
-        m_selectionBounceActive = false;
-        m_selectionBounceTime = 0.f;
         layoutCarousel();
     });
 }
@@ -76,20 +65,14 @@ void IconGrid::refreshDisplayOrder() {
 void IconGrid::setCarouselFocusActive(bool active) {
     if (m_carouselFocusActive == active)
         return;
-    const bool wasActive = m_carouselFocusActive;
     m_carouselFocusActive = active;
     if (!active) {
-        m_selectionBounceActive = false;
-        m_entryBouncePending = false;
-        m_selectionBounceTime = 0.f;
-    } else if (!wasActive && active) {
-        // V10.10: the playful bounce should only happen when focus enters the
-        // carousel from Profile / Paramètres / Manettes, not while scrolling
-        // through covers inside the carousel itself.
-        m_entryBouncePending = true;
-        m_selectionBounceActive = false;
-        m_selectionBounceTime = 0.f;
+        endTouchScroll(0.f);
+        m_touchOwnsSelection = false;
+        m_pendingSettledFocusIndex = -1;
     }
+    // Focus is independent of the selected index and of a pending snap.
+    m_focusAmount.target(active ? 1.f : 0.f, active ? .21f : .17f);
     layoutAtScrollPosition();
 }
 
@@ -274,6 +257,7 @@ void IconGrid::layoutCarousel() {
         return;
     }
 
+    m_touchOwnsSelection = false;
     const int focusedGlobal = focusedGlobalIndex();
     int focusedDisplay = displayPositionForGlobalIndex(focusedGlobal);
 
@@ -327,19 +311,17 @@ void IconGrid::layoutAtScrollPosition() {
 
         const float logicalDistance =
             static_cast<float>(displayIndex) - m_carouselMotion.position;
-        float size = m_carouselFocusActive
-            ? switchu::homeui::carouselIconSizeForDistance(logicalDistance)
-            : switchu::homeui::kCarouselNeighborSize;
+        float size = switchu::homeui::kCarouselNeighborSize + m_focusAmount.value() *
+            (switchu::homeui::carouselIconSizeForDistance(logicalDistance) -
+             switchu::homeui::kCarouselNeighborSize);
 
-        if (m_carouselFocusActive &&
-            m_selectionBounceActive &&
-            std::abs(logicalDistance) < 0.035f) {
-            size *= switchu::homeui::carouselSelectionBounceScale(m_selectionBounceTime);
-        }
-
-        const float centerX = m_carouselFocusActive
-            ? screenCenterX + switchu::homeui::carouselCenterOffset(logicalDistance)
-            : screenCenterX + logicalDistance * (switchu::homeui::kCarouselNeighborSize + switchu::homeui::kCarouselGap);
+        // Interpolate the two pre-existing focus layouts. Both endpoint
+        // spacings and the entire focused horizontal motion remain unchanged.
+        const float restOffset = logicalDistance *
+            (switchu::homeui::kCarouselNeighborSize + switchu::homeui::kCarouselGap);
+        const float focusedOffset = switchu::homeui::carouselCenterOffset(logicalDistance);
+        const float centerX = screenCenterX + restOffset +
+            m_focusAmount.value() * (focusedOffset - restOffset);
 
         icon->setRect({
             centerX - size * 0.5f,
@@ -363,14 +345,25 @@ void IconGrid::beginTouchScroll() {
     if (!canTouchScroll())
         return;
 
+    m_touchOwnsSelection = true;
     switchu::homeui::beginCarouselTouch(m_carouselMotion, m_displayCount);
     m_pendingSettledFocusIndex = -1;
 }
 
 void IconGrid::dragTouchScroll(float deltaPixelsX) {
     if (switchu::homeui::dragCarouselTouch(
-            m_carouselMotion, deltaPixelsX, m_displayCount))
+            m_carouselMotion, deltaPixelsX, m_displayCount)) {
         layoutAtScrollPosition();
+        m_pendingSettledFocusIndex = globalIndexForDisplayPosition(
+            static_cast<int>(std::round(m_carouselMotion.position)));
+        publishTouchSelection();
+    }
+}
+
+void IconGrid::publishTouchSelection() {
+    if (!m_carouselFocusActive || !m_touchSelectionCb) return;
+    if (consumeSettledFocusIndex() >= 0)
+        m_touchSelectionCb(m_focus.current());
 }
 
 void IconGrid::endTouchScroll(float fingerVelocityPixelsPerSecond) {
@@ -384,9 +377,6 @@ void IconGrid::finishSnap() {
     m_carouselMotion.snapActive = false;
     m_carouselMotion.inertiaActive = false;
     m_carouselMotion.velocity = 0.f;
-    m_selectionBounceTime = 0.f;
-    m_selectionBounceActive = m_carouselFocusActive && m_entryBouncePending;
-    m_entryBouncePending = false;
 
     layoutAtScrollPosition();
 
@@ -397,8 +387,9 @@ void IconGrid::finishSnap() {
             std::max(0, m_displayCount - 1)
         );
 
-    m_pendingSettledFocusIndex =
-        globalIndexForDisplayPosition(targetDisplay);
+    if (m_carouselFocusActive && m_touchOwnsSelection)
+        m_pendingSettledFocusIndex = globalIndexForDisplayPosition(targetDisplay);
+    m_touchOwnsSelection = false;
 }
 
 int IconGrid::consumeSettledFocusIndex() {
@@ -569,7 +560,8 @@ void IconGrid::startWaveTransition(
 }
 
 void IconGrid::onUpdate(float dt) {
-    const float safeDt = std::max(0.f, dt);
+    const float safeDt = switchu::homeui::uiDelta(dt);
+    if (m_focusAmount.update(safeDt)) layoutAtScrollPosition();
     m_suspendedIdleTime += safeDt;
 
     if (m_suspendedTitleId != 0) {
@@ -601,21 +593,16 @@ void IconGrid::onUpdate(float dt) {
         m_displayCount <= 0)
         return;
 
-    if (m_selectionBounceActive) {
-        m_selectionBounceTime += std::max(0.f, dt);
-        if (m_selectionBounceTime >= kSelectionBounceDuration) {
-            m_selectionBounceTime = kSelectionBounceDuration;
-            m_selectionBounceActive = false;
-        }
-        layoutAtScrollPosition();
-    }
-
     const auto motionUpdate = switchu::homeui::updateCarouselMotion(
         m_carouselMotion, safeDt, m_displayCount);
     if (motionUpdate.changed)
         layoutAtScrollPosition();
+    if (m_touchOwnsSelection && m_carouselFocusActive && motionUpdate.changed)
+        m_pendingSettledFocusIndex = globalIndexForDisplayPosition(
+            static_cast<int>(std::round(m_carouselMotion.position)));
     if (motionUpdate.settled)
         finishSnap();
+    publishTouchSelection();
 
 }
 

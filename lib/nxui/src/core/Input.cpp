@@ -117,7 +117,9 @@ void Input::update() {
     m_ry = rs.y / 32767.f;
 
     HidTouchScreenState tState = {};
-    bool hardwareTouching = hidGetTouchScreenStates(&tState, 1) && tState.count > 0;
+    const unsigned contactCount = hidGetTouchScreenStates(&tState, 1) ? tState.count : 0;
+    bool hardwareTouching = m_contactGuard.update(contactCount,
+        contactCount ? tState.touches[0].finger_id : 0);
     float hardwareTouchX = hardwareTouching ? tState.touches[0].x : m_touchX;
     float hardwareTouchY = hardwareTouching ? tState.touches[0].y : m_touchY;
 
@@ -133,7 +135,7 @@ void Input::update() {
         std::abs(m_rx) >= kNavStickDisableThreshold ||
         std::abs(m_ry) >= kNavStickDisableThreshold;
 
-    if (hardwareTouching || navInputUsed) {
+    if (contactCount > 0 || navInputUsed) {
         m_virtualPointerEnabled = false;
     }
 
@@ -168,14 +170,14 @@ void Input::update() {
         m_touchY = m_virtualPointerY;
     }
 
-    bool virtualTouching = !hardwareTouching
+    bool virtualTouching = !hardwareTouching && !m_contactGuard.cancelled()
         && m_virtualPointerEnabled
         && (m_kHeld & static_cast<uint64_t>(Button::A));
 
     m_touching = hardwareTouching || virtualTouching;
 
     m_touchDown = (m_touching && !m_wasTouching);
-    m_touchUp   = (!m_touching && m_wasTouching);
+    m_touchUp   = (!m_touching && m_wasTouching && !m_contactGuard.cancelled());
 
     if (m_touchDown) {
         m_touchStartX = m_touchX;

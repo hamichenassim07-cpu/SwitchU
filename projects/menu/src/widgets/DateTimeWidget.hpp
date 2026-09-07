@@ -1,4 +1,5 @@
 #pragma once
+#include "HomeUiTween.hpp"
 #include <nxui/widgets/GlassWidget.hpp>
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Types.hpp>
@@ -21,7 +22,7 @@ public:
     void setHomeCategory(int category); // 0 Jeux, 1 Applications, 2 Musique
     int homeCategory() const { return m_homeCategory; }
     bool homeApplicationsActive() const { return m_homeCategory == 1; }
-    void setHomeTabsVisible(bool visible) { m_homeTabsVisible = visible; }
+    void setHomeTabsVisible(bool visible) { m_homeTabsVisible = visible; m_tabsReveal.target(visible ? 1.f : 0.f, .18f); }
     bool homeTabsVisible() const { return m_homeTabsVisible; }
     void setHomeTabsFocused(bool focused) { m_homeTabsFocused = focused; }
     nxui::Rect activeHomeTabRect() const;
@@ -47,6 +48,7 @@ private:
     int m_homeCategory = 0;
     bool m_homeTabsFocused = false;
     bool m_homeTabsVisible = true;
+    switchu::homeui::UiTween m_tabsReveal{1.f};
     float m_homeTabSlide = 0.f;
     float m_homeTabPop = 0.f;
     float m_homeTabAnimFrom = 0.f;

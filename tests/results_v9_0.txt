@@ -1,0 +1,23 @@
+SwitchU V9.0 Home Flow — vérifications exécutées le 2026-09-07
+
+Environnement : compilation C++ sur ordinateur, sans devkitPro ni Nintendo Switch.
+
+$ bash tools/run_host_contract_checks.sh
+Protected V8.9: 70 complete files + 109 source regions: OK
+V9.0 backgrounds, inherited satin mesh/geometry, exact HOME assets, UI layout and local build dependencies: OK
+Production navigation: Y toggles favourite without modal or navigation; repeated Minus, early B, 120 queue cycles, 4 origins, missing track and transition/modal guards: OK
+Actual V8.8 vs V8.9: 8001 size/spacing/angle samples; no new central intersection; extra overlap 0 px; reflection bound 606.648 < title 607: OK
+Actual HOME focus entry/exit: immediate centre resize without index change or snap, 100 reversals from current value, both original horizontal layouts preserved: OK
+Actual HOME composition: opaque fallback, custom still, still cross-fade without dip, video pre-roll/playback, video exit and failed-media fallback: OK (simulated decoded media, no MP4/device test)
+Actual Music touch: tap/subthreshold/swipe/reversal/release/cancel/multitouch signal/vertical excursion/outside/controller takeover; zero accidental openings or playback calls: OK
+Actual HOME touch: tap, swipe, return to carousel focus, finger reversal, release, cancellation, outside zone and physical control takeover: OK; no launch action exists in this handler
+HOME carousel/typography contract: OK
+Ambient palette/motion + real album metadata: OK
+Ambient palette/motion + real album metadata: OK
+Production ribbons: 23 s continuous motion, 850 ms palette path, bounded geometry, floor scissor; 30 s animation with ZERO allocations/uploads: OK
+Interruptible focus/pill, finite dt (including fast math), multitouch cancellation, bounded swipe/inertia, controller takeover, UTF-8 persistent favourites/resume and write failure rollback: OK
+Interruptible focus/pill, finite dt (including fast math), multitouch cancellation, bounded swipe/inertia, controller takeover, UTF-8 persistent favourites/resume and write failure rollback: OK
+SwitchU V9.0 host contracts: OK (not a Nintendo Switch build)
+
+$ bash tools/run_host_syntax_checks.sh
+V9.0 Music/HOME C++ syntax / actual nxui interfaces: OK (host declarations; no Switch link)

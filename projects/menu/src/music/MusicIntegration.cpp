@@ -10,6 +10,16 @@ void WiiUMenuApp::createMusic() {
     if (!m_musicScreen) {
         m_musicScreen = std::make_shared<switchu::menu::music::MusicScreen>();
         m_musicScreen->setFonts(&m_fontNormal, &m_fontSmall, &m_fontIcons);
+        m_musicScreen->onVisibilityChanged([this](bool active) {
+            if (!m_background) return;
+            if (active)
+                m_musicScreen->ambientBackground().copyMotionFrom(m_background->ambientBackground());
+            else
+                m_background->ambientBackground().copyMotionFrom(m_musicScreen->ambientBackground());
+            // Also covers system overlays/lockscreen closing Music directly.
+            m_background->setPreviewActive(!active);
+            m_background->setVisible(!active);
+        });
         m_musicScreen->onClose([this]() { closeMusic(); });
         m_musicScreen->onSessionGuard([this](bool active) {
             // V0.02: HOME BGM yields only when a real SwitchU Music session

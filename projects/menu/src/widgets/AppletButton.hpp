@@ -1,4 +1,5 @@
 #pragma once
+#include "HomeUiTween.hpp"
 #include <nxui/widgets/GlassWidget.hpp>
 #include <nxui/core/Texture.hpp>
 #include <nxui/core/I18n.hpp>
@@ -21,12 +22,13 @@ public:
     void setLabelKey(const std::string& key, const std::string& fallback = "");
     const std::string& label() const { return m_label; }
 
-    void onFocusGained() override { m_focused = true; }
-    void onFocusLost() override { m_focused = false; }
+    void onFocusGained() override { m_focused = true; m_focusAmount.target(1.f, .18f); }
+    void onFocusLost() override { m_focused = false; m_focusAmount.target(0.f, .15f); }
 
     bool hitTest(float sx, float sy) const { return m_rect.contains(sx, sy); }
 
 protected:
+    void onContentUpdate(float dt) override { m_focusAmount.update(dt); }
     void onContentRender(nxui::Renderer& ren) override;
 
 private:
@@ -37,6 +39,7 @@ private:
     bool m_chromeEnabled = true;
     bool m_selectionHaloEnabled = false;
     bool m_focused = false;
+    switchu::homeui::UiTween m_focusAmount;
     std::string m_label;
     std::string m_labelSource;
     std::string m_labelKey;

@@ -3,6 +3,7 @@
 #include <nxui/core/Renderer.hpp>
 
 #include <algorithm>
+#include "HomeControlFocus.hpp"
 
 UserAvatarButton::UserAvatarButton() {
     setCornerRadius(28.f);
@@ -40,29 +41,9 @@ void UserAvatarButton::onContentRender(nxui::Renderer& ren) {
         ? std::max(0.f, cornerRadius() - padding().top)
         : side * 0.5f;
 
-    // V10.12.1: profile selection is rendered locally around the avatar.
-    // No external moving cursor/widget is involved.
-    if (m_focused) {
-        const nxui::Rect haloRect = avatarRect.expanded(6.f);
-        const float haloRadius = haloRect.width * 0.5f;
-        ren.drawRoundedRect(
-            haloRect.expanded(2.f),
-            nxui::Color(1.f, 1.f, 1.f, 0.10f * alpha),
-            haloRadius + 2.f
-        );
-        ren.drawRoundedRectOutline(
-            haloRect.expanded(3.5f),
-            nxui::Color(1.f, 1.f, 1.f, 0.28f * alpha),
-            haloRadius + 3.5f,
-            6.f
-        );
-        ren.drawRoundedRectOutline(
-            haloRect,
-            nxui::Color(1.f, 1.f, 1.f, 0.98f * alpha),
-            haloRadius,
-            2.6f
-        );
-    }
+    const float focus = m_focusAmount.value();
+    avatarRect = avatarRect.expanded(side * .018f * focus);
+    switchu::homeui::drawControlFocus(ren, avatarRect, focus, alpha);
 
     if (m_avatarTexture.valid()) {
         ren.drawTextureRounded(&m_avatarTexture,

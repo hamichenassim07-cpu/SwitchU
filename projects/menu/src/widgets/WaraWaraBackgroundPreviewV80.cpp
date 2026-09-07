@@ -6,6 +6,7 @@
 // logiciel), avec deux textures statiques et deux textures video reutilisees.
 #define SWITCHU_V80_BACKGROUND_STRONG 1
 #include "WaraWaraBackground.hpp"
+#include "HomeUiTween.hpp"
 #include "core/DebugLog.hpp"
 #include "launcher/AppListLoader.hpp"
 
@@ -449,7 +450,24 @@ AmbientSwatch energizeAmbient(const AmbientSwatch& input) {
 
 void extractAmbientFromSelectedIcon(uint64_t titleId,
                                     AmbientSwatch& primary,
-                                    AmbientSwatch& secondary) {
+                                    AmbientSwatch& secondary,
+                                    switchu::menu::music::ambient::Palette& palette) {
+    using switchu::menu::music::ambient::Palette;
+    struct Entry { uint64_t title = 0; Palette palette{}; };
+    // This function is called exclusively by the existing single preview worker.
+    static std::array<Entry, 128> cache{};
+    static size_t cursor = 0;
+    for (const auto& entry : cache) {
+        if (titleId != 0 && entry.title == titleId) {
+            palette = entry.palette;
+            return;
+        }
+    }
+    auto sample = [&](const uint8_t* pixels, int w, int h) {
+        palette = switchu::menu::music::ambient::samplePalette(pixels, size_t(w) * size_t(h) * 4u, w, h);
+        cache[cursor] = {titleId, palette};
+        cursor = (cursor + 1) % cache.size();
+    };
     primary = defaultAmbientA();
     secondary = defaultAmbientB();
 
@@ -482,6 +500,7 @@ void extractAmbientFromSelectedIcon(uint64_t titleId,
         int channels = 0;
         uint8_t* pixels = stbi_load(builtInIconPath, &w, &h, &channels, 4);
         if (pixels && w > 0 && h > 0) {
+            sample(pixels, w, h);
             std::vector<uint8_t> rgba(
                 pixels,
                 pixels + static_cast<size_t>(w) * static_cast<size_t>(h) * 4u
@@ -525,6 +544,7 @@ void extractAmbientFromSelectedIcon(uint64_t titleId,
         return;
     }
 
+    sample(pixels, w, h);
     std::vector<uint8_t> rgba(
         pixels,
         pixels + static_cast<size_t>(w) * static_cast<size_t>(h) * 4u
@@ -534,6 +554,8 @@ void extractAmbientFromSelectedIcon(uint64_t titleId,
 }
 
 struct DecodedPreview {
+    switchu::menu::music::ambient::Palette iconPalette{};
+    bool hasVideo = false;
     uint64_t titleId = 0;
     std::string path;
     std::vector<uint8_t> rgba;
@@ -576,8 +598,9 @@ void decodePreviewOnWorker(const std::shared_ptr<DecodedPreview>& out) {
     extractAmbientFromSelectedIcon(
         out->titleId,
         out->glowPrimary,
-        out->glowSecondary
+        out->glowSecondary, out->iconPalette
     );
+    out->hasVideo = !videoPathFor(out->titleId).empty();
 
     out->path = previewPathFor(out->titleId);
     if (out->path.empty()) {
@@ -1448,6 +1471,8 @@ struct WaraPreviewRuntime {
     uint64_t transitionTargetTitle = 0;
     uint64_t nextTitle = 0;
 
+    bool currentHasVideo = false, nextHasVideo = false;
+    uint64_t paletteTitle = 0;
     float stableTimer = 0.f;
     // V10: independent selection timer. Unlike stableTimer, it keeps running
     // after the static background has resolved so video can start at T+5 s.
@@ -1542,6 +1567,7 @@ void pollDecodeResult(WaraPreviewRuntime& r) {
 void scheduleDecodeIfNeeded(WaraPreviewRuntime& r) {
     if (r.requestedTitle == 0 ||
         r.requestedTitle == r.resolvedTitle ||
+        (r.transitioning && r.transitionTargetTitle == r.requestedTitle) ||
         r.decodeInFlight ||
         r.ready ||
         r.stableTimer < kPreviewDebounce)
@@ -1659,6 +1685,7 @@ void processReadyFallback(WaraPreviewRuntime& r) {
     const bool hadAsset = r.ready->hasAsset;
     const AmbientSwatch readyGlowPrimary = r.ready->glowPrimary;
     const AmbientSwatch readyGlowSecondary = r.ready->glowSecondary;
+    r.nextHasVideo = r.ready->hasVideo;
     r.nextGlowPrimary = readyGlowPrimary;
     r.nextGlowSecondary = readyGlowSecondary;
     r.ready.reset();
@@ -1754,6 +1781,9 @@ void WaraWaraBackground::setPreviewActive(bool active) {
         r.fade = 0.f;
         r.transitioning = false;
         r.currentAvailable = false;
+        r.currentHasVideo = false;
+        r.nextHasVideo = false;
+        r.paletteTitle = 0;
         r.nextAvailable = false;
         r.currentIndex = 0;
         r.nextIndex = 1;
@@ -1805,28 +1835,8 @@ void WaraWaraBackground::setPreviewActive(bool active) {
 }
 
 void WaraWaraBackground::onUpdate(float dt) {
-    // Fond historique conserve a l'identique.
-    m_time += dt;
-    for (auto& s : m_shapes) {
-        if (m_config.layout == Layout::Floating) {
-            const float top = m_rect.y - s.size - 20.f;
-            const float bottom = m_rect.y +
-                ((m_rect.height > 1.f) ? m_rect.height : 720.f) + s.size + 20.f;
-            const float left = m_rect.x;
-            const float width = (m_rect.width > 1.f) ? m_rect.width : 1280.f;
-            s.pos.y -= s.speed * dt;
-            s.pos.x += std::sin(m_time * 0.7f + s.phase) * s.wobble * dt;
-            s.pos.x = wrapValueV80(s.pos.x,
-                                   left - s.size,
-                                   left + width + s.size);
-            if (s.pos.y + s.size < top) {
-                s.pos.y = bottom;
-                s.pos.x = left + random01V80() * width;
-            }
-        }
-        s.rotation += s.rotSpeed * dt;
-    }
-
+    dt = switchu::homeui::uiDelta(dt);
+    m_ambientBackground.update(dt);
     if (!m_previewActive)
         return;
 
@@ -1837,21 +1847,21 @@ void WaraWaraBackground::onUpdate(float dt) {
     const uint64_t selected =
         g_selectedGameTitle.load(std::memory_order_relaxed);
 
+    if (!selected) m_ambientBackground.setPalette({});
+
     if (selected != r.requestedTitle) {
         r.requestedTitle = selected;
         r.stableTimer = 0.f;
         r.selectionTimer = 0.f;
 
-        // Cancel a half-finished static transition. The currently visible still
-        // remains as a temporary bridge until the new selection is decoded.
+        // Finish the visible cross-fade while the latest request decodes.
+        // Dropping nextAvailable here used to expose the old still in one frame.
         r.ready.reset();
-        r.nextAvailable = false;
-        r.nextTitle = 0;
-        r.transitionTargetTitle = 0;
-        r.fade = 0.f;
-        r.transitioning = false;
+        r.paletteTitle = 0;
 
-        if (selected == 0) {
+        if (selected == 0 && !r.transitioning) {
+            m_ambientBackground.setPalette({});
+            r.nextHasVideo = false;
             // Empty category: gently leave the previous still and return to the
             // normal Switch U theme background.
             if (r.currentAvailable) {
@@ -1895,6 +1905,19 @@ void WaraWaraBackground::onUpdate(float dt) {
     }
 
     pollDecodeResult(r);
+    if (r.ready && r.ready->titleId == r.requestedTitle && r.paletteTitle != r.requestedTitle) {
+        m_ambientBackground.setPalette(r.ready->iconPalette);
+        r.paletteTitle = r.requestedTitle;
+    }
+    // Also resolve an empty category after an interrupted custom-media fade.
+    if (!r.requestedTitle && !r.transitioning && (r.currentAvailable || r.currentHasVideo)) {
+        r.nextAvailable = false;
+        r.nextHasVideo = false;
+        r.transitionTargetTitle = 0;
+        r.fade = 0.f;
+        r.transitioning = true;
+        m_ambientBackground.setPalette({});
+    }
     scheduleDecodeIfNeeded(r);
     processReadyFallback(r);
 
@@ -2008,6 +2031,7 @@ void WaraWaraBackground::onUpdate(float dt) {
                 r.currentGlowSecondary = r.nextGlowSecondary;
             }
 
+            r.currentHasVideo = r.nextHasVideo;
             r.nextAvailable = false;
             r.nextTitle = 0;
             r.transitionTargetTitle = 0;
@@ -2021,89 +2045,15 @@ void WaraWaraBackground::onUpdate(float dt) {
 }
 
 void WaraWaraBackground::onRender(nxui::Renderer& ren) {
-    // V10.28 default HOME background: lightweight procedural CRT. It replaces
-    // the old purple floating-shape scene without allocating new textures or a
-    // 3D scene. Broad curved bands + restrained scanlines reproduce the visual
-    // reference while keeping the background cheap.
-    const nxui::Rect crtArea = {
-        m_rect.x,
-        m_rect.y,
-        (m_rect.width > 1.f) ? m_rect.width : 1280.f,
-        (m_rect.height > 1.f) ? m_rect.height : 720.f
-    };
-    const float crtAlpha = std::clamp(m_opacity, 0.f, 1.f);
-    ren.useShader(nxui::ShaderProgram::Basic);
-    ren.drawRect(crtArea, nxui::Color(0.068f, 0.073f, 0.081f, crtAlpha));
-
-    constexpr int kCrtBands = 8;
-    constexpr int kCrtSlices = 14;
-    const float bandW = crtArea.width / static_cast<float>(kCrtBands);
-    const float sliceH = crtArea.height / static_cast<float>(kCrtSlices);
-    const float drift = std::sin(m_time * 0.075f) * 5.f;
-
-    for (int band = 0; band < kCrtBands; ++band) {
-        const bool lighter = (band & 1) != 0;
-        const nxui::Color bandColor = lighter
-            ? nxui::Color(0.132f, 0.141f, 0.154f, 0.38f * crtAlpha)
-            : nxui::Color(0.027f, 0.031f, 0.038f, 0.42f * crtAlpha);
-
-        for (int slice = 0; slice < kCrtSlices; ++slice) {
-            const float y0 = crtArea.y + slice * sliceH;
-            const float yn = ((slice + 0.5f) / static_cast<float>(kCrtSlices)) * 2.f - 1.f;
-            const float curve = (yn * yn - 0.38f) * 24.f;
-            const float direction = (band < kCrtBands / 2) ? -1.f : 1.f;
-            const float x0 =
-                crtArea.x + band * bandW + direction * curve + drift;
-            ren.drawRect(
-                {x0 - 5.f, y0, bandW + 10.f, sliceH + 1.5f},
-                bandColor
-            );
-        }
-    }
-
-    // Fine scanlines: visible enough to read as CRT at 720p, but never noisy.
-    for (float y = crtArea.y + 3.f; y < crtArea.y + crtArea.height; y += 9.f) {
-        ren.drawRect(
-            {crtArea.x, y, crtArea.width, 1.f},
-            nxui::Color(0.f, 0.f, 0.f, 0.070f * crtAlpha)
-        );
-    }
-
-    // Soft vignette made from simple edge bands; no expensive post-process.
-    constexpr float kVignette = 74.f;
-    ren.drawGradientRect(
-        {crtArea.x, crtArea.y, crtArea.width, kVignette},
-        nxui::Color(0.f, 0.f, 0.f, 0.28f * crtAlpha),
-        nxui::Color(0.f, 0.f, 0.f, 0.00f)
-    );
-    ren.drawGradientRect(
-        {crtArea.x, crtArea.y + crtArea.height - kVignette,
-         crtArea.width, kVignette},
-        nxui::Color(0.f, 0.f, 0.f, 0.00f),
-        nxui::Color(0.f, 0.f, 0.f, 0.34f * crtAlpha)
-    );
-    ren.drawRect(
-        {crtArea.x, crtArea.y, 34.f, crtArea.height},
-        nxui::Color(0.f, 0.f, 0.f, 0.16f * crtAlpha)
-    );
-    ren.drawRect(
-        {crtArea.x + crtArea.width - 34.f, crtArea.y, 34.f, crtArea.height},
-        nxui::Color(0.f, 0.f, 0.f, 0.16f * crtAlpha)
-    );
-
-    // Explicit theme imagery can still sit above the new default CRT base.
-    if (m_backgroundImage.valid() && m_config.imageOpacity > 0.f) {
-        ren.drawTexture(&m_backgroundImage,
-                        backgroundImageRect(),
-                        nxui::Color::white().withAlpha(
-                            m_config.imageOpacity * m_opacity));
-    }
-
-    ren.flush();
-
-    if (!m_previewActive)
+    if (!m_previewActive) {
+        m_ambientBackground.drawBase(ren, m_opacity);
+        // The user-theme texture is shared with the lockscreen presentation.
+        // It is never part of active HOME fallback or of the Music render tree.
+        if (m_backgroundImage.valid() && m_config.imageOpacity > 0.f)
+            ren.drawTexture(&m_backgroundImage, backgroundImageRect(),
+                nxui::Color::white().withAlpha(m_config.imageOpacity * m_opacity));
         return;
-
+    }
     auto runtime = ensureRuntime(m_previewRuntime);
     WaraPreviewRuntime& r = *runtime;
 
@@ -2253,6 +2203,7 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         r.frameCounter >= r.slotSafeAfterFrame[r.nextIndex]) {
 
         const auto ready = r.ready;
+        r.nextHasVideo = ready->hasVideo;
         r.ready.reset();
         r.nextGlowPrimary = ready->glowPrimary;
         r.nextGlowSecondary = ready->glowSecondary;
@@ -2345,13 +2296,34 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
         (m_rect.height > 1.f) ? m_rect.height : 720.f
     };
 
+    const bool currentImage = r.currentAvailable && r.textures[r.currentIndex].valid();
+    const bool nextImage = r.nextAvailable && r.textures[r.nextIndex].valid();
+    bool usableVideo = false;
+#ifdef SWITCHU_V81_FFMPEG
+    usableVideo = videoPlaybackEnabled() && !r.videoFallbackRequired;
+#endif
+    const bool currentFallback = !currentImage && !(r.currentHasVideo && usableVideo);
+    const bool nextFallback = !nextImage && !(r.nextHasVideo && usableVideo);
+    const float blend = r.transitioning ? smoothStep01(r.fade) : 0.f;
+    m_ambientBackground.drawBase(ren, m_opacity);
+    if (currentFallback || (r.transitioning && nextFallback)) {
+        // One opaque base; only the endpoints of a media handoff coexist.
+        float ribbonAlpha = currentFallback ? 1.f : blend;
+        if (r.transitioning && !nextFallback) ribbonAlpha = 1.f - blend;
+        if ((currentFallback && nextFallback) || currentImage || nextImage) ribbonAlpha = 1.f;
+#ifdef SWITCHU_V81_FFMPEG
+        if (r.videoHasCurrent && r.videoOpacity > .001f) ribbonAlpha = 1.f;
+#endif
+        m_ambientBackground.draw(ren, ribbonAlpha * m_opacity, 494.f);
+    }
+
     float previewVisualAlpha = 0.f;
 
     if (r.transitioning) {
         const float t = smoothStep01(r.fade);
 
         if (r.currentAvailable && r.textures[r.currentIndex].valid()) {
-            const float a = 1.f - t;
+            const float a = nextImage ? 1.f : 1.f - t;
             if (a > 0.001f) {
                 const auto& tex = r.textures[r.currentIndex];
                 tex.draw(ren,
@@ -2382,7 +2354,6 @@ void WaraWaraBackground::onRender(nxui::Renderer& ren) {
 
 #ifdef SWITCHU_V81_FFMPEG
     if (r.videoHasCurrent &&
-        r.videoCurrentTitle == r.requestedTitle &&
         r.videoTextures[r.videoCurrentIndex].valid() &&
         r.videoOpacity > 0.001f) {
         const auto& videoTexture = r.videoTextures[r.videoCurrentIndex];

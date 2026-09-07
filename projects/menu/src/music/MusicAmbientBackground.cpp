@@ -27,6 +27,12 @@ float visibility(float y, float floorY) {
 }
 }
 
+void MusicAmbientBackground::drawBase(nxui::Renderer& ren, float alpha) {
+    ren.drawGradientRect({0.f, 0.f, 1280.f, 720.f},
+                        {0.026f, 0.029f, 0.037f, alpha},
+                        {0.009f, 0.011f, 0.016f, alpha});
+}
+
 void MusicAmbientBackground::draw(nxui::Renderer& ren, float alpha, float floorY) {
     if (alpha <= 0.f || floorY <= 142.f) return;
     const auto& palette = m_motion.palette().colours;
@@ -71,7 +77,7 @@ void MusicAmbientBackground::draw(nxui::Renderer& ren, float alpha, float floorY
             const auto body = mix(palette[colourIndex],palette[(colourIndex+1)%3],column.tintMix*0.32f);
             const float peak = std::max({body.r,body.g,body.b});
             for (size_t j = 0; j < section.size(); ++j) {
-                const float y = column.centre + (section[j]*2.f-1.f)*column.halfWidth;
+                const float y = column.centre - 18.f + (section[j]*2.f-1.f)*column.halfWidth;
                 const float upper = j == 1 || j == 2 ? column.upperLight : 0.f;
                 const float lower = j == 8 || j == 9 ? column.lowerLight : 0.f;
                 const float sheen = std::max(upper, lower*0.72f);

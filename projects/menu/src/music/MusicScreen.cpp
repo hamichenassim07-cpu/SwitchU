@@ -275,10 +275,12 @@ void MusicScreen::setupActions() {
         // Music is the right-most HOME category; R intentionally has no root action.
     });
     addAction(static_cast<uint64_t>(nxui::Button::ZL), [this]() {
+        if (m_modal == Modal::None && m_view == View::Albums) { nextFavourite(-1); return; }
         if (m_modal == Modal::None && m_view == View::NowPlaying && !contentTransitionBusy())
             seekRelative(-10'000);
     });
     addAction(static_cast<uint64_t>(nxui::Button::ZR), [this]() {
+        if (m_modal == Modal::None && m_view == View::Albums) { nextFavourite(1); return; }
         if (m_modal == Modal::None && m_view == View::NowPlaying && !contentTransitionBusy())
             seekRelative(10'000);
     });
@@ -314,6 +316,9 @@ void MusicScreen::setupActions() {
 
 void MusicScreen::show() {
     DebugLog::log("[music-diag] OPEN_MUSIC begin");
+    if (!m_active && m_visibilityCb) m_visibilityCb(true);
+    m_ambientCoverRef = nullptr;
+    m_ambientScanGeneration = ~uint64_t(0);
     m_active = true;
     m_closing = false;
     m_transitionAlpha = 0.f;
@@ -324,7 +329,12 @@ void MusicScreen::show() {
     m_nowPlayingReturnView = View::Albums;
     m_queueReturnView = View::NowPlaying;
     m_selection = 0;
-    switchu::homeui::jumpCarouselTo(m_rootCarouselMotion, 0, rootItemCount());
+    if (!m_preferencesLoaded) {
+        m_preferences.load();
+        m_preferencesLoaded = true;
+    }
+    restoreAlbumSelection();
+    switchu::homeui::jumpCarouselTo(m_rootCarouselMotion, m_selection, rootItemCount());
     m_listVisualSelection = 0.f;
     m_detailTransition = 1.f;
     m_detailClosing = false;
@@ -353,6 +363,8 @@ void MusicScreen::show() {
 void MusicScreen::hide() {
     DebugLog::log("[music-diag] CLOSE_MUSIC hide session=%d cache=%zu",
                   hasMusicSession() ? 1 : 0, m_coverCache.size());
+    if (m_active && m_visibilityCb) m_visibilityCb(false);
+    if (!m_preferences.save()) DebugLog::log("[music-ui] preferences save failed");
     m_active = false;
     m_closing = false;
     m_transitionAlpha = 0.f;
@@ -386,7 +398,7 @@ void MusicScreen::finishScanIfReady() {
     if (m_scanFuture.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
         return;
 
-    std::string selectedAlbumKey;
+    std::string selectedAlbumKey = m_hasScanned ? std::string{} : m_preferences.lastAlbum();
     std::string selectedPlaylistId;
     if (m_view == View::Albums && m_selection >= 0 && static_cast<size_t>(m_selection) < m_library.albums.size())
         selectedAlbumKey = m_library.albums[static_cast<size_t>(m_selection)].key;
@@ -491,6 +503,21 @@ void MusicScreen::refreshStatus(bool force) {
 
 
 void MusicScreen::onUpdate(float dt) {
+    if (m_homeClockWidget && m_active)
+        m_homeClockWidget->setHomeTabsVisible(rootView());
+    if (m_active && m_view == View::Albums && !m_scanRunning &&
+        m_selection >= 0 && size_t(m_selection) < m_library.albums.size()) {
+        if (m_rememberedSelection != m_selection) {
+            m_rememberedSelection = m_selection;
+            m_preferences.remember(m_library.albums[size_t(m_selection)].key);
+            m_preferencesSaveDelay = 1.2f;
+        }
+    }
+    if (m_preferencesSaveDelay > 0.f) {
+        m_preferencesSaveDelay = std::max(0.f, m_preferencesSaveDelay - switchu::homeui::uiDelta(dt));
+        if (m_preferencesSaveDelay == 0.f) m_preferences.save();
+    }
+    m_uiNoticeTimer = std::max(0.f, m_uiNoticeTimer - switchu::homeui::uiDelta(dt));
     m_uiTime += dt;
     m_statusTimer += dt;
     if (m_nextToastTimer > 0.f) m_nextToastTimer = std::max(0.f, m_nextToastTimer - dt);
@@ -539,7 +566,7 @@ void MusicScreen::onUpdate(float dt) {
     if (rootView()) {
         const auto motion = switchu::homeui::updateCarouselMotion(
             m_rootCarouselMotion, std::max(0.f, dt), rootItemCount());
-        if (motion.settled) {
+        if (motion.settled || m_rootCarouselMotion.inertiaActive) {
             const int settled = std::clamp(
                 static_cast<int>(std::round(m_rootCarouselMotion.position)),
                 0, std::max(0, rootItemCount() - 1));
@@ -980,11 +1007,37 @@ void MusicScreen::contextualX() {
         openPlaylistChooser(m_library.tracks[ti].id);
 }
 
+void MusicScreen::restoreAlbumSelection() {
+    const auto& saved = m_preferences.lastAlbum();
+    for (size_t i = 0; i < m_library.albums.size(); ++i)
+        if (m_library.albums[i].key == saved) { m_selection = static_cast<int>(i); break; }
+    m_rememberedSelection = -1;
+}
+
+void MusicScreen::nextFavourite(int direction) {
+    if (m_scanRunning || m_closing || contentTransitionBusy() || m_library.albums.empty()) return;
+    const int count = static_cast<int>(m_library.albums.size());
+    for (int step = 1; step <= count; ++step) {
+        const int index = (m_selection + direction * step + count) % count;
+        if (m_preferences.favourite(m_library.albums[size_t(index)].key)) {
+            m_selection = index;
+            m_rootInfoReveal = 0.f;
+            retargetRootCarousel(false);
+            return;
+        }
+    }
+    m_uiNotice = "Y : ajouter un album aux favoris";
+    m_uiNoticeTimer = 2.5f;
+}
+
 void MusicScreen::contextualY() {
     if (m_scanRunning || m_closing || contentTransitionBusy()) return;
     if (m_view == View::Albums && m_selection >= 0 && size_t(m_selection) < m_library.albums.size()) {
-        m_albumDetails.open(m_library.albums[size_t(m_selection)],m_library,m_font);
-        m_modal = Modal::AlbumInformation;
+        const auto& key = m_library.albums[size_t(m_selection)].key;
+        if (!m_preferences.toggle(key)) {
+            m_uiNotice = "Favori non enregistré : vérifier la carte SD";
+            m_uiNoticeTimer = 3.f;
+        }
         return;
     }
     if (rootView()) return;
@@ -1045,10 +1098,6 @@ void MusicScreen::openPlaylistChooser(uint64_t trackId) {
 }
 
 void MusicScreen::modalMove(int dx, int dy) {
-    if (m_modal == Modal::AlbumInformation) {
-        m_albumDetails.move(dy != 0 ? dy : dx);
-        return;
-    }
     if (m_modal == Modal::PlaylistChooser) {
         if (!m_playlistStore.playlists().empty()) {
             m_modalSelection += (dy != 0 ? dy : dx);
@@ -1064,7 +1113,6 @@ void MusicScreen::modalMove(int dx, int dy) {
 }
 
 void MusicScreen::modalActivate() {
-    if (m_modal == Modal::AlbumInformation) { modalCancel(); return; }
     if (m_modal == Modal::PlaylistChooser) {
         if (m_modalSelection >= 0 && static_cast<size_t>(m_modalSelection) < m_playlistStore.playlists().size()) {
             m_playlistStore.addTrack(static_cast<size_t>(m_modalSelection), m_pendingPlaylistTrackId);
@@ -1108,7 +1156,6 @@ void MusicScreen::modalConfirm() {
 }
 
 void MusicScreen::modalCancel() {
-    if (m_modal == Modal::AlbumInformation) m_albumDetails.clear();
     m_pendingPlaylistTrackId = 0;
     m_modal = Modal::None;
 }
@@ -1390,7 +1437,7 @@ void MusicScreen::drawAlbumInformation(nxui::Renderer& ren, const Album& album, 
 
     // HOME composition: one fixed screen-space centre, a bounded title, then
     // secondary information with measured icon/text centring. The title begins
-    // after the worst-case reflection (606.7 px, including bounce and inertia).
+    // in the reserved information band; glyph ink starts below the reflection tail.
     ren.pushClipRect({albumui::kCentreX-albumui::kTitleWidth*.5f, albumui::kTitleY, albumui::kTitleWidth, 36.f});
     ren.drawText(info.title, {albumui::kCentreX - info.titleWidth*0.5f, albumui::kTitleY},
                  m_font, textPrimary(alpha), info.titleScale);
@@ -1399,6 +1446,9 @@ void MusicScreen::drawAlbumInformation(nxui::Renderer& ren, const Album& album, 
     ren.drawText(info.artist, {albumui::kCentreX - info.artistWidth*0.5f, albumui::kArtistY},
                  m_font, textSecondary(0.98f*alpha), info.artistScale);
     ren.popClipRect();
+
+    ren.drawRect({albumui::kCentreX - 100.f, albumui::kSeparatorY, 200.f, 1.f},
+                 textSecondary(.32f * alpha));
 
     constexpr float iconClockW = albumui::kClockSize, noteW = 28.f;
     constexpr float iconGap = albumui::kIconGap, groupGap = albumui::kGroupGap;
@@ -1491,12 +1541,10 @@ PhysicalMediaGeometry MusicScreen::drawPhysicalMedia(nxui::Renderer& ren,
 void MusicScreen::drawMusicBackground(nxui::Renderer& ren) {
     const float a = gMusicUiAlpha;
 
-    // Keep the original base and floor; ambient light is clipped above the floor.
-    ren.drawGradientRect({0.f, 0.f, kScreenW, kScreenH},
-                         {0.026f, 0.029f, 0.037f, a},
-                         {0.009f, 0.011f, 0.016f, a});
-
-    m_ambientBackground.draw(ren, a, kFloorY);
+    // Music owns its only background. HOME is render-silent while this
+    // surface is active; opacity 1 keeps content transitions free of holes.
+    m_ambientBackground.drawBase(ren);
+    m_ambientBackground.draw(ren, 1.f, kFloorY);
 
     // Reflective floor / Hi-Fi presentation surface.
     ren.drawGradientRect({0.f, kFloorY, kScreenW, kFloorH},
@@ -1702,7 +1750,12 @@ void MusicScreen::drawAlbums(nxui::Renderer& ren) {
         ren.drawText(label, {x, 671.f}, m_font,
                      textSecondary(0.97f * infoAlpha), labelScale);
     };
-    drawRootAction(44.f, nxui::Button::Y, "Fiche album");
+    const bool favourite = m_preferences.favourite(album.key);
+    drawRootAction(44.f, nxui::Button::Y, favourite ? "Retirer favori" : "Favori");
+    if (m_preferences.favouriteCount() > 0) {
+        // A compact functional hint in the free left footer area, outside metadata.
+        ren.drawText("ZL/ZR  Favoris", {44.f, 640.f}, m_font, textSecondary(.85f), .80f);
+    }
     drawRootAction(990.f, nxui::Button::X, "Lecture");
     drawRootAction(1127.f, nxui::Button::A, "Ouvrir");
 
@@ -2385,10 +2438,6 @@ void MusicScreen::drawBottomHints(nxui::Renderer& ren) {
 
 void MusicScreen::drawModal(nxui::Renderer& ren) {
     if (m_modal == Modal::None || !m_font) return;
-    if (m_modal == Modal::AlbumInformation) {
-        m_albumDetails.draw(ren,m_font,m_iconFont,gMusicUiAlpha);
-        return;
-    }
     ren.drawRect({0,0,kScreenW,kScreenH}, {0.f,0.f,0.f,0.62f * gMusicUiAlpha});
     nxui::Rect p{180.f, 115.f, 920.f, 480.f};
     const nxui::LiquidGlassSettings modalGlass = ren.liquidGlassSettings();
@@ -2484,6 +2533,11 @@ void MusicScreen::onRender(nxui::Renderer& ren) {
         }
     }
 
+    if (m_uiNoticeTimer > 0.f && rootView() && m_font) {
+        const float a = std::min(1.f, m_uiNoticeTimer / .15f);
+        ren.drawRoundedRect({338.f, 112.f, 604.f, 42.f}, {.035f,.041f,.055f,.94f*a*gMusicUiAlpha}, 12.f);
+        ren.drawText(m_uiNotice, {352.f, 119.f}, m_font, textPrimary(a), .8f);
+    }
     drawBottomHints(ren);
     drawModal(ren);
     gMusicUiAlpha = 1.f;
@@ -2526,6 +2580,21 @@ void MusicScreen::handleTouch(nxui::Input& input) {
         return -1;
     };
 
+    const bool physicalAction = input.isDown(nxui::Button::DLeft) || input.isDown(nxui::Button::DRight) ||
+        input.isDown(nxui::Button::DUp) || input.isDown(nxui::Button::DDown) ||
+        input.isDown(nxui::Button::LStickL) || input.isDown(nxui::Button::LStickR) ||
+        (input.isDown(nxui::Button::A) && !input.pointerConsumesButton(nxui::Button::A)) || input.isDown(nxui::Button::B) ||
+        input.isDown(nxui::Button::L) || input.isDown(nxui::Button::Minus);
+    const bool outside = input.isTouching() && m_touchStartedInCarousel &&
+        (input.touchY() < kCarouselTouchTop - 48.f || input.touchY() > kCarouselTouchBottom + 48.f);
+    if (input.touchCancelled() || (physicalAction && m_touchStartedInCarousel) || outside) {
+        switchu::homeui::endCarouselTouch(m_rootCarouselMotion, 0.f, rootItemCount());
+        m_touchTracking = false;
+        m_touchTimelineScrub = false;
+        resetRootTouch();
+        return;
+    }
+
     if (input.touchDown()) {
         m_idleTime = 0.f;
         m_touchTracking = true;
@@ -2555,6 +2624,12 @@ void MusicScreen::handleTouch(nxui::Input& input) {
             std::abs(totalDx) >= kScrollStartThreshold &&
             std::abs(totalDx) > std::abs(totalDy) * kHorizontalIntentRatio;
 
+        if (!m_touchScrollActive && std::abs(totalDy) >= kScrollStartThreshold &&
+            std::abs(totalDy) >= std::abs(totalDx)) {
+            m_touchTracking = false;
+            resetRootTouch();
+            return;
+        }
         if (!m_touchScrollActive && horizontalGesture &&
             switchu::homeui::canTouchCarousel(rootItemCount())) {
             m_touchScrollActive = true;
@@ -2573,9 +2648,12 @@ void MusicScreen::handleTouch(nxui::Input& input) {
                 const float instantVelocity = frameDx / frameDt;
                 m_touchScrollVelocity =
                     m_touchScrollVelocity * 0.62f + instantVelocity * 0.38f;
-            }
+            } else if (frameDt >= .10f) { m_touchScrollVelocity = 0.f; }
             switchu::homeui::dragCarouselTouch(
-                m_rootCarouselMotion, frameDx, rootItemCount());
+                m_rootCarouselMotion, frameDx, rootItemCount(), kMusicCarouselFirstOffset);
+            const int nearest = std::clamp(int(std::round(m_rootCarouselMotion.position)),
+                                           0, std::max(0, rootItemCount() - 1));
+            if (nearest != m_selection) { m_selection = nearest; m_rootInfoReveal = 0.f; }
             return;
         }
     }
@@ -2596,7 +2674,7 @@ void MusicScreen::handleTouch(nxui::Input& input) {
 
     if (m_touchScrollActive) {
         switchu::homeui::endCarouselTouch(
-            m_rootCarouselMotion, m_touchScrollVelocity, rootItemCount());
+            m_rootCarouselMotion, m_touchScrollVelocity, rootItemCount(), kMusicCarouselFirstOffset);
         m_touchTimelineScrub = false;
         resetRootTouch();
         return;

@@ -1169,6 +1169,15 @@ void WiiUMenuApp::wireFocusCallback() {
         m_clock->clearActions();
     }
 
+    m_grid->onTouchSelection([this](nxui::Widget* target) {
+        // Publish the touched/inertial index in the same update that moves it.
+        // The next physical input cannot act on the previous frame's index.
+        if (!target || (m_musicScreen && m_musicScreen->isActive())) return;
+        m_suppressNextNavigateSfx = true;
+        focusManager().setFocus(target);
+        updateCursor();
+    });
+
     focusManager().onFocusChanged([this](nxui::Widget*, nxui::Widget* cur) {
         if (!m_profileTitlePill && m_contentLayer) {
             // V10.7: dedicated profile pill using the exact Switch U master
@@ -2004,6 +2013,23 @@ void WiiUMenuApp::handleTouch() {
             return static_cast<GlossyIcon*>(cur);
         };
 
+    const bool physicalAction = input.isDown(nxui::Button::DLeft) || input.isDown(nxui::Button::DRight) ||
+        input.isDown(nxui::Button::DUp) || input.isDown(nxui::Button::DDown) ||
+        input.isDown(nxui::Button::LStickL) || input.isDown(nxui::Button::LStickR) ||
+        (input.isDown(nxui::Button::A) && !input.pointerConsumesButton(nxui::Button::A)) || input.isDown(nxui::Button::B) ||
+        input.isDown(nxui::Button::L) || input.isDown(nxui::Button::R);
+    const bool outside = input.isTouching() && m_touchStartedInGrid &&
+        (input.touchY() < kCarouselTouchTop - 48.f || input.touchY() > kCarouselTouchBottom + 48.f);
+    if (input.touchCancelled() || physicalAction || outside) {
+        if (m_grid && m_grid->isTouchScrolling()) m_grid->endTouchScroll(0.f);
+        m_touchHitIndex = -1;
+        m_touchAvatarTarget = nullptr;
+        m_touchAvatarWasFocused = false;
+        m_touchOnFocused = false;
+        resetScrollState();
+        return;
+    }
+
     if (input.touchDown()) {
         const float tx = input.touchX();
         const float ty = input.touchY();
@@ -2046,12 +2072,22 @@ void WiiUMenuApp::handleTouch() {
             std::abs(totalDx) >= kScrollStartThreshold &&
             std::abs(totalDx) > std::abs(totalDy) * kHorizontalIntentRatio;
 
+        if (!m_touchScrollActive && std::abs(totalDy) >= kScrollStartThreshold &&
+            std::abs(totalDy) >= std::abs(totalDx)) {
+            m_touchHitIndex = -1;
+            m_touchAvatarTarget = nullptr;
+            m_touchStartedInGrid = false;
+        }
         // Never let touch alter a controller-driven move operation. While move
         // mode is active, the carousel is intentionally controller-only.
         if (!m_editMode && !m_touchScrollActive && m_touchStartedInGrid &&
             horizontalGesture && m_grid && m_grid->canTouchScroll()) {
             m_touchScrollActive = true;
             m_touchOnFocused = false;
+            // An outside focus must enter the carousel before the drag starts.
+            // Restore the current card without retargeting the touched position.
+            if (auto* selected = m_grid->focusManager().current()) focusManager().setFocus(selected);
+            m_grid->setCarouselFocusActive(true);
             m_grid->beginTouchScroll();
         }
 
@@ -2068,7 +2104,7 @@ void WiiUMenuApp::handleTouch() {
                 const float instantVelocity = frameDx / frameDt;
                 m_touchScrollVelocity =
                     m_touchScrollVelocity * 0.62f + instantVelocity * 0.38f;
-            }
+            } else if (frameDt >= .10f) { m_touchScrollVelocity = 0.f; }
 
             m_grid->dragTouchScroll(frameDx);
             updateCursor();

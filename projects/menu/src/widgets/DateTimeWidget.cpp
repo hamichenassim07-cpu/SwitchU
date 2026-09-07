@@ -118,6 +118,7 @@ void DateTimeWidget::setUse12HourClock(bool enabled) {
 }
 
 void DateTimeWidget::onContentUpdate(float dt) {
+    m_tabsReveal.update(dt);
     // V10.9: visible elastic category transition. Position uses an out-back
     // curve with a real overshoot, while the lens itself briefly swells like a
     // soft bubble. Rapid L/R retargets from the current visual position.
@@ -259,12 +260,15 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
 
     // Music detail/Now Playing keeps this exact HOME clock but deliberately
     // hides the centered HOME category pill to free the upper composition.
-    if (!m_homeTabsVisible)
+    if (m_tabsReveal.value() <= .001f)
         return;
 
     // V10 centered HOME categories. There is intentionally no Nintendo eShop
     // entry. The indicator is a real animated state controlled by the menu.
-    const nxui::Rect navRect = homeTabsRect();
+    const float tabsAlpha = m_opacity * m_tabsReveal.value();
+    const float slideY = -14.f * (1.f - m_tabsReveal.value());
+    nxui::Rect navRect = homeTabsRect();
+    navRect.y += slideY;
     const float gamesX = kNavX + kNavInset;
     const float stepX = kTabW + kTabGap;
     const float appsX = gamesX + stepX;
@@ -272,7 +276,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float slide = m_homeTabSlide;
     nxui::Rect activeRect {
         gamesX + stepX * slide,
-        kNavY + kNavInset,
+        kNavY + slideY + kNavInset,
         kTabW,
         kTabH
     };
@@ -314,27 +318,27 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     ren.drawLiquidGlass(
         0, navRect, 24.f,
         nxui::Color(0.70f, 0.82f, 0.98f, 0.46f),
-        0.98f * m_opacity, 0.f
+        0.98f * tabsAlpha, 0.f
     );
     ren.drawRoundedRectOutline(
         navRect,
-        nxui::Color(0.98f, 1.00f, 1.00f, 0.38f * m_opacity),
+        nxui::Color(0.98f, 1.00f, 1.00f, 0.38f * tabsAlpha),
         24.f, 1.f
     );
 
     ren.drawLiquidGlass(
         0, activeRect, 18.f,
         nxui::Color(1.00f, 1.00f, 1.00f, 0.96f),
-        0.98f * m_opacity, 0.f
+        0.98f * tabsAlpha, 0.f
     );
     ren.drawRoundedRect(
         activeRect.shrunk(1.4f),
-        nxui::Color(1.00f, 1.00f, 1.00f, 0.62f * m_opacity),
+        nxui::Color(1.00f, 1.00f, 1.00f, 0.62f * tabsAlpha),
         16.8f
     );
     ren.drawRoundedRectOutline(
         activeRect,
-        nxui::Color(1.f, 1.f, 1.f, 0.92f * m_opacity),
+        nxui::Color(1.f, 1.f, 1.f, 0.92f * tabsAlpha),
         18.f, 1.2f
     );
 
@@ -352,7 +356,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float gamesCenterX = gamesX + kTabW * 0.5f;
     const float appsCenterX = appsX + kTabW * 0.5f;
     const float musicCenterX = musicX + kTabW * 0.5f;
-    const float textY = kNavY + (kNavH - gamesSz.y) * 0.5f;
+    const float textY = kNavY + slideY + (kNavH - gamesSz.y) * 0.5f;
 
     auto proximity = [](float value, float center) {
         return 1.f - std::clamp(std::abs(value - center), 0.f, 1.f);
@@ -361,8 +365,8 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float appsActive = proximity(slide, 1.f);
     const float musicActive = proximity(slide, 2.f);
 
-    const nxui::Color inactive(0.985f, 0.99f, 1.00f, 0.98f * m_opacity);
-    const nxui::Color active(0.045f, 0.052f, 0.065f, 0.98f * m_opacity);
+    const nxui::Color inactive(0.985f, 0.99f, 1.00f, 0.98f * tabsAlpha);
+    const nxui::Color active(0.045f, 0.052f, 0.065f, 0.98f * tabsAlpha);
 
     auto mixColor = [](const nxui::Color& a,
                        const nxui::Color& b,
@@ -376,8 +380,8 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
         );
     };
 
-    const nxui::Color darkShadow(0.0f, 0.0f, 0.0f, 0.38f * m_opacity);
-    const nxui::Color lightShadow(1.0f, 1.0f, 1.0f, 0.18f * m_opacity);
+    const nxui::Color darkShadow(0.0f, 0.0f, 0.0f, 0.38f * tabsAlpha);
+    const nxui::Color lightShadow(1.0f, 1.0f, 1.0f, 0.18f * tabsAlpha);
     const nxui::Color gamesColor = mixColor(inactive, active, gamesActive);
     const nxui::Color gamesShadow = mixColor(darkShadow, lightShadow, gamesActive);
     const nxui::Color appsColor = mixColor(inactive, active, appsActive);
@@ -408,25 +412,25 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     const float rCenterX = navRect.right() + kLROuterGap + rW * 0.5f;
     // V0.02 HOME correction: L/R are invariant white system glyphs. They do
     // not inherit active/inactive text colours from the sliding lens.
-    const nxui::Color lColor(0.99f, 0.995f, 1.00f, 0.98f * m_opacity);
-    const nxui::Color rColor(0.99f, 0.995f, 1.00f, 0.98f * m_opacity);
-    const nxui::Color lShadow(0.f, 0.f, 0.f, 0.42f * m_opacity);
-    const nxui::Color rShadow(0.f, 0.f, 0.f, 0.42f * m_opacity);
+    const nxui::Color lColor(0.99f, 0.995f, 1.00f, 0.98f * tabsAlpha);
+    const nxui::Color rColor(0.99f, 0.995f, 1.00f, 0.98f * tabsAlpha);
+    const nxui::Color lShadow(0.f, 0.f, 0.f, 0.42f * tabsAlpha);
+    const nxui::Color rShadow(0.f, 0.f, 0.f, 0.42f * tabsAlpha);
     ren.drawText(lDraw,
                  {lCenterX - lW * 0.5f + 0.8f,
-                  kNavY + (kNavH - lH) * 0.5f + 1.f},
+                  kNavY + slideY + (kNavH - lH) * 0.5f + 1.f},
                  lrFont, lShadow, kLRScale);
     ren.drawText(lDraw,
                  {lCenterX - lW * 0.5f,
-                  kNavY + (kNavH - lH) * 0.5f},
+                  kNavY + slideY + (kNavH - lH) * 0.5f},
                  lrFont, lColor, kLRScale);
     ren.drawText(rDraw,
                  {rCenterX - rW * 0.5f + 0.8f,
-                  kNavY + (kNavH - rH) * 0.5f + 1.f},
+                  kNavY + slideY + (kNavH - rH) * 0.5f + 1.f},
                  lrFont, rShadow, kLRScale);
     ren.drawText(rDraw,
                  {rCenterX - rW * 0.5f,
-                  kNavY + (kNavH - rH) * 0.5f},
+                  kNavY + slideY + (kNavH - rH) * 0.5f},
                  lrFont, rColor, kLRScale);
     ren.drawText(
         games,
@@ -444,7 +448,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     );
 
     const float appsTextY =
-        kNavY + (kNavH - appsSz.y) * 0.5f;
+        kNavY + slideY + (kNavH - appsSz.y) * 0.5f;
     ren.drawText(
         apps,
         {appsCenterX - appsSz.x * 0.5f + 1.f, appsTextY + 1.3f},
@@ -461,7 +465,7 @@ void DateTimeWidget::onContentRender(nxui::Renderer& ren) {
     );
 
     const float musicTextY =
-        kNavY + (kNavH - musicSz.y) * 0.5f;
+        kNavY + slideY + (kNavH - musicSz.y) * 0.5f;
     ren.drawText(
         music,
         {musicCenterX - musicSz.x * 0.5f + 1.f, musicTextY + 1.3f},

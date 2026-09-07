@@ -1,4 +1,5 @@
 #pragma once
+#include "HomeUiTween.hpp"
 
 #include <nxui/widgets/GlassWidget.hpp>
 #include <nxui/core/I18n.hpp>
@@ -48,8 +49,8 @@ public:
 
     bool isFocusable() const override { return m_focusable; }
     void setFocusable(bool focusable) { m_focusable = focusable; }
-    void onFocusGained() override { m_focused = true; }
-    void onFocusLost() override { m_focused = false; }
+    void onFocusGained() override { m_focused = true; m_focusAmount.target(1.f, .18f); }
+    void onFocusLost() override { m_focused = false; m_focusAmount.target(0.f, .15f); }
     bool activate() override {
         if (!m_onActivate)
             return false;
@@ -58,6 +59,7 @@ public:
     }
 
 protected:
+    void onContentUpdate(float dt) override { m_focusAmount.update(dt); }
     void onContentRender(nxui::Renderer& ren) override;
 
 private:
@@ -68,6 +70,7 @@ private:
     ActivateCallback m_onActivate;
     bool m_focusable = true;
     bool m_focused = false;
+    switchu::homeui::UiTween m_focusAmount;
     bool m_chromeEnabled = true;
     bool m_showFocusedNickname = true;
 };

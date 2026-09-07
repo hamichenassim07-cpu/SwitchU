@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""V8.9 targeted changes anchored to the actual delivered V8.8 archive."""
+"""V9.0 targeted changes anchored to the actual delivered V8.9 archive."""
 import hashlib
 import json
 from pathlib import Path
 import re
 from music_source_contract import function, region
 ROOT=Path(__file__).resolve().parents[1]
-manifest=json.loads((ROOT/'tests/protected_v8_8.json').read_text())
+manifest=json.loads((ROOT/'tests/protected_v8_9.json').read_text())
 failures=[]
 def require(ok,message):
     if not ok: failures.append(message)
 def read(path): return (ROOT/path).read_text()
 for path,sha in manifest['files'].items():
     require((ROOT/path).is_file() and hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==sha,
-            'V8.8 protected file changed: '+path)
+            'V8.9 protected file changed: '+path)
 for spec in manifest['regions']:
     try: actual=hashlib.sha256(region(read(spec['path']),spec).encode()).hexdigest()
     except (ValueError,KeyError): actual='missing'
-    require(actual==spec['sha256'],'V8.8 protected region changed: '+spec['path']+' '+spec.get('function',spec.get('after','')))
+    require(actual==spec['sha256'],'V8.9 protected region changed: '+spec['path']+' '+spec.get('function',spec.get('after','')))
 screen=read('projects/menu/src/music/MusicScreen.cpp')
 physical=read('projects/menu/src/music/MusicPhysicalMediaRenderer.cpp')
 pose=read('projects/menu/src/music/MusicPhysicalMediaRenderer.hpp')
@@ -34,7 +34,7 @@ info=function(screen,'MusicScreen::drawAlbumInformation')
 layout=read('projects/menu/src/music/MusicAlbumLayout.hpp')
 require('kClockSize = 30.f' in layout,'Informational HOME clock must remain legible')
 require('albuminfo::summarise(album, m_library)' in info,'Metadata must use actual library values')
-require('kTitleY = 610.f' in layout and 'kArtistY = 648.f' in layout and 'kMetaY = 680.f' in layout,'Album information must clear the 606.7 px reflection bound')
+require('kBlockY = 607.f' in layout and 'kSeparatorY = kBlockY + 68.f' in layout,'Album information must clear the 606.7 px reflection bound')
 require(info.count('pushClipRect')==3 and info.count('popClipRect')==3,'Metadata clip scopes changed')
 require('rowCentreY-info.durationHeight*.5f' in info and 'rowCentreY-info.countHeight*.5f' in info,'HOME measured vertical alignment missing')
 require('ren.drawCircle' in info and 'ren.drawTriangle' in info and '"♪"' not in info,'Independent informational note missing')
@@ -44,7 +44,7 @@ require('loadFromMemory' in info and 'sizeof(kHomeClockPng)' in info,'Embedded e
 require(screen.count(' * kMusicCarouselScale')==6 and 'kMusicCarouselScale = 0.92f' in screen,'Only the six authorised geometric factors may change')
 update=function(screen,'MusicScreen::updateAmbientBackground')
 require('m_ambientBackground.update(dt)' in update and 'updateAmbientBackground(dt);' in function(screen,'MusicScreen::onUpdate'),'Ambient animation is not continuously updated')
-require('m_ambientBackground.draw(ren, a, kFloorY)' in screen,'Ambient effect is not rendered')
+require('m_ambientBackground.draw(ren, 1.f, kFloorY)' in screen,'Ambient effect is not rendered')
 for forbidden in ['m_rootCarouselMotion','moveSelection(','m_client.','m_coverCache.get(','loadFromFile','std::vector']:
     require(forbidden not in update,'Background touches protected state or reloads data: '+forbidden)
 require('ren.pushClipRect({0.f, 0.f, 1280.f, floorY-12.f})' in background,'Ribbon scissor must stop before the floor')
@@ -70,7 +70,15 @@ for token in re.findall(r'add_files\("([^"]+)"',read('xmake.lua')):
     require(bool(list(ROOT.glob(token.replace('**.','**/*.')))),'Empty build source pattern: '+token)
 require((ROOT/'lib/Atmosphere-libs/libstratosphere/Makefile').exists(),'Atmosphere source dependency is missing')
 require((ROOT/'lib/espeak-ng/CMakeLists.txt').exists(),'eSpeak source dependency is missing')
+require('m_albumDetails' not in screen and 'Modal::AlbumInformation' not in screen,'Album sheet must be removed')
+require(not (ROOT/'projects/menu/src/music/MusicAlbumDetails.cpp').exists(),'Dead album sheet source remains')
+home=read('projects/menu/src/widgets/WaraWaraBackgroundPreviewV80.cpp')
+require('kCrtBands' not in function(home,'WaraWaraBackground::onRender'),'Old HOME CRT still draws')
+require('setPreviewActive(!active)' in integration and 'setVisible(!active)' in integration,'Music must own background rendering/resources')
+require('m_focusAmount.target' in read('projects/menu/src/widgets/IconGrid.cpp'),'Independent carousel focus tween is absent')
+require('m_entryBouncePending' not in read('projects/menu/src/widgets/IconGrid.cpp'),'Focus still depends on snap completion')
+require('m_tabsReveal' in read('projects/menu/src/widgets/DateTimeWidget.cpp'),'Pill transition missing')
 if failures:
-    raise SystemExit('SwitchU V8.9 contract FAILED:\n - '+'\n - '.join(failures))
-print(f"Protected V8.8: {len(manifest['files'])} complete files + {len(manifest['regions'])} source regions: OK")
-print('V8.9 satin mesh, exact HOME assets, compact geometry, information layout and local build dependencies: OK')
+    raise SystemExit('SwitchU V9.0 contract FAILED:\n - '+'\n - '.join(failures))
+print(f"Protected V8.9: {len(manifest['files'])} complete files + {len(manifest['regions'])} source regions: OK")
+print('V9.0 backgrounds, inherited satin mesh/geometry, exact HOME assets, UI layout and local build dependencies: OK')

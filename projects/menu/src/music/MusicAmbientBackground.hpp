@@ -9,6 +9,8 @@ class MusicAmbientBackground {
 public:
     void setPalette(const ambient::Palette& palette) { m_motion.setTarget(palette); }
     void update(float dt) { m_motion.update(dt); }
+    void copyMotionFrom(const MusicAmbientBackground& other) { m_motion = other.m_motion; }
+    void drawBase(nxui::Renderer& ren, float alpha = 1.f);
     void draw(nxui::Renderer& ren, float alpha, float floorY);
 
 private:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HomeCarouselStyle.hpp"
+#include "HomeUiTween.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -85,11 +86,11 @@ inline void beginCarouselTouch(HomeCarouselMotionState& state, int itemCount) {
 
 inline bool dragCarouselTouch(HomeCarouselMotionState& state,
                               float deltaPixelsX,
-                              int itemCount) {
+                              int itemCount,
+                              float step = kCarouselNeighborSize + kCarouselGap) {
     if (!state.touchScrolling || !canTouchCarousel(itemCount))
         return false;
 
-    const float step = kCarouselNeighborSize + kCarouselGap;
     if (step <= 0.f)
         return false;
 
@@ -110,12 +111,12 @@ inline void startCarouselSnapToNearest(HomeCarouselMotionState& state,
 
 inline void endCarouselTouch(HomeCarouselMotionState& state,
                              float fingerVelocityPixelsPerSecond,
-                             int itemCount) {
+                             int itemCount,
+                             float step = kCarouselNeighborSize + kCarouselGap) {
     if (!state.touchScrolling)
         return;
 
     state.touchScrolling = false;
-    const float step = kCarouselNeighborSize + kCarouselGap;
     if (step <= 0.f) {
         startCarouselSnapToNearest(state, itemCount);
         return;
@@ -126,9 +127,9 @@ inline void endCarouselTouch(HomeCarouselMotionState& state,
     const float powerBoost = 1.f + std::clamp((rawSpeed - 1.f) * 0.18f,
                                                0.f,
                                                1.15f);
-    state.velocity = std::clamp(rawVelocity * powerBoost,
-                                -kCarouselMaximumInertiaSpeed,
-                                kCarouselMaximumInertiaSpeed);
+    // Touch impulses remain below roughly one extra cover with existing drag.
+    // No change to controller retargeting, horizontal spacing or snap speed.
+    state.velocity = std::clamp(rawVelocity * powerBoost, -3.6f, 3.6f);
 
     if (std::abs(state.velocity) < kCarouselMinimumInertiaSpeed) {
         state.velocity = 0.f;
@@ -146,7 +147,7 @@ inline HomeCarouselMotionUpdate updateCarouselMotion(HomeCarouselMotionState& st
     if (itemCount <= 0 || state.touchScrolling)
         return result;
 
-    dt = std::max(0.f, dt);
+    dt = uiDelta(dt);
     const float maximum = carouselMaxPosition(itemCount);
 
     if (state.inertiaActive) {

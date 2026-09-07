@@ -4,6 +4,7 @@
 #include <vector>
 namespace nxui {
 struct Renderer {
+ void flush() {}
  bool record=true;
  GpuDevice device; std::vector<std::vector<double>> commands;
  GpuDevice& gpu(){return device;}

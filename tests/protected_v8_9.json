@@ -1,0 +1,769 @@
+{
+  "base_archive_sha256": "16722a3cb96e56b338f6dcf2f8ed88a00531addc032a5e8a3a38a200017e4f3b",
+  "description": "Exact V8.9 delivery baseline. Music geometry, projections, material, audio, media decoder, launch methods and controller motion are protected. V9.0 may change only backgrounds, focus, touch, album information, pill visibility and UI preferences.",
+  "files": {
+    "xmake.lua": "d8eb42aed49711b0203543c2b7506f6642ace7fa33418c03f406f100d2830ee8",
+    "toolchain/switch.lua": "65b5f10cce560d93efbe049d3d7a1f77990bdbba4326a115e6f60864869e5fea",
+    "shaders/liquid_glass_fsh.glsl": "6ed2f6893fc7c860722cf2d9a6203e4827fac68083ad9f2f40cc8397a4a5434d",
+    "tests/home_carousel_motion_test.cpp": "ebd0ecb92cf3d5421447b32f2741dc565e169be35c406656349ebb4d1249b4d7",
+    "tests/music_ui_transition_math_test.cpp": "58d4c05cfc55f3a4c869f825483ccd4caf9415086f39278cb2af44bf56102e5b",
+    "romfs/icons/playtime_clock_v1030.png": "2cba3428ed6b9f8c155d889fefe4639a9f669187e29f0e5539aeaec86980247e",
+    "romfs/icons/music_v001.png": "771b8269566e1e7a963242ef6e47c3bb35fd41409383884bd5c493201dd9dab6",
+    "romfs/sounds/wiiu/sfx/launch_game.wav": "b4599fd06842cb312458522358b813b0c6273743741946f10cbb942ee01b9080",
+    "romfs/sounds/wiiu/sfx/launch_spin.wav": "cb3a464e0c2ac39a2bf9b16eebbab818db883e6bba54d4ca1e6781842bb1e3cc",
+    "romfs/sounds/wiiu/sfx/resume_game.wav": "576083e86e4649156f3c8f813c66328f2a872ffc459299903ab9206a0b73e467",
+    "romfs/sounds/wiiu/sfx/launch_insert.wav": "11b1c139c3d5afe2c9a23f1f4c6bf6a5deeeee45fd7a8abba2f5820376e15f62",
+    "romfs/sounds/wiiu/sfx/launch_click.wav": "cffdc3b8f390ced23ecf421dcb85324ab75c78dfbc720a27178b13313ab4fffd",
+    "projects/common/include/switchu/smi_protocol.hpp": "a99d5bb1a878318c03824b99fff8ca4dbab8e087045eaa54ba63c6ced71694c5",
+    "projects/common/include/switchu/music_protocol.hpp": "5b253fe9c8e3e2334cd9ef018e87b015fd71815fc7158fb5e272007c5143f55e",
+    "projects/daemon/src/main.cpp": "0b71bdf20108699595272182f70ba2c55dfd77702d8b9e5398cedf13e3bd2595",
+    "projects/daemon/src/music/music_service.hpp": "36cb8a777f6a1cc5e0f551ec7cbbbae1c5de98b1aeda32353ccb401d0863c816",
+    "projects/daemon/src/music/music_service.cpp": "385a40f5de9d495b29cffb92fbbd49644af62db3aec5c5cc54be72152777a53b",
+    "projects/daemon/src/music/pcm_resampler.hpp": "6089804267090cd75cbce9263c5e18d0379cce21d106b21ad42fba07e66feb31",
+    "projects/daemon/src/music/stream_decoder.hpp": "ae6fa6cb2f5af71cbf7cadf3b4607bc319f3816285dc201822168fcb031b2a33",
+    "projects/daemon/src/music/stream_decoder.cpp": "666944134db3ec7609164980900d6d07f5ace2382bea385d188f94a8d1df8537",
+    "projects/menu/src/smi_commands.hpp": "53dfb06f3ae2308c7bd23c0f25471e0ca3db36c8db15ebafb167673df7153925",
+    "projects/menu/src/widgets/CircularSelectionHaloWidget.hpp": "68a4acdf5038dd29be125be6f840158c3b51e5b7137e7e630490464a1336c59d",
+    "projects/menu/src/widgets/GameActionsHudWidget.hpp": "ef1cfc65f5650b3df7dece7f68a04f9dd2ab2ecba5e64bc8a1fb67a33377d628",
+    "projects/menu/src/widgets/StylisedGameCartridge.cpp": "05e6ce549568c948e8a7dd0cf7e5d106c99366fe34f773fcb6ce4808675d96c6",
+    "projects/menu/src/widgets/GameActionsHudWidget.cpp": "e95f67216c91c6f96716ff8c9c37eb56d27d47ad56aa48fce2b5c624d7a759ce",
+    "projects/menu/src/widgets/LaunchAnimation.hpp": "1f3443b599d9f38f4359979e6ba9cc8577701d2c36b0623f61007ae1239f98d2",
+    "projects/menu/src/widgets/StylisedGameCartridge.hpp": "229c38d7eaed6048fda3fd0643bc01a72e3a8a127325da561227348ee3a81591",
+    "projects/menu/src/widgets/LockScreenView.cpp": "1b324395eb8e969fe640a9963add6c79011096ce59b97bc00c1f67dc751d3316",
+    "projects/menu/src/widgets/TitlePillWidget.hpp": "4824e0c74f4a5114d22d20ac623b9d9655e76057da2c1a730e90228378a37826",
+    "projects/menu/src/widgets/HomeLiquidGlassStyle.hpp": "2250c976825b67d6efe3f25f431c920301cf532906a68f84b0a1ec14702ca23f",
+    "projects/menu/src/widgets/BatteryWidget.hpp": "a2fc39baa08dc9a491abe801dc919c8185cf45410f82c8287d9db73c4840bdac",
+    "projects/menu/src/widgets/HomeTypographyStyle.hpp": "6cce978fa1179f1c6ad6b14ea674e54c01f089170d5161fa7a06d8791e9f1eab",
+    "projects/menu/src/widgets/LockPressIndicator.hpp": "a15103ecf9a86ca7cb1fcddf8d8c4dc24c94e6ac9a6af06bc4bfdd18833f20b7",
+    "projects/menu/src/widgets/ProfileTitlePillWidget.cpp": "a4b0c80080fc43db492eaad2ea576250aec343029d65a8f29b13a6bd98160ccd",
+    "projects/menu/src/widgets/TitlePillWidget.cpp": "2de24103e7effa0501f5415eb6d0171ed4c76be188a7832f1d8cd326b1b74833",
+    "projects/menu/src/widgets/LockScreenView.hpp": "6bdd0527729f278c2eb335f975914701539351bdf1f37fcc2a37079c627021c8",
+    "projects/menu/src/widgets/LaunchAnimation.cpp": "d3f368191b09fd98c2ce184691f7de37152b2cc57373295bdeba822334be5da7",
+    "projects/menu/src/widgets/CircularSelectionHaloWidget.cpp": "ecbbb0ad9f6cb6c61e0b792e68279b5c38de35186ffae307ec7a3503ac4c7f68",
+    "projects/menu/src/widgets/HomeCarouselStyle.hpp": "c5473aa4c1cafa3febcacfbdd065a3ea596516b249bb2b6cc37ae79cb91c9407",
+    "projects/menu/src/widgets/GlossyIconFocusV80.cpp": "5e81132af096d742f6d9e5e296ff9f7c3924506bef8b68cc81710fcc1ccfb9ec",
+    "projects/menu/src/widgets/LockPressIndicator.cpp": "f00d1e8f4ce77c0548d65e42dcd5e075f533e2374b1fdd72ed69d7eea70b9a8d",
+    "projects/menu/src/widgets/ProfileTitlePillWidget.hpp": "238e232d7fdba006141a661f08e4d96f97898007b6b8feed3d0cad91389fb74f",
+    "projects/menu/src/widgets/BatteryWidget.cpp": "6e8df5f04395878efd52f5091b44ab26179c0ba0133dceb136deb9c345b08b48",
+    "projects/menu/src/music/MusicLibrary.hpp": "8f9c9ccd60477643c78aaeeee412c75be26a3947da25fe962026b460b8705503",
+    "projects/menu/src/music/MusicTypes.hpp": "7cb70433a84ed4150c07b8febbec8172bdb7f9fcf5ed0aa4abd9e948171cb8f7",
+    "projects/menu/src/music/MusicPlaylistStore.cpp": "35d7c70f0605e2f2a0596d7c71bc8c6c5c1bd0a01b97fe49ccfcc33a817dd72b",
+    "projects/menu/src/music/MusicUiTiming.hpp": "70e92be2ce2e235b2b288b10f5766706f565274ef6e6f97bbe72a4b40836d323",
+    "projects/menu/src/music/MusicClient.cpp": "e0ec37d95a0d4b6b0aee4b8910271c0f91e67516569e2f8aced29161cbccf803",
+    "projects/menu/src/music/MusicClient.hpp": "5e1dff73da80aad460d741d4db5480c90d24abffcbbed98e11c859a4f8803f51",
+    "projects/menu/src/music/MusicPlaylistStore.hpp": "08b1a724e30be050dd7c2946f4e427c8690ea0083da09a371d29b185f1095ec3",
+    "projects/menu/src/music/MusicLibrary.cpp": "c3744117f2c632de7dba3718508030d2d92dc00829310e0e1a3d78072eb8ac5c",
+    "projects/menu/src/core/CartridgeStyleStore.hpp": "245ae00e38c622d601762aabb2755dd3b8c41a8a28823ec694f58b948a3fbacd",
+    "projects/menu/src/core/PlayTimeProvider.cpp": "c82b594f9424b1ceabb6965440178352244166b2fcb3020a4265bf31b09b89b1",
+    "projects/menu/src/core/WiiUMenuApp.hpp": "d7e212d0f26064bc4a62d03a447a76c581385306aa81a9d73197ff84b97fcba7",
+    "projects/menu/src/core/HomeOrderStore.hpp": "649994e0cc845b6a2ad43deed3fae78952e2f083caa05d9d0bc485770c05717d",
+    "projects/menu/src/core/CartridgeStyleStore.cpp": "6dc842d963bc185eaf38c44a9ac23f76d4b6b16a2873695d3c69d361d2e21600",
+    "projects/menu/src/core/PlayTimeProvider.hpp": "a690d000addb566322c63737735f15302c0b138ebea9c536d67f8802a56b39a8",
+    "projects/menu/src/core/HomeOrderStore.cpp": "a807417d42a960df94c27e9411ec0fa44e60931f54384de613f91825945a755b",
+    "projects/menu/src/core/WiiUMenuAppRoutingV74.cpp": "c6cfedaf3a71d48bd274d803bb3e188af00e23473472440aa065b75d7fb5b70f",
+    "projects/menu/src/launcher/AppletLauncher.hpp": "510e9e87444fdeb62e5ef7cfa6863e6ddf70d88c6e6a35066fc6fa0bfafd7d08",
+    "projects/menu/src/launcher/AppletLauncher.cpp": "986daa1fb8649b29743e616e4b809d49c05a509b8f94a0c02a5be398fa795b45",
+    "projects/menu/src/launcher/AppListLoader.cpp": "c15fe9e73feffbb94e480b4eb1fa69d63c1112364d6af464d7211824526ab4d7",
+    "projects/menu/src/sidebar/SidebarManager.cpp": "3a5d3118ed4882940108fb9ca349a485e3ebb215eda3bec5cc5502afc3ee5c03",
+    "projects/menu/src/sidebar/SidebarManager.hpp": "f8135c396527d01bfa723a97cf9a624eb18e45cbc340029fa3d2988989f05836",
+    "projects/menu/src/music/MusicCoverCache.cpp": "d5f79e54cc29dd4d48051b19ef4956ed02ffd426055dd60e3a2a29c45d34a953",
+    "projects/menu/src/music/MusicCoverCache.hpp": "85f0fbfc4a2531c9871d02d7ed0e4390a9eb3bad79efcff7fdadbf77100ff272",
+    "projects/menu/src/music/MusicPhysicalMediaRenderer.cpp": "9cdffabb9ac06dbb1696bbd2d67362b21a030e81b1b4b5b6c65f1534adf5f828",
+    "projects/menu/src/music/MusicPhysicalMediaRenderer.hpp": "2c8a3913dc0793688919e88968445a079361f2db68db02458fe1982b1fb60df0",
+    "projects/menu/src/music/MusicAmbientPalette.cpp": "665384e81cf3dcbcd6a918d160d5571dbd5d66c2be021be702eb8d61ba2eaaab",
+    "projects/menu/src/music/MusicAmbientPalette.hpp": "dbc4a61cc96525e5547c282d16a6759bfdc3864220c3de716a4f397c45ee79ba"
+  },
+  "regions": [
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::startScan",
+      "sha256": "8a1511e6c4577683f5c0e140f791de6e9d9b13a0eab54adbd12622ae89bf4a08",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::setRootCategory",
+      "sha256": "aa861196d069c988dfaceb0c8097dfd29416dcecf60efa920df3b2747e985891",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::rootView",
+      "sha256": "66d537442a8147cedaacac9f06fd3ce86053eff47eb796b91a4fd6231f6ec0ce",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::rootCategoryIndex",
+      "sha256": "16ba4ec6a0b3b898954aa9a6f2e23889d40dd351165a37099016983922e2371a",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::rootItemCount",
+      "sha256": "0ce3a29952f0b51b036332f2caa17e2cad1d9bce8c07e5464ed0191c8b79e53b",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::retargetRootCarousel",
+      "sha256": "ddb0ad9f50ba9611f04ec820ecd98b876ceb43679c116fbcb104ac3e15c44d7c",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::contentTransitionBusy",
+      "sha256": "ebf4f991585670dd6e615502f6da30adcaf2aba5d7b11a64bfeeb76b38304c86",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::clampSelectionForView",
+      "sha256": "ef02ac3904ff02432a7be94803e95597b732b561628d2e1fcf4e10fe6df7f925",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::openAlbum",
+      "sha256": "9c29147342b870c812fe3fe8664c624331b1e5242f4338dd4f46a561bcf343b2",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::openPlaylist",
+      "sha256": "dff53384db1a30399176fc812972eef0b2b1b6e0246838acb3e83e9b9c7b6247",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::albumTrackIds",
+      "sha256": "342fb94ee83dff5e9f0a75b81b2ad665e91d478fe977fc6ca6aae3a5178107a6",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::playlistTrackIds",
+      "sha256": "2141d7f65132de34b7694a7d6dfa0f93c3c6aa21a4e32d65c8e9ae7889359f96",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::playTrackIds",
+      "sha256": "c4c98cfaf6599ae6e07b58402d85bd4dbf980539f01b5f652d0a24bd28ed7b35",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::activateSelection",
+      "sha256": "86c3a0d2ad94333cfc7af82b9ae789e70b8b6f1a177299fefa5fd747ae6e2087",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::goBack",
+      "sha256": "d040b03856a0c5520d22fa9afdc7288aa6d87afa80f43f598388a3a731e00746",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::selectedTrackIndex",
+      "sha256": "4f4b110e492aab7061189db7f964d38fa31d2f64e91449ff4f72e18a9e16fb0c",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::contextualX",
+      "sha256": "ec05600c41084f4be620e5d466b91c45d30262696e7816138cfb6e986b8e482a",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::appendToQueue",
+      "sha256": "7bf36c447c2c78993d72b1e774277fb58d07391d727e55f56a0776e451a68a0d",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::openCreatePlaylist",
+      "sha256": "2e168128b2d738ecf8e415e2f1ee0a7617e3df70810490d7a0442272df4682fc",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::openPlaylistChooser",
+      "sha256": "d585ae02ba6d78ada597b6971057f1769098c0c4bca467789a77fee29b6e8146",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::modalMove",
+      "sha256": "e591e3d44f2989910efa25a03ce4d594910791ec404cd92b92194d1b40201e41",
+      "tokens": true,
+      "remove": [
+        "    if (m_modal == Modal::AlbumInformation) {\n        m_albumDetails.move(dy != 0 ? dy : dx);\n        return;\n    }\n"
+      ]
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::modalActivate",
+      "sha256": "05c3b5dbae3a93fc6a4b23626533ee2d3321b92dbf11c07170d914e8e31338ab",
+      "tokens": true,
+      "remove": [
+        "    if (m_modal == Modal::AlbumInformation) { modalCancel(); return; }\n"
+      ]
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::modalBackspace",
+      "sha256": "df39d272776dc3def56672a89dc696ed187dfdf77e1dc209abbd067c8df72d16",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::modalConfirm",
+      "sha256": "1ed7a98a46e05eabedd50c5554098a529bedb891a7675ef81d79728c4ce01ddf",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::modalCancel",
+      "sha256": "cf4006aa042679185de755908932b9b0e7212e6d7979321044f639ef42740f49",
+      "tokens": true,
+      "remove": [
+        "    if (m_modal == Modal::AlbumInformation) m_albumDetails.clear();\n"
+      ]
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::updateNowPlayingSelection",
+      "sha256": "261abb96fda457454b46754d2603ad7a7f474c67498cc91fe33706cb94e438d5",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::activateNowPlayingControl",
+      "sha256": "017c7fbbc4dfe5388a4ab9ae3b47c34a20a8fd5ba4626a9d1e2e744e67cb1b00",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::seekRelative",
+      "sha256": "45484b592dc7da547db0f0f887a1da5715f1f515a217a6da885a18ce53596e37",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::trackForId",
+      "sha256": "5d27eaf0717db93d6dd128ecbb000a5064adae07696a68a1f308888bfa7f04cd",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::currentTrack",
+      "sha256": "96c7b7259a4dbfa99e5d0b6f57b76abfaf85326d8d79d076ec0a790cbcbe3df8",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::formatDuration",
+      "sha256": "84a8c06ba7a37ced2de4275a9b02da61e2a684018a3e59f0d613a8c91c96aaa8",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::fitText",
+      "sha256": "283373d1f9be5100929043513dfdbfb97d715b61d36649ee2ec952194f9b0400",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawMarqueeOrFit",
+      "sha256": "5819929081c8e40adf48c051268eb482e351303fc4e178bab873ff33d0016b44",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::albumDurationMs",
+      "sha256": "f1d3d8b66e723633393f30260cc57c0c4b8d81b09ff94c31b11d607e8c78c34e",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::playlistDurationMs",
+      "sha256": "3403e5e537244e62835e36c27e44c4b592fb07bf10c7ea967ee6e30a558605a5",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::playlistCover",
+      "sha256": "c1eb4e448f7056e6634ce4d1d4770769fcb766639e5f816f599ff4b848ee5545",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::artworkAccent",
+      "sha256": "9758efb050da827661513db9c5d170d606c23e4c6c98e5b600369d49b99332eb",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawRootCategoryHint",
+      "sha256": "05d9597990b593c6357c3f3cdc208248ba1f3601e7a219f877b76f7926a874ec",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawPreviousRootCarousel",
+      "sha256": "dd14a2568e9f45b5184a7e1886d51634ceae88c869d5d2c26437bd2b395aa8db",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawEmpty",
+      "sha256": "906cea439f5caad664ce669ae5431b40ca9929f3d12c93565aa87d79243fe324",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::visibleListStartVisual",
+      "sha256": "bbd26780437463368db446e53c25420d31d7bc37c9a8eefe834fe7c4baa70d3d",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawNowPlayingIndicator",
+      "sha256": "7b14e55af171c567cd751de53d11feeb45324a92c6b0eff6be70bf634ee0b2bc",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawTrackRow",
+      "sha256": "abe612d525bcb25cb9201b62ee6e27af0af7cbf223694813b7eea7cb7b9c1b03",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawPlaylists",
+      "sha256": "12b9c7508c56c4b0b919c3dae8c1b7d98ec55ac777f10da6853bcfbe4f87c4c0",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawPlaylistDetail",
+      "sha256": "f271df4130c16952d04b023b28f0070ae08136c68741d1a7b60c4df0fcb7e241",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawQueue",
+      "sha256": "ffe503218395405224e70a82388ae25abc1cd9393552ac0e4b22869bdfd9584d",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawBottomHints",
+      "sha256": "e9e0ee76b71fd04b856fbbb5770092b55007ee5a2d060aef7c0ed31f27f740ae",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawModal",
+      "sha256": "ab3f961c3da3f8546d489304795bf7287539a4fef0688b690106c36251965e37",
+      "tokens": true,
+      "remove": [
+        "    if (m_modal == Modal::AlbumInformation) {\n        m_albumDetails.draw(ren,m_font,m_iconFont,gMusicUiAlpha);\n        return;\n    }\n"
+      ]
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "after": "constexpr float kScreenW",
+      "before": "// HOME main-screen typography",
+      "sha256": "dbe01bf26e3a51161439f9dfdbf25d632e94fda2def26e4ac315552e2b37abe9",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawMusicBackground",
+      "after": "    // Reflective floor / Hi-Fi",
+      "sha256": "4969c3d766a9d961b7148ac9bcbd87099a75a488d5b3c812027789de861bb9b2",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawNowPlaying",
+      "before": "    };\n\n",
+      "tokens": true,
+      "sha256": "2a5825fdc1fa46d4390780bf7e8887e3089314115c9f94d3ec10d584fbb3be35"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawNowPlaying",
+      "after": "    gMusicAccent = artworkAccent(track->cover);",
+      "sha256": "a901561700a19863c1249dcde1f0abc5992b163aec53368f7bf9fbc012a303de",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawAlbumDetail",
+      "before": "    const float cinematic",
+      "sha256": "bcb2757dac6feef331b1899f51bc3a653780f18436a8222f330ff9d9aca41fd1",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawAlbumDetail",
+      "after": "    // drawPhysicalMedia() performs the only cover decode.",
+      "sha256": "d97b3e009589e0280c4400bbdbd7ba8ea4049ce51e1957a32ee13e43648fea35",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawTopBar",
+      "tokens": true,
+      "sha256": "5add1c1bb5ed23fb58f85fd3457934df605b33689dbf41f45ea5d2a429a805bf"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::refreshStatus",
+      "tokens": true,
+      "sha256": "cd61e20b5cbc6d6ff9dcff5070854cf34679ced202e7c31f892178267aa7fd85"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::drawPhysicalMedia",
+      "after": "    nxui::Texture* tex",
+      "tokens": true,
+      "sha256": "fc6bdcb74df9a7749d2e10cb421415c2c55fd401e2e5f97b76b99e138259e5e3"
+    },
+    {
+      "path": "projects/menu/src/music/MusicPhysicalMediaRenderer.cpp",
+      "after": "V3 rotatePoint",
+      "before": "PhysicalMediaGeometry drawAlbumImpl",
+      "sha256": "0f462d1393087fe8a7f92767b6fcbaaf2ebf265a3c92d74e0e9831c236d23a5b",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicPhysicalMediaRenderer.cpp",
+      "function": "drawAlbumImpl",
+      "tokens": true,
+      "sha256": "96ab2ecb61ce2e36030637d83223604e2f5eb6b3b62cd338169a2cdce679be7d"
+    },
+    {
+      "path": "projects/menu/src/music/MusicPhysicalMediaRenderer.cpp",
+      "function": "drawPhysicalMediaReflection",
+      "after": "    if (alpha <= 0.001f)",
+      "tokens": true,
+      "sha256": "0672641d141bce484c994971f707deb844c87d86a391776f487eb44fe9a2d77f"
+    },
+    {
+      "path": "projects/menu/src/music/MusicCoverCache.cpp",
+      "function": "sampledArtworkStyle",
+      "sha256": "2fadaa7d84aca41b45a166e22a27bc41494e42614cbc58f54d6b45b5f6d8145c",
+      "tokens": true
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::openNowPlaying",
+      "tokens": true,
+      "sha256": "1a59c3d42b7c03fba2003035a3353fa0de9de1b2f709c1a0bd85d0717fc4d2f2"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "function": "MusicScreen::updateAmbientBackground",
+      "tokens": true,
+      "sha256": "55c20d669364381a3171cc55f903c651accdea0ee9fd066b1f423286bf3e8446"
+    },
+    {
+      "path": "lib/nxui/include/nxui/core/Renderer.hpp",
+      "tokens": true,
+      "remove": [
+        "    void drawColoredTriangle(const Vec2& p0, const Color& c0,\n                             const Vec2& p1, const Color& c1,\n                             const Vec2& p2, const Color& c2) {\n        if (m_vtxCount + 3 > GpuDevice::MAX_VERTICES) return;\n        bindTexture(-1);\n        addVertex(p0.x, p0.y, 0.f, 0.f, c0);\n        addVertex(p1.x, p1.y, 0.f, 0.f, c1);\n        addVertex(p2.x, p2.y, 0.f, 0.f, c2);\n    }"
+      ],
+      "sha256": "fde642b929cd924a055aca6bfa2f997c6b858dd59f47b07ba681b8b33dc77a03"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::drawAlbums",
+      "before": "    // Plain HOME-style actions",
+      "sha256": "a4c525733ba6ee29bbba38b9cfe1f46508a260229eb88ecb1df0af9982e80d89"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::onUpdate",
+      "after": "    // Existing sleeve parallax",
+      "before": "    if (m_rootEntryBounceActive)",
+      "sha256": "6fe7ffed292965abfc3cae77118d78f82fca59976803dedcae24cb811021e354"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::playTrackIds",
+      "sha256": "c4c98cfaf6599ae6e07b58402d85bd4dbf980539f01b5f652d0a24bd28ed7b35"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::activateNowPlayingControl",
+      "sha256": "017c7fbbc4dfe5388a4ab9ae3b47c34a20a8fd5ba4626a9d1e2e744e67cb1b00"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::appendToQueue",
+      "sha256": "7bf36c447c2c78993d72b1e774277fb58d07391d727e55f56a0776e451a68a0d"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::seekRelative",
+      "sha256": "45484b592dc7da547db0f0f887a1da5715f1f515a217a6da885a18ce53596e37"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::openNowPlaying",
+      "sha256": "1a59c3d42b7c03fba2003035a3353fa0de9de1b2f709c1a0bd85d0717fc4d2f2"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::drawPhysicalMedia",
+      "sha256": "bd2c9a0c22f63a382254870518b26b0fb9a08b57f05da394f5a72724fc05af6d"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::openAlbum",
+      "sha256": "9c29147342b870c812fe3fe8664c624331b1e5242f4338dd4f46a561bcf343b2"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::openPlaylist",
+      "sha256": "dff53384db1a30399176fc812972eef0b2b1b6e0246838acb3e83e9b9c7b6247"
+    },
+    {
+      "path": "projects/menu/src/music/MusicScreen.cpp",
+      "tokens": true,
+      "function": "MusicScreen::goBack",
+      "sha256": "d040b03856a0c5520d22fa9afdc7288aa6d87afa80f43f598388a3a731e00746"
+    },
+    {
+      "path": "projects/menu/src/widgets/HomeCarouselMotion.hpp",
+      "tokens": true,
+      "function": "jumpCarouselTo",
+      "sha256": "4fc592bf55a7d57bee528dccaa931c2e00275fe4ef51601d9eb8d7da91584ed0"
+    },
+    {
+      "path": "projects/menu/src/widgets/HomeCarouselMotion.hpp",
+      "tokens": true,
+      "function": "retargetCarouselSnap",
+      "sha256": "879f48f329a9d2223aab29dd97bea71449fd8ae5973dbe1bf29bcaa483a0186a"
+    },
+    {
+      "path": "projects/menu/src/widgets/HomeCarouselMotion.hpp",
+      "tokens": true,
+      "function": "startCarouselSnapToNearest",
+      "sha256": "d1855b8cd8e7f3003e5adbb798cd021e3b7056a541efc48c0d7c91def032cd88"
+    },
+    {
+      "path": "projects/menu/src/widgets/HomeCarouselMotion.hpp",
+      "tokens": true,
+      "function": "updateCarouselMotion",
+      "remove": [
+        "dt = std::max(0.f, dt);",
+        "dt = uiDelta(dt);"
+      ],
+      "sha256": "869f2e088701fa344bcd5a812a8409f5704c99d230a6e9bb4962999d2be1ccd3"
+    },
+    {
+      "path": "projects/menu/src/widgets/WaraWaraBackgroundPreviewV80.cpp",
+      "tokens": true,
+      "after": "class Mp4PreviewDecoder {",
+      "before": "struct WaraPreviewRuntime",
+      "sha256": "7216361f6dd0a53bd841f32e079eb2317f3aa815f621eb7e2dcbbf20db119401"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::isEditableIcon",
+      "sha256": "6705cfa20ef2188155aae8f0c5ecc52ca4b20817316f33ce2734ba5a5acb9096"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::accessibilityContextFor",
+      "sha256": "6d95b6728c601251d072ee3a582dff7bbf1aa21ec0c0f97ce5cec31d0335b80c"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::accessibilityActionsFor",
+      "sha256": "19c107052a78b6c73e8092cfcb86b5870595a5b47a4cc0068513b6e7b69d2963"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::accessibilityPositionFor",
+      "sha256": "35d68ec9c6f15a9d1a5ea4d5e1e90e5d9453766f2977a8821c0133f85e9c164d"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::announceFocusedWidget",
+      "sha256": "f76e5e998a53ce2f5009c0be678d57d1cddc8ada7766c305d3a6224f383a0a86"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::startEditGhost",
+      "sha256": "e2f81e84849658e7571732431e9a99752a336758cd310e36fc879ed52049d856"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::stopEditGhost",
+      "sha256": "5587751df830020ca2f6f164a503135fe54ba572796cf507d2694aefbe3dc342"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::updateEditGhost",
+      "sha256": "07a619dca257615927a86064dcc1f873d5fed6f30584bd2640cea79cedb760fb"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::unbindEditActions",
+      "sha256": "274249c4fc2be374bb8a439a7d91d0a24bc4e88894cd88eead8f53e7b7139a2e"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::bindEditActions",
+      "sha256": "a16bb0117ec759179a1c8c483281fca4f902d65967a48d3b6b212f97933ba7bb"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::enterEditMode",
+      "sha256": "cc02b1021c892d32b787d74f7f582afe26fbf16a6980acf69ecdca877a29e4ca"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::exitEditMode",
+      "sha256": "62859cb45ca51be254f02626ed4d7dd2687f41a2921a6cff9488381fe2076f29"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::commitEditModePlacement",
+      "sha256": "a0410ae971c919207dce627afb85245143b40ee6050eca573a2c5829ada4e036"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::moveFocusedIcon",
+      "sha256": "720741fcee12f522467b937bbd330f9c4fff7289ca501dd019c184c7689193b7"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::openSuspendedCartridgeCustomizer",
+      "sha256": "6659c17fe1f8abd5ee35a180308f51a5163cc905f7936b2b3840493e91e2bc0c"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::showSuspendedCartridgeColorPage",
+      "sha256": "e4dd4566e03060382b0e05b05033ae61a0bb92154bfec5a80529b75f75e6d9b2"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::setHomeApplicationsCategory",
+      "sha256": "577558f8c775c4cdf266537f61c7f9d450fae4b958e4e2d2fa91e83579034943"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::wireFocusCallback",
+      "sha256": "93856cdf29b2881a90cdd0e20f2f139c67bbf67742a120fc9d890aacfafde402",
+      "remove": [
+        "    m_grid->onTouchSelection([this](nxui::Widget* target) {\n        // Publish the touched/inertial index in the same update that moves it.\n        // The next physical input cannot act on the previous frame's index.\n        if (!target || (m_musicScreen && m_musicScreen->isActive())) return;\n        m_suppressNextNavigateSfx = true;\n        focusManager().setFocus(target);\n        updateCursor();\n    });\n\n"
+      ]
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::isCurrentFocusableWidget",
+      "sha256": "26c64d9f49544c3d7e14b8ab482252c3dad3f7a4560cee7da02bd5aa6c51c9da"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::findTitleIndex",
+      "sha256": "06eecceb6d1567d21c0da45a70a8bc7e64f238ffeb148b59808203328a3712ed"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::focusTitle",
+      "sha256": "01375380f1487c45fbd73b090f09cc2a32ebc5efae9dee860674b57485174b71"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::markSuspendedIcon",
+      "sha256": "0f976d528f129cc0820ff7dab817867a40e75dad1c96cd7a1cba2d55722aebeb"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::closeActiveOverlays",
+      "sha256": "3c85c4f07b43413d1cd6629c2b665005b1cb5c38bd43f5d8de5bb4344dfd7f21"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::focusRoot",
+      "sha256": "d9aaa8882bde1185db88c696369cd0b40974d66e46242f91eb6a42c77bd6dbc1"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::toggleAccessibilitySpeech",
+      "sha256": "e348725672a2374b7a9aec990b920daad5d7c3021bedaf0108853c52db51fc6c"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::handleAccessibilityToggleCombo",
+      "sha256": "b0e1518463cda56575df8d059ffff9cb768f3839f2bec76883a4a18ea1e881a3"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::wireGlobalActions",
+      "sha256": "f491b2eeba7fa453c7c6137330d62834706608d39b221a4e6eb8cbb8c71264f3"
+    },
+    {
+      "path": "projects/menu/src/core/WiiUMenuAppInteraction.cpp",
+      "tokens": true,
+      "function": "WiiUMenuApp::handleSystemAction",
+      "sha256": "2069d247bec2b6d234fb273c3be6605c0f419cad91a29bccbcc71221f848c478"
+    },
+    {
+      "path": "projects/menu/src/music/MusicAmbientBackground.cpp",
+      "tokens": true,
+      "function": "MusicAmbientBackground::draw",
+      "remove": [
+        " - 18.f"
+      ],
+      "sha256": "bc2c72f5a6d333cd8c5d537d12c19557319022201729c7be4b4fbf6420425a53"
+    }
+  ]
+}

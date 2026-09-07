@@ -24,13 +24,14 @@ namespace DebugLog { template<class... T> void log(const char*,T...) {} }
 using namespace switchu::menu::music;
 struct MusicScreen {
  enum class View {Albums,Playlists,AlbumDetail,PlaylistDetail,NowPlaying,Queue};
- enum class Modal {None,PlaylistNameKeyboard,PlaylistChooser,AlbumInformation};
+ enum class Modal {None,PlaylistNameKeyboard,PlaylistChooser};
  bool m_active=true,m_closing=false,m_detailClosing=false,m_nowPlayingClosing=false,m_scanRunning=false;
  float m_rootCategoryTransition=1,m_detailTransition=1,m_nowPlayingEnter=1,m_idleTime=0,m_listVisualSelection=0;
  View m_view=View::Albums,m_nowPlayingReturnView=View::Albums,m_queueReturnView=View::NowPlaying;
  Modal m_modal=Modal::None;
  void* m_font=nullptr;
- struct Details {bool shown=false; void open(const Album&,const LibrarySnapshot&,void*){shown=true;} void clear(){shown=false;}} m_albumDetails;
+ struct Preferences {bool liked=false; bool toggle(const std::string&){liked=!liked;return true;}} m_preferences;
+ std::string m_uiNotice;float m_uiNoticeTimer=0.f;
  uint64_t m_pendingPlaylistTrackId=0;
  int m_selection=0,m_nowPlayingReturnSelection=0,m_queueReturnSelection=0,m_nowControl=2;
  size_t m_detailAlbum=0,m_detailPlaylist=0;
@@ -102,14 +103,11 @@ int main() {
  s=fixture(V::Albums); s.m_modal=MusicScreen::Modal::PlaylistChooser; s.openNowPlaying(); assert(s.m_view==V::Albums);
  s=fixture(V::Albums); s.openNowPlaying(); finish(s); s.m_status.track_id=0; s.goBack(); finish(s); assert(s.m_view==V::Albums);
  s=fixture(V::Albums);s.contextualY();
- assert(s.m_modal==MusicScreen::Modal::AlbumInformation && s.m_albumDetails.shown);
+ assert(s.m_modal==MusicScreen::Modal::None && s.m_preferences.liked);
  assert(s.m_view==V::Albums && s.m_selection==4);
- s.openNowPlaying();assert(s.m_view==V::Albums);
- s.modalCancel();assert(s.m_modal==MusicScreen::Modal::None && !s.m_albumDetails.shown);
- assert(s.m_view==V::Albums && s.m_selection==4);
+ s.contextualY();assert(!s.m_preferences.liked);
  s.openNowPlaying();finish(s);s.goBack();finish(s);assert(s.m_view==V::Albums);
- s=fixture(V::Albums);s.m_closing=true;s.contextualY();assert(s.m_modal==MusicScreen::Modal::None);
- std::cout << "Production navigation: Y/B album sheet, blocked Minus while modal open; repeated Minus, early B, 120 queue cycles, 4 origins, missing track and transition/modal guards: OK\n";
+ std::cout << "Production navigation: Y toggles favourite without modal or navigation; repeated Minus, early B, 120 queue cycles, 4 origins, missing track and transition/modal guards: OK\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix='switchu_navigation_') as temp:

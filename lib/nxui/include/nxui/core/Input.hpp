@@ -1,4 +1,5 @@
 #pragma once
+#include "TouchContactGuard.hpp"
 #include <switch.h>
 #include <cstdint>
 
@@ -50,6 +51,7 @@ public:
     // Touch screen (first touch point)
     bool  isTouching()   const { return m_touching; }
     bool  touchDown()    const { return m_touchDown; }   // Just started touching
+    bool touchCancelled() const { return m_contactGuard.cancelled(); }
     bool  touchUp()      const { return m_touchUp; }     // Just released
     float touchX()       const { return m_touchX; }
     float touchY()       const { return m_touchY; }
@@ -88,6 +90,7 @@ private:
     float m_virtualPointerX = 640.f;
     float m_virtualPointerY = 360.f;
     float m_virtualPointerSensitivity = 7000.f;
+    TouchContactGuard m_contactGuard;
     bool  m_touching    = false;
     bool  m_wasTouching = false;
     bool  m_touchDown   = false;
