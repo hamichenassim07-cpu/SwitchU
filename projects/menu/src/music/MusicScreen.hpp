@@ -9,6 +9,7 @@
 #include "widgets/HomeCarouselMotion.hpp"
 #include "MusicPhysicalMediaRenderer.hpp"
 #include "MusicAmbientBackground.hpp"
+#include "MusicAlbumDetails.hpp"
 
 #include <nxui/core/Font.hpp>
 #include <nxui/core/Input.hpp>
@@ -73,6 +74,7 @@ private:
         None,
         PlaylistNameKeyboard,
         PlaylistChooser,
+        AlbumInformation,
     };
 
     void setupActions();
@@ -248,6 +250,7 @@ private:
         float titleScale = 1.f, artistScale = 1.f, metaScale = 1.f;
         float titleWidth = 0.f, artistWidth = 0.f;
         float countWidth = 0.f, durationWidth = 0.f;
+        float durationHeight = 0.f, countHeight = 0.f;
     } m_albumInformation;
     bool m_nextSoonWasVisible = false;
     float m_nextToastTimer = 0.f;
@@ -257,6 +260,7 @@ private:
     bool m_closing = false;
     bool m_lastSessionGuardState = false;
 
+    MusicAlbumDetails m_albumDetails;
     Modal m_modal = Modal::None;
     std::string m_keyboardText;
     int m_keyboardIndex = 0;

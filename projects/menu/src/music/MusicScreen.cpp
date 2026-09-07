@@ -1,6 +1,8 @@
 #include "MusicScreen.hpp"
 #include "MusicUiTiming.hpp"
 #include "MusicAlbumInformation.hpp"
+#include "MusicHomeClockPng.hpp"
+#include "MusicAlbumLayout.hpp"
 
 #include "core/DebugLog.hpp"
 #include "widgets/HomeCarouselStyle.hpp"
@@ -32,11 +34,14 @@ constexpr float kMusicCarouselBaselineY = 515.f;
 // V8.7 is tuned from the real V8.6 Switch capture, not only from nominal pixel
 // values.  The selected sleeve stays dominant while neighbours get more air so
 // their perspective never reads as two cards intersecting during a slide.
-constexpr float kMusicCarouselSelectedSize = 366.f;
-constexpr float kMusicCarouselNeighborSize = 294.f;
-constexpr float kMusicCarouselFarSize = 274.f;
-constexpr float kMusicCarouselFirstOffset = 322.f;
-constexpr float kMusicCarouselNeighborStep = 238.f;
+// V8.9: the only authorised carousel changes are uniform size (-8%) and
+// horizontal spacing (-8%). Motion, angles, lift, projection and input stay intact.
+constexpr float kMusicCarouselScale = 0.92f;
+constexpr float kMusicCarouselSelectedSize = 366.f * kMusicCarouselScale;
+constexpr float kMusicCarouselNeighborSize = 294.f * kMusicCarouselScale;
+constexpr float kMusicCarouselFarSize = 274.f * kMusicCarouselScale;
+constexpr float kMusicCarouselFirstOffset = 322.f * kMusicCarouselScale;
+constexpr float kMusicCarouselNeighborStep = 238.f * kMusicCarouselScale;
 
 float musicCarouselSizeForDistance(float distance) {
     const float a = std::abs(distance);
@@ -46,7 +51,7 @@ float musicCarouselSizeForDistance(float distance) {
                (kMusicCarouselNeighborSize - kMusicCarouselSelectedSize) * t;
     }
     return std::max(kMusicCarouselFarSize,
-                    kMusicCarouselNeighborSize - (a - 1.f) * 14.f);
+                    kMusicCarouselNeighborSize - (a - 1.f) * 14.f * kMusicCarouselScale);
 }
 
 float musicCarouselCenterOffset(float distance) {
@@ -977,6 +982,11 @@ void MusicScreen::contextualX() {
 
 void MusicScreen::contextualY() {
     if (m_scanRunning || m_closing || contentTransitionBusy()) return;
+    if (m_view == View::Albums && m_selection >= 0 && size_t(m_selection) < m_library.albums.size()) {
+        m_albumDetails.open(m_library.albums[size_t(m_selection)],m_library,m_font);
+        m_modal = Modal::AlbumInformation;
+        return;
+    }
     if (rootView()) return;
     if (m_view == View::AlbumDetail) {
         const size_t ti = selectedTrackIndex();
@@ -1035,6 +1045,10 @@ void MusicScreen::openPlaylistChooser(uint64_t trackId) {
 }
 
 void MusicScreen::modalMove(int dx, int dy) {
+    if (m_modal == Modal::AlbumInformation) {
+        m_albumDetails.move(dy != 0 ? dy : dx);
+        return;
+    }
     if (m_modal == Modal::PlaylistChooser) {
         if (!m_playlistStore.playlists().empty()) {
             m_modalSelection += (dy != 0 ? dy : dx);
@@ -1050,6 +1064,7 @@ void MusicScreen::modalMove(int dx, int dy) {
 }
 
 void MusicScreen::modalActivate() {
+    if (m_modal == Modal::AlbumInformation) { modalCancel(); return; }
     if (m_modal == Modal::PlaylistChooser) {
         if (m_modalSelection >= 0 && static_cast<size_t>(m_modalSelection) < m_playlistStore.playlists().size()) {
             m_playlistStore.addTrack(static_cast<size_t>(m_modalSelection), m_pendingPlaylistTrackId);
@@ -1093,6 +1108,7 @@ void MusicScreen::modalConfirm() {
 }
 
 void MusicScreen::modalCancel() {
+    if (m_modal == Modal::AlbumInformation) m_albumDetails.clear();
     m_pendingPlaylistTrackId = 0;
     m_modal = Modal::None;
 }
@@ -1354,51 +1370,59 @@ void MusicScreen::drawAlbumInformation(nxui::Renderer& ren, const Album& album, 
         info.font = m_font;
         info.fontRevision = m_font->revision();
         const float baseSize = float(std::max(1, m_font->ptSize()));
-        info.titleScale = 32.f / baseSize;
-        info.artistScale = 26.f / baseSize;
-        info.metaScale = 25.f / baseSize;
+        info.titleScale = albumui::kTitlePixels / baseSize;
+        info.artistScale = albumui::kArtistPixels / baseSize;
+        info.metaScale = albumui::kMetaPixels / baseSize;
         info.title = fitText(m_font, albuminfo::singleLine(album.title, "Album sans titre"),
-                             704.f, info.titleScale);
+                             albumui::kTitleWidth, info.titleScale);
         info.artist = fitText(m_font, albuminfo::singleLine(album.artist, "Artiste inconnu"),
-                              620.f, info.artistScale);
+                              albumui::kArtistWidth, info.artistScale);
         const auto summary = albuminfo::summarise(album, m_library);
-        info.duration = fitText(m_font, summary.duration, 282.f, info.metaScale);
-        info.count = fitText(m_font, summary.count, 260.f, info.metaScale);
+        info.duration = fitText(m_font, summary.duration, 220.f, info.metaScale);
+        info.count = fitText(m_font, summary.count, 220.f, info.metaScale);
         info.titleWidth = m_font->measure(info.title).x * info.titleScale;
         info.artistWidth = m_font->measure(info.artist).x * info.artistScale;
         info.durationWidth = m_font->measure(info.duration).x * info.metaScale;
         info.countWidth = m_font->measure(info.count).x * info.metaScale;
+        info.durationHeight = m_font->measure(info.duration).y * info.metaScale;
+        info.countHeight = m_font->measure(info.count).y * info.metaScale;
     }
 
-    // Three dedicated lines below the unchanged sleeve reflections. Font sizes
-    // remain fixed and readable; UTF-8 ellipsis handles even very long tags.
-    ren.pushClipRect({288.f, 614.f, 704.f, 38.f});
-    ren.drawText(info.title, {640.f - info.titleWidth*0.5f, 614.f},
+    // HOME composition: one fixed screen-space centre, a bounded title, then
+    // secondary information with measured icon/text centring. The title begins
+    // after the worst-case reflection (606.7 px, including bounce and inertia).
+    ren.pushClipRect({albumui::kCentreX-albumui::kTitleWidth*.5f, albumui::kTitleY, albumui::kTitleWidth, 36.f});
+    ren.drawText(info.title, {albumui::kCentreX - info.titleWidth*0.5f, albumui::kTitleY},
                  m_font, textPrimary(alpha), info.titleScale);
     ren.popClipRect();
-    ren.pushClipRect({330.f, 653.f, 620.f, 32.f});
-    ren.drawText(info.artist, {640.f - info.artistWidth*0.5f, 653.f},
+    ren.pushClipRect({albumui::kCentreX-albumui::kArtistWidth*.5f, albumui::kArtistY, albumui::kArtistWidth, 30.f});
+    ren.drawText(info.artist, {albumui::kCentreX - info.artistWidth*0.5f, albumui::kArtistY},
                  m_font, textSecondary(0.98f*alpha), info.artistScale);
     ren.popClipRect();
 
-    constexpr float iconClockW = 30.f, noteW = 28.f, iconGap = 10.f, groupGap = 28.f;
+    constexpr float iconClockW = albumui::kClockSize, noteW = 28.f;
+    constexpr float iconGap = albumui::kIconGap, groupGap = albumui::kGroupGap;
     const float width = iconClockW + iconGap + info.durationWidth + groupGap +
                         noteW + iconGap + info.countWidth;
-    float x = 640.f - width*0.5f;
-    constexpr float metaY = 685.f;
+    float x = albumui::kCentreX - width*0.5f;
+    constexpr float metaY = albumui::kMetaY;
+    constexpr float rowCentreY = metaY + iconClockW*.5f;
     const nxui::Color colour = textSecondary(0.96f*alpha);
-    ren.pushClipRect({288.f, metaY, 704.f, 32.f});
+    ren.pushClipRect({albumui::kCentreX-albumui::kMetaWidth*.5f, metaY, albumui::kMetaWidth, 31.f});
     if (!m_homePlayTimeClockLoadAttempted) {
         m_homePlayTimeClockLoadAttempted = true;
         m_homePlayTimeClockTexture.loadFromFile(
             ren.gpu(), ren, "romfs:/icons/playtime_clock_v1030.png", 0);
+        if (!m_homePlayTimeClockTexture.valid())
+            m_homePlayTimeClockTexture.loadFromMemory(
+                ren.gpu(), ren, kHomeClockPng, sizeof(kHomeClockPng), 0);
     }
     if (m_homePlayTimeClockTexture.valid())
         ren.drawTexture(&m_homePlayTimeClockTexture, {x, metaY, iconClockW, iconClockW},
                          nxui::Color::white().withAlpha(0.96f*alpha*gMusicUiAlpha));
-    // The HOME asset is bundled. If its load fails the duration remains readable.
+    // The fallback is the very same 256 px HOME asset, never a redrawn clock.
     x += iconClockW + iconGap;
-    ren.drawText(info.duration, {x, metaY}, m_font, colour, info.metaScale);
+    ren.drawText(info.duration, {x, rowCentreY-info.durationHeight*.5f}, m_font, colour, info.metaScale);
     x += info.durationWidth + groupGap;
 
     // Informational double note, deliberately independent of transport icons.
@@ -1412,7 +1436,7 @@ void MusicScreen::drawAlbumInformation(nxui::Renderer& ren, const Album& album, 
     ren.drawTriangle({x+7.f,metaY+7.f}, {x+25.8f,metaY+7.f},
                       {x+7.f,metaY+12.f}, colour);
     x += noteW + iconGap;
-    ren.drawText(info.count, {x, metaY}, m_font, colour, info.metaScale);
+    ren.drawText(info.count, {x, rowCentreY-info.countHeight*.5f}, m_font, colour, info.metaScale);
     ren.popClipRect();
 }
 
@@ -1678,6 +1702,7 @@ void MusicScreen::drawAlbums(nxui::Renderer& ren) {
         ren.drawText(label, {x, 671.f}, m_font,
                      textSecondary(0.97f * infoAlpha), labelScale);
     };
+    drawRootAction(44.f, nxui::Button::Y, "Fiche album");
     drawRootAction(990.f, nxui::Button::X, "Lecture");
     drawRootAction(1127.f, nxui::Button::A, "Ouvrir");
 
@@ -2360,6 +2385,10 @@ void MusicScreen::drawBottomHints(nxui::Renderer& ren) {
 
 void MusicScreen::drawModal(nxui::Renderer& ren) {
     if (m_modal == Modal::None || !m_font) return;
+    if (m_modal == Modal::AlbumInformation) {
+        m_albumDetails.draw(ren,m_font,m_iconFont,gMusicUiAlpha);
+        return;
+    }
     ren.drawRect({0,0,kScreenW,kScreenH}, {0.f,0.f,0.f,0.62f * gMusicUiAlpha});
     nxui::Rect p{180.f, 115.f, 920.f, 480.f};
     const nxui::LiquidGlassSettings modalGlass = ren.liquidGlassSettings();

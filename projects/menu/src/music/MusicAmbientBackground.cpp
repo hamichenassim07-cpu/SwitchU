@@ -6,55 +6,91 @@
 #include <cmath>
 
 namespace switchu::menu::music {
+namespace {
+float smooth(float a, float b, float x) {
+    const float t = std::clamp((x-a)/(b-a), 0.f, 1.f);
+    return t*t*(3.f-2.f*t);
+}
+ambient::Rgb mix(ambient::Rgb a, ambient::Rgb b, float t) {
+    return {a.r+(b.r-a.r)*t, a.g+(b.g-a.g)*t, a.b+(b.b-a.b)*t};
+}
+struct Vertex { nxui::Vec2 p; nxui::Color c; };
+void quad(nxui::Renderer& ren, const Vertex& a, const Vertex& b,
+          const Vertex& c, const Vertex& d) {
+    ren.drawColoredTriangle(a.p,a.c,b.p,b.c,c.p,c.c);
+    ren.drawColoredTriangle(a.p,a.c,c.p,c.c,d.p,d.c);
+}
+float visibility(float y, float floorY) {
+    // Completely transparent twelve pixels BEFORE the real horizon. The
+    // independent scissor below is a second barrier, including on transitions.
+    return smooth(142.f,218.f,y) * (1.f-smooth(floorY-84.f,floorY-12.f,y));
+}
+}
+
 void MusicAmbientBackground::draw(nxui::Renderer& ren, float alpha, float floorY) {
-    if (alpha <= 0.f) return;
-    if (!m_textureAttempted) {
-        m_textureAttempted = true;
-        constexpr int side = 64;
-        std::array<uint8_t, side * side * 4> pixels{};
-        for (int y = 0; y < side; ++y) {
-            for (int x = 0; x < side; ++x) {
-                const float dx = (x + 0.5f) * (2.f / side) - 1.f;
-                const float dy = (y + 0.5f) * (2.f / side) - 1.f;
-                const float t = std::max(0.f, 1.f - dx*dx - dy*dy);
-                const size_t i = size_t(y * side + x) * 4u;
-                pixels[i] = pixels[i + 1] = pixels[i + 2] = 255;
-                pixels[i + 3] = uint8_t(std::round(t*t*t * 255.f));
-            }
+    if (alpha <= 0.f || floorY <= 142.f) return;
+    const auto& palette = m_motion.palette().colours;
+    ren.pushClipRect({0.f, 0.f, 1280.f, floorY-12.f});
+
+    // Broad continuous light field, with a deliberately coarse 8 x 7 mesh.
+    // It only contains palette colours: no artwork image, radial sprites,
+    // blur pass, shader switch, framebuffer or image upload is involved.
+    constexpr std::array<float,8> rows{0.f,110.f,218.f,315.f,385.f,430.f,460.f,482.f};
+    std::array<Vertex,9> previous{}, current{};
+    const float drift = float(std::sin(m_motion.phase()*0.083))*0.12f;
+    for (size_t y = 0; y < rows.size(); ++y) {
+        for (size_t x = 0; x < current.size(); ++x) {
+            const float u = float(x)/8.f;
+            const float v = rows[y]/494.f;
+            const auto colour = mix(mix(palette[0],palette[1],
+                                        smooth(0.f,1.f,u+drift+(v-0.5f)*0.32f)),
+                                    palette[2], 0.25f*smooth(0.f,1.f,v+u*0.3f));
+            const float strength = (0.016f + 0.19f*smooth(90.f,350.f,rows[y])) *
+                                   (1.f-smooth(floorY-108.f,floorY-12.f,rows[y]));
+            current[x] = {{1280.f*u,rows[y]},
+                           {colour.r,colour.g,colour.b,strength*alpha}};
         }
-        // One immutable 16 KiB image, linearly sampled by the existing HOME
-        // renderer. No per-frame uploads, blur, capture, or render target.
-        m_lightTexture.loadFromPixels(ren.gpu(), ren, pixels.data(), side, side);
+        if (y != 0)
+            for (size_t x = 0; x+1 < current.size(); ++x)
+                quad(ren,previous[x],previous[x+1],current[x+1],current[x]);
+        previous = current;
     }
 
-    const auto lights = m_motion.lights();
-    ren.pushClipRect({0.f, 0.f, 1280.f, floorY});
-    if (m_lightTexture.valid() && m_lightTexture.descriptorSlot() >= 0) {
-        for (const auto& light : lights) {
-            ren.drawTexture(&m_lightTexture,
-                {light.x - light.width*0.5f, light.y - light.height*0.5f,
-                 light.width, light.height},
-                {light.colour.r, light.colour.g, light.colour.b, light.opacity * alpha});
-        }
-    } else {
-        // A GPU allocation failure never makes the background static. This
-        // texture-free fallback still moves; it adds only eight simple quads.
-        for (const auto& light : lights) {
-            const float y = std::clamp(light.y, 90.f, floorY - 60.f);
-            const nxui::Color bright{light.colour.r, light.colour.g, light.colour.b,
-                                     light.opacity * 0.16f * alpha};
-            const nxui::Color clear{light.colour.r, light.colour.g, light.colour.b, 0.f};
-            ren.drawGradientRect({0.f, 0.f, 1280.f, y}, clear, bright);
-            ren.drawGradientRect({0.f, y, 1280.f, floorY - y}, bright, clear);
+    // A sparse satin cross-section: narrow, intermittently lit crests, a
+    // diffuse body and translucent centre. Colour interpolation happens on
+    // the GPU using the HOME renderer's existing Basic vertex format.
+    constexpr std::array<float,11> section{0.f,.018f,.05f,.14f,.34f,.59f,.81f,.93f,.975f,.99f,1.f};
+    constexpr std::array<float,11> opacity{0.f,.20f,.34f,.27f,.09f,.075f,.17f,.35f,.18f,.07f,0.f};
+    constexpr std::array<float,3> layerOpacity{.42f,.92f,.36f};
+    std::array<Vertex,section.size()> left{}, right{};
+    for (size_t layer = 0; layer < ambient::kRibbonLayers; ++layer) {
+        m_motion.ribbon(layer,m_columns);
+        for (size_t x = 0; x < m_columns.size(); ++x) {
+            const auto& column = m_columns[x];
+            const size_t colourIndex = layer == 1 ? 0 : (layer == 0 ? 1 : 2);
+            const auto body = mix(palette[colourIndex],palette[(colourIndex+1)%3],column.tintMix*0.32f);
+            const float peak = std::max({body.r,body.g,body.b});
+            for (size_t j = 0; j < section.size(); ++j) {
+                const float y = column.centre + (section[j]*2.f-1.f)*column.halfWidth;
+                const float upper = j == 1 || j == 2 ? column.upperLight : 0.f;
+                const float lower = j == 8 || j == 9 ? column.lowerLight : 0.f;
+                const float sheen = std::max(upper, lower*0.72f);
+                const float gain = 0.97f + sheen*0.37f;
+                // Highlights lighten the album hue; no hard-coded cyan and
+                // no white additive overexposure on pale or monochrome art.
+                const auto channel = [&](float c) {
+                    return std::min(0.90f,c*gain + peak*0.16f*sheen);
+                };
+                right[j] = {{column.x,y},
+                    {channel(body.r),channel(body.g),channel(body.b),
+                     (opacity[j]+0.62f*sheen)*layerOpacity[layer]*visibility(y,floorY)*alpha}};
+            }
+            if (x != 0)
+                for (size_t j = 0; j+1 < section.size(); ++j)
+                    quad(ren,left[j],right[j],right[j+1],left[j+1]);
+            left = right;
         }
     }
-    // Feather the atmosphere around the unchanged system HUD and horizon.
-    ren.drawGradientRect({0.f, 0.f, 1280.f, 150.f},
-                         {0.009f,0.011f,0.016f,0.82f*alpha},
-                         {0.009f,0.011f,0.016f,0.f});
-    ren.drawGradientRect({0.f, floorY - 108.f, 1280.f, 108.f},
-                         {0.009f,0.011f,0.016f,0.f},
-                         {0.009f,0.011f,0.016f,0.88f*alpha});
     ren.popClipRect();
 }
 } // namespace switchu::menu::music

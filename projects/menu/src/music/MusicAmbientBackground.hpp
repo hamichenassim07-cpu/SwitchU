@@ -1,7 +1,6 @@
 #pragma once
 
 #include "MusicAmbientPalette.hpp"
-#include <nxui/core/Texture.hpp>
 
 namespace nxui { class Renderer; }
 
@@ -14,7 +13,8 @@ public:
 
 private:
     ambient::Motion m_motion;
-    nxui::Texture m_lightTexture;
-    bool m_textureAttempted = false;
+    // Fixed storage, reused for all three layers. No owned GPU resources,
+    // allocations, uploads or descriptor lifetime to manage on Music exit.
+    std::array<ambient::RibbonColumn, ambient::kRibbonSegments + 1> m_columns{};
 };
 } // namespace switchu::menu::music

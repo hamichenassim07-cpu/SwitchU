@@ -1,6 +1,7 @@
 #include "MusicAmbientPalette.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 namespace switchu::menu::music::ambient {
@@ -79,32 +80,82 @@ Palette samplePalette(const uint8_t* rgba, size_t bytes, int width, int height) 
     return out;
 }
 
+void Motion::setTarget(const Palette& palette) {
+    bool same = true;
+    for (size_t i = 0; i < palette.colours.size(); ++i) {
+        const auto& a = palette.colours[i];
+        const auto& b = m_target.colours[i];
+        same &= a.r == b.r && a.g == b.g && a.b == b.b;
+    }
+    // The cache can offer the same palette on every update. Only an actual
+    // colour change starts a tween, from precisely the currently shown colour.
+    if (same) return;
+    m_from = m_current;
+    m_target = palette;
+    m_transition = 0.f;
+}
+
 void Motion::update(float dt) {
-    if (!std::isfinite(dt) || dt <= 0.f) return;
-    // Waking from sleep must not jump the lighting or restart its phase.
+    // A bit check also remains valid with the project's -ffast-math build.
+    if ((std::bit_cast<uint32_t>(dt) & 0x7f800000u) == 0x7f800000u || dt <= 0.f)
+        return;
     const float step = std::min(dt, 0.05f);
     m_phase += double(step);
-    const float blend = -std::expm1(-step / 0.48f);
+    m_transition = std::min(kPaletteTransitionSeconds, m_transition + step);
+    const float t = m_transition / kPaletteTransitionSeconds;
+    const float blend = t*t*(3.f - 2.f*t);
     for (size_t i = 0; i < m_current.colours.size(); ++i) {
-        auto& a = m_current.colours[i];
+        const auto& a = m_from.colours[i];
         const auto& b = m_target.colours[i];
-        a.r += (b.r - a.r) * blend;
-        a.g += (b.g - a.g) * blend;
-        a.b += (b.b - a.b) * blend;
+        m_current.colours[i] = {a.r + (b.r-a.r)*blend,
+                               a.g + (b.g-a.g)*blend,
+                               a.b + (b.b-a.b)*blend};
     }
     m_current.sampled = m_target.sampled;
 }
 
-std::array<Light, 4> Motion::lights() const {
-    // Four broad, overlapping fields. Motion is independent of input, album
-    // changes and playback; only their colours approach a new target palette.
-    const float a = float(std::sin(m_phase * 0.19));
-    const float b = float(std::cos(m_phase * 0.13));
-    const float c = float(std::sin(m_phase * 0.16 + 1.7));
-    const float d = float(std::cos(m_phase * 0.11 + 0.8));
-    return {{{220.f + 120.f*a, 220.f + 65.f*b, 1080.f, 660.f, 0.70f, m_current.colours[0]},
-             {980.f + 125.f*c, 180.f + 70.f*d, 1050.f, 720.f, 0.61f, m_current.colours[1]},
-             {630.f + 170.f*b, 420.f + 45.f*a,  930.f, 580.f, 0.53f, m_current.colours[2]},
-             {620.f + 210.f*d, 100.f + 50.f*c, 1240.f, 480.f, 0.27f, m_current.colours[0]}}};
+void Motion::ribbon(size_t layer,
+                    std::array<RibbonColumn, kRibbonSegments + 1>& out) const {
+    // Six moving control sections, joined by cubic Hermite curves. Unequal
+    // heights and evolving slopes make long folds, rather than a scrolling
+    // texture or a uniform sine wave. Every cross-section stays strictly open.
+    layer = std::min(layer, kRibbonLayers - 1);
+    constexpr std::array<float, 6> silhouette{8.f, 38.f, 11.f, -37.f, -25.f, 14.f};
+    constexpr std::array<float, 6> widths{41.f, 57.f, 33.f, 53.f, 46.f, 31.f};
+    constexpr std::array<float, 3> speed{0.113f, 0.157f, 0.131f};
+    constexpr std::array<float, 3> offset{-27.f, 0.f, 18.f};
+    constexpr std::array<float, 3> breadth{0.94f, 1.12f, 0.65f};
+    std::array<float, 6> heights{}, halfWidths{}, upper{}, lower{}, tint{};
+    for (size_t i = 0; i < heights.size(); ++i) {
+        const double phase = m_phase * double(speed[layer]) + i*1.17 + layer*1.8;
+        heights[i] = 345.f + offset[layer] + silhouette[i] +
+                     22.f*float(std::sin(phase)) +
+                     10.f*float(std::cos(m_phase*0.071 + i*0.71 + layer));
+        halfWidths[i] = breadth[layer] * widths[i] *
+                       (1.f + 0.23f*float(std::cos(phase*0.83 + 1.4)));
+        // Highlights travel in patches, never as a permanent white outline.
+        upper[i] = std::max(0.f, float(std::sin(phase*0.69 + i*0.37)));
+        lower[i] = std::max(0.f, float(std::cos(phase*0.77 + 1.2)));
+        tint[i] = 0.5f + 0.35f*float(std::sin(phase*0.53));
+    }
+    const auto curve = [](const std::array<float, 6>& values, size_t k, float t) {
+        const float a = values[k], b = values[k+1];
+        const float ma = k == 0 ? b-a : (b-values[k-1])*0.5f;
+        const float mb = k == 4 ? b-a : (values[k+2]-a)*0.5f;
+        const float t2=t*t, t3=t2*t;
+        return (2*t3-3*t2+1)*a + (t3-2*t2+t)*ma +
+               (-2*t3+3*t2)*b + (t3-t2)*mb;
+    };
+    for (size_t i = 0; i < out.size(); ++i) {
+        const float u = float(i) / kRibbonSegments;
+        const float position = u*5.f;
+        const size_t k = std::min(size_t(position), size_t(4));
+        const float t = position - float(k);
+        out[i] = {-64.f + 1408.f*u, curve(heights,k,t),
+                  std::clamp(curve(halfWidths,k,t), 14.f, 78.f),
+                  std::clamp(curve(upper,k,t),0.f,1.f),
+                  std::clamp(curve(lower,k,t),0.f,1.f),
+                  std::clamp(curve(tint,k,t),0.f,1.f)};
+    }
 }
 } // namespace switchu::menu::music::ambient

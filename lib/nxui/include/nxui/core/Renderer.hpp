@@ -96,6 +96,17 @@ public:
     void drawRoundedRectOutline(const Rect& r, const Color& c, float radius, float thickness = 1.f);
     void drawCircle(const Vec2& center, float radius, const Color& c, int segments = 32);
     void drawTriangle(const Vec2& p1, const Vec2& p2, const Vec2& p3, const Color& c);
+    // Music's satin mesh uses the existing Basic shader and vertex colours.
+    // This additional primitive does not change any existing draw operation.
+    void drawColoredTriangle(const Vec2& p0, const Color& c0,
+                             const Vec2& p1, const Color& c1,
+                             const Vec2& p2, const Color& c2) {
+        if (m_vtxCount + 3 > GpuDevice::MAX_VERTICES) return;
+        bindTexture(-1);
+        addVertex(p0.x, p0.y, 0.f, 0.f, c0);
+        addVertex(p1.x, p1.y, 0.f, 0.f, c1);
+        addVertex(p2.x, p2.y, 0.f, 0.f, c2);
+    }
     void drawLine(const Vec2& from, const Vec2& to, const Color& c, float thickness = 1.f);
     void drawGradientRect(const Rect& r, const Color& top, const Color& bottom);
     void drawTexture(const Texture* tex, const Rect& dest, const Color& tint = Color::white());
